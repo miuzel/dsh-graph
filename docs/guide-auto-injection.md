@@ -30,24 +30,26 @@
   - 空文本段落被 `renderPrompt` 丢弃（L66 filter）→ 零 token 成本；
   - 组装上下文携带 agent：`assembleContextFor(agent)` → `{agent, scope, signal}`（`dsh-agent/lib/index.js` L384-390），
     因此 `c.agent.session.id` 可拿（如需条件渲染）。
-- 本目标最终实现：所有会话注入恒定 `GUIDE_HINT`（无条件渲染分支），内容轻量无害。
+- 本目标最终实现：所有会话注入恒定引导提示词（无条件渲染分支，正文取自 `prompts/guide-hint.<lang>.md`），内容轻量无害。
 
 ## 2. 实现（dsh-graph-host/index.js）
 
 ### 2.1 引导提示词（systemPrompt.section，所有会话注入）
 
 ```js
-const GUIDE_HINT = [
-  "dsh-graph 是把工作组织成「目标看板」的插件。本会话可用 graph_* 工具管理目标/判据/卡片/执行。",
-  "想接管 supervisor？调用 graph_claim_supervisor（更新 project.yaml 的 supervisor.session 并返回 HANDOFF 交接全文，g-117）。",
-  "查看 dsh-graph 使用说明与 claim 指引：调用 graph_help。",
-  "（完整 supervisor 工作守则不自动注入；如需，显式调用 skill dsh-graph-supervisor 加载。）",
-].join("\n");
+// 引导正文的**唯一真源**是资产文件本身（g-496 移除本节的逐字副本，正文不再有第二份）：
+//   dsh-graph-host/prompts/guide-hint.<lang>.md —— 引导提示词正文（所有会话每 turn 注入）
+// 读取方式（宿主实际实现 `index.js:6090`，语言取 resolvePromptLanguage）：
+const hint = localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+// localizedPrompt ⇒ requirePromptAsset：**资产不可读即抛错**，绝不静默降级为空串或内置文本
+// （空串段落会被 renderPrompt 丢弃 ⇒ 引导静默消失，属 fail-open，故必须 fail-closed）。
+// 正文含三条要点：默认普通会话、**不要自动接管 supervisor**（claim 仅在负责人明确要求时调用）、
+// 结果面提醒（无子代理改动用 graph_write_results / graph_refresh_results 补写，不留结果真空）。
 
-// apply() 的 ctx.effect 内：
+// apply() 的 ctx.effect 内（section 注册与上面同形，正文取自真源）：
 const sp = ctx.get?.("systemPrompt");
 if (sp) {
-  sp.section({ name: "dsh-graph-guide-hint", order: 10, text: () => GUIDE_HINT });
+  sp.section({ name: "dsh-graph-guide-hint", order: 10, text: () => hint });
 }
 ```
 
@@ -97,14 +99,14 @@ sp.section({
 
 - **仅主管会话注入**：通过 `context.agent.session.id` 与 `project.yaml` 的 `supervisor.session` 比对，
   不匹配时返回空字符串（零 token 成本）；
-- **每 turn 开头可见**：order=11，在 GUIDE_HINT (order=10) 之后渲染；
+- **每 turn 开头可见**：order=11，在引导段 (order=10) 之后渲染；
 - **内容简短**：每条一句话，强调主管铁律（规划/派发/把关/复核、不自实现、status 汇报、等 verdict、测试力度分级、证据形式）；
 
 ### 隔离约束（负责人设计约束）
 
 | 内容 | 注入范围 |
 |------|----------|
-| 简短引导提示词（GUIDE_HINT） | **所有会话**（含执行子代理），轻量无害 |
+| 简短引导提示词（`prompts/guide-hint.<lang>.md` 真源） | **所有会话**（含执行子代理），轻量无害 |
 | 主管纪律提醒（`prompts/discipline.<lang>.md` 真源，g-131） | **仅主管会话**（project.yaml supervisor.session 匹配时） |
 | Agent Teams 契约（`prompts/agent-teams-contract.<lang>.md` 真源） | 仅 `supervisor.agent_teams: true` 时注入**派发提示词**；主管每 turn 纪律面**不含**该段 |
 | 完整 supervisor 守则（supervisor-guide.md） | **绝不自动注入**任何会话；仅经显式 `skill dsh-graph-supervisor` 调用 |
@@ -134,6 +136,6 @@ sp.section({
 
 - **引导提示词是恒定文本**：无 session 条件分支（所有会话一致）；如需按会话定制可改回 text 函数条件渲染
   （方案 A 支持，`assembleContextFor` 携带 agent.session.id）。
-- **token 成本**：GUIDE_HINT ~120 字，作为 system prompt 段每步带入，成本可忽略。
+- **token 成本**：引导段约 120 字，作为 system prompt 段每步带入，成本可忽略。
 - **与 g-119 并行改动兼容**：graph_bind_collect_card 工具（17 个 → 加 graph_help 后 18 个）共存，
   相关断言（plugin.test.ts / root.test.ts / guide-injection.test.ts）已同步更新。

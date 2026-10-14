@@ -385,13 +385,21 @@ test("g-374 F3-b：四个提示面 + 文档镜像都告知两个新工具，且�
   assert.equal(zh.length, en.length, "discipline zh/en 必须逐条对称");
   // g-496 改判（负责人批准）：docs 不再持正文副本 ⇒ 原「镜像逐条一致」**反转**为「不得含副本」；
   // 告知义务**前移到真源**（下方对 discipline.zh 本身的断言，与上面 [discipline.zh.md, "无子代理"] 同源）。
+  // 独立验证者 BLOCK 记录：去镜像最初只覆盖 discipline，**漏了同文的 guide-hint 副本** ⇒ 此处两份都查。
   const mirror = readFileSync(join(repoRoot, "docs", "guide-auto-injection.md"), "utf8");
   assert.doesNotMatch(mirror, /SUPERVISOR_DISCIPLINE/, "docs 不得再含 SUPERVISOR_DISCIPLINE 副本（g-496 去镜像）");
+  assert.doesNotMatch(mirror, /\bGUIDE_HINT\b/, "docs 不得再含 GUIDE_HINT 副本（g-496 去镜像，同文另一处）");
   const zhText = readFileSync(promptPath("discipline.zh.md"), "utf8");
   for (const need of ["graph_write_results", "graph_refresh_results"]) {
     assert.ok(zhText.includes(need), `纪律真源必须包含 ${need}（承载面已从 docs 副本前移到真源）`);
   }
   assert.ok(zhText.includes("无子代理"), "纪律真源必须点明「无子代理」场景（原 docs 副本的同一条语义）");
+  // 引导真源同样必须承载结果面告知（原 docs GUIDE_HINT 副本里就有这两条；副本删了，义务前移）。
+  const guideText = readFileSync(promptPath("guide-hint.zh.md"), "utf8");
+  for (const need of ["graph_write_results", "graph_refresh_results"]) {
+    assert.ok(guideText.includes(need), `引导真源必须包含 ${need}（原 docs GUIDE_HINT 副本的同一条语义）`);
+  }
+  assert.ok(guideText.includes("不要自动接管 supervisor"), "引导真源必须点明「不要自动接管 supervisor」（claim 限制）");
   // 主管守则（skill 资产，主管显式加载后的主要依据）也必须指路
   for (const [label, path, scenarioNeedle] of [
     ["supervisor-guide.zh.md", join(repoRoot, "dsh-graph-host", "supervisor-guide.zh.md"), "无子代理"],

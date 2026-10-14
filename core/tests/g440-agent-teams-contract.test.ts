@@ -70,6 +70,9 @@ const distDiscipline = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/
 // 抽取函数与全部关键句/变异负向对照判据**不变**，只把「读取源」指向新资产。
 const sourceContract = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host/prompts", `agent-teams-contract.${lang}.md`), "utf8");
 const distContract = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/prompts", `agent-teams-contract.${lang}.md`), "utf8");
+/** g-496：引导提示词真源（去镜像后 docs 不再持副本，正文完整性施于此处 + 真实渲染）。 */
+const sourceGuideHint = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host/prompts", `guide-hint.${lang}.md`), "utf8");
+const distGuideHint = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/prompts", `guide-hint.${lang}.md`), "utf8");
 const sourceGuide = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host", `supervisor-guide.${lang}.md`), "utf8");
 const sourceOps = () => readFileSync(join(repoRoot, "core/ops.ts"), "utf8");
 const sourceModal = () => readFileSync(join(clientDir, "settings-modal.js"), "utf8");
@@ -210,12 +213,26 @@ test("g-440 判据 1：双语对称（guide/discipline/契约资产行数）+ do
   }
   // g-496 改判（负责人批准）：docs 不再持纪律正文副本 ⇒ 原「docs 逐行镜像」**反转**为「不得含副本」，
   // 并**新增**「正文完整性直接施于真源与真实渲染产物」两条更强断言（保护目的不减、覆盖面扩大）。
+  // 独立验证者 BLOCK 记录：去镜像最初只覆盖 discipline，**漏了同文的 guide-hint 副本** ⇒ 两份都查。
   const mirror = readDocsMirror();
   assert.doesNotMatch(mirror, /SUPERVISOR_DISCIPLINE/, "docs 不得再含 SUPERVISOR_DISCIPLINE 副本（g-496 去镜像）");
+  assert.doesNotMatch(mirror, /\bGUIDE_HINT\b/, "docs 不得再含 GUIDE_HINT 副本（g-496 去镜像，同文另一处）");
   assert.match(mirror, /唯一真源/, "docs 必须写明纪律正文的唯一真源");
   assert.ok(
     mirror.includes("agent-teams-contract"),
     "docs 必须指向契约新资产的路径（否则读者找不到契约真源）",
+  );
+  assert.match(mirror, /prompts\/guide-hint\./, "docs 必须指向引导提示词真源路径（否则读者找不到引导正文）");
+  // 引导正文也不得在 docs 里逐字复现（同「去镜像」口径，防大段复制逃逸）。
+  const docsLines = new Set(mirror.split("\n").map((l) => l.trim()));
+  const guideCopied = sourceGuideHint("zh")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 30 && docsLines.has(l));
+  assert.equal(
+    guideCopied.length,
+    0,
+    `docs 不得逐字复制引导正文（复现 ${guideCopied.length} 行，首行：${guideCopied[0]?.slice(0, 40) ?? "-"}…）`,
   );
   // 正文完整性**直接施于真源**：契约关键句必须逐条在契约资产里（载体从 docs 副本前移到真源）。
   // 注意：此处**不得**写 `for (l of lines(contractZh)) assert.ok(contractZh.includes(l))` —— 那是恒真自指
@@ -952,6 +969,19 @@ test("g-496：主管每 turn 纪律 section 的真实渲染不含契约，且精
   const { hint } = renderSupervisorSection(OFF_YAML);
   assert.equal(extractAgentTeamsContract(hint), null, "引导段不得含契约");
   assert.ok(!hint.includes("扇出成员不是 attempt"), "引导段不得含契约正文");
+  // ⑤ g-496（独立验证者 BLOCK 后扩展）：引导段**真实渲染**必须来自 guide-hint 真源、逐字一致。
+  //    这条是「docs 曾持 GUIDE_HINT 过期副本」的等价前移——保护从「文档副本」转到「真实渲染产物」。
+  const hintSrc = sourceGuideHint("zh").replace(/\n+$/, "");
+  assert.equal(hint.replace(/\n+$/, ""), hintSrc, "引导段真实渲染必须与 guide-hint 真源逐字一致（无第二副本）");
+  assert.equal(distGuideHint("zh"), sourceGuideHint("zh"), "guide-hint 的 dist 与源逐字节一致");
+  // 引导真源的三条要点（原 docs 过期副本缺后两条 → 正是 BLOCK 指出的「文档持过期正文」）。
+  for (const n of ["不要自动接管 supervisor", "graph_write_results", "graph_refresh_results"]) {
+    assert.ok(hintSrc.includes(n), `引导真源/渲染必须含要点：${n}`);
+  }
+  // 语言 parity：en 引导段同样可从真源渲染（防止只搬 zh）。
+  const enHint = sourceGuideHint("en");
+  assert.ok(enHint.includes("subagent-less") || enHint.includes("graph_write_results"), "en 引导真源须承载结果面");
+  assert.equal(distGuideHint("en"), enHint, "guide-hint en 的 dist 与源逐字节一致");
 });
 
 test("g-496：契约只在 on 时进入**真实投递**，off 时派发与纪律面都不含契约", async () => {
