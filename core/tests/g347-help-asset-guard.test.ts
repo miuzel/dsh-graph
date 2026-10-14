@@ -1,5 +1,5 @@
 /**
- * g-347 守护（g-349 收敛版）：`graph_help` 帮助资产（`dsh-graph-host/prompts/help.{zh,en}.md`）
+ * g-347 守护（g-349 收敛版）：`graph_help` 帮助资产（`prompts/help.{zh,en}.md`）
  * 必须与引擎 tool schema 对齐。
  *
  * 为什么需要：`graph_help` 是主管会话的**首要工具速查**，而该资产此前**零测试覆盖**。
@@ -86,8 +86,8 @@ function outOfRepoTempBase(): string {
   return tmpdir();
 }
 const SOURCE_HELP = {
-  zh: join(repoRoot, "dsh-graph-host", "prompts", "help.zh.md"),
-  en: join(repoRoot, "dsh-graph-host", "prompts", "help.en.md"),
+  zh: join(repoRoot, "prompts", "help.zh.md"),
+  en: join(repoRoot, "prompts", "help.en.md"),
 };
 const DIST_HELP = {
   zh: join(repoRoot, "dist", "prompts", "help.zh.md"),
@@ -95,8 +95,8 @@ const DIST_HELP = {
 };
 /** g-495：按需面（agent 需要细则时读的那一面；`help(topic="usage")` + skill dsh-graph 正文）。 */
 const SOURCE_USAGE = {
-  zh: join(repoRoot, "dsh-graph-host", "prompts", "usage.zh.md"),
-  en: join(repoRoot, "dsh-graph-host", "prompts", "usage.en.md"),
+  zh: join(repoRoot, "prompts", "usage.zh.md"),
+  en: join(repoRoot, "prompts", "usage.en.md"),
 };
 
 type ToolDef = { name: string; params: string[]; required: string[] };

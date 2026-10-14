@@ -31,6 +31,10 @@ import { cleanTestEnv } from "./fixtures/nested-runner.ts";
 const repoRoot = join(import.meta.dirname, "../..");
 const HOST = join(repoRoot, "dsh-graph-host");
 const DIST = join(repoRoot, "dist");
+// g-496：提示词资产单一源码副本在**公共层** `prompts/`；`HOST` 仍指插件自身目录
+// （`index.js` / `lib/` 等未移动），资产侧以公共层为源根。
+const PROMPTS_SRC = join(repoRoot, "prompts");
+const PROMPTS_DIST = join(DIST, "prompts");
 const I18N_SRC = join(HOST, "lib", "client", "i18n.js");
 const MODAL_SRC = join(HOST, "lib", "client", "settings-modal.js");
 const CLIENT_BUNDLE = join(DIST, "lib", "client.js");
@@ -446,7 +450,7 @@ test("g-439 判据4：设置弹窗如实说明「影响主管提示」，去掉�
 });
 
 test("g-439 判据4：指南（源码 + dist）如实记录六键 -> 动作指导，zh/en 行数仍相等", () => {
-  for (const base of [HOST, DIST]) {
+  for (const base of [PROMPTS_SRC, PROMPTS_DIST]) {
     const zh = readFileSync(join(base, "supervisor-guide.zh.md"), "utf8");
     const en = readFileSync(join(base, "supervisor-guide.en.md"), "utf8");
     assert.equal(zh.split("\n").length, en.split("\n").length, `${base}：指南 zh/en 行数必须仍相等`);
@@ -598,8 +602,8 @@ test("g-439/g-496：块内只留结构，正文真源在 md；渲染函数对未
   assert.ok(block.includes("parseAutomationGuidanceAsset"), "块内必须解析资产（结构留逻辑）");
 
   // ① 正文真源 = 资产，块内/宿主源代码不得再内联正文（逐字段对账）
-  const zhAsset = readFileSync(join(HOST, "prompts", "automation-guidance.zh.md"), "utf8");
-  const enAsset = readFileSync(join(HOST, "prompts", "automation-guidance.en.md"), "utf8");
+  const zhAsset = readFileSync(join(PROMPTS_SRC, "automation-guidance.zh.md"), "utf8");
+  const enAsset = readFileSync(join(PROMPTS_SRC, "automation-guidance.en.md"), "utf8");
   const hostSrc = readFileSync(join(DIST, "index.js"), "utf8");
   for (const [label, asset] of [["zh", zhAsset], ["en", enAsset]] as const) {
     assert.ok(asset.includes("@@header") && asset.includes("@@trailer"), `${label} 资产必须含 header/trailer 块`);

@@ -20,7 +20,7 @@ import {
 import { formatAttemptPrompt } from "../../dist/index.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
-const promptPath = (name: string) => join(repoRoot, "dsh-graph-host", "prompts", name);
+const promptPath = (name: string) => join(repoRoot, "prompts", name);
 
 /** 与宿主一致的最小 prompt 参数（只在测试内构造，不落到产品代码）。 */
 const promptArgs = (over = {}) => ({

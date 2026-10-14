@@ -102,7 +102,7 @@ test("g-369 判据1：三工具已注册，description 逐字取自 server-i18n�
   // **模块**（shared_cards）」—— agent 侧仍能据此知道该能力受哪个开关管辖。
   // 工具级真源改由上面的 schema/description 断言 + harness 注入承担。
   for (const lang of ["zh", "en"] as const) {
-    const text = readFileSync(join(repoRoot, "dsh-graph-host", "prompts", `help.${lang}.md`), "utf8");
+    const text = readFileSync(join(repoRoot, "prompts", `help.${lang}.md`), "utf8");
     assert.match(text, /\{shared_cards\}/, `help.${lang}.md 缺 shared_cards 模块行（三工具无归属模块）`);
     // 负向对照（内存变异）：模块占位被改坏时判据必红。
     assert.doesNotMatch(text.replace("{shared_cards}", "{shared_card}"), /\{shared_cards\}/, "模块占位改坏时判据必须变红");

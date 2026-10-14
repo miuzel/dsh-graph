@@ -87,8 +87,8 @@ function snapshot(h: Harness, goal: string) {
 // ============================================================================
 
 test("g-378 判据 1：中英指南的『派发前先写目标描述』提醒逐行对称，英文零 CJK", () => {
-  const zh = readFileSync(join(REPO, "dsh-graph-host/supervisor-guide.zh.md"), "utf8").split("\n");
-  const en = readFileSync(join(REPO, "dsh-graph-host/supervisor-guide.en.md"), "utf8").split("\n");
+  const zh = readFileSync(join(REPO, "prompts/supervisor-guide.zh.md"), "utf8").split("\n");
+  const en = readFileSync(join(REPO, "prompts/supervisor-guide.en.md"), "utf8").split("\n");
 
   const zhIdx = zh.findIndex((l) => l.startsWith("- **派发前先写目标描述**"));
   const enIdx = en.findIndex((l) => l.startsWith("- **Write the goal description before dispatching**"));
@@ -105,7 +105,7 @@ test("g-378 判据 1：中英指南的『派发前先写目标描述』提醒逐
   assert.doesNotMatch(enLine, /[\u3400-\u9fff\uf900-\ufaff]/, "英文提醒不得含 CJK");
 
   // 提醒是随包发布的资产：dist 副本必须已含同一条（源→dist 逐字一致由 g-312 新鲜度套件兜底）。
-  const distEn = readFileSync(join(REPO, "dist/supervisor-guide.en.md"), "utf8");
+  const distEn = readFileSync(join(REPO, "dist/prompts/supervisor-guide.en.md"), "utf8");
   assert.ok(distEn.includes(enLine.trim()), "dist 英文指南必须含同一条提醒（构建资产已同步）");
 });
 

@@ -874,38 +874,39 @@ export function readSupervisorStatusAt(rootOrEvents: string | GraphEvent[]): num
 //
 // 背景：提示词正文（模式策略片段、报文骨架）此前以模板字面量硬编码在 `core/ops.ts` 里 ——
 // 同一段正文一旦在文档/资产里再出现一次，就形成「代码一份、文档一份」的双源，手工同步必然漂移。
-// 负责人 2026-10-14 批准：正文迁到 `dsh-graph-host/prompts/*.{zh,en}.md`，由 core **运行时现读**；
-// 只允许**两项明确静态定位**（不做 cwd 探测、不搜目录、不新增依赖、不在构建期生成）：
-//   · 源形态：本模块位于 `core/` ⇒ 资产在 `../dsh-graph-host/prompts/`；
-//   · 发布形态：本模块位于 `dist/core/` ⇒ 资产在 `../prompts/`（构建把 prompts/ 拷进 dist/）。
+// 负责人 2026-10-14 批准：正文迁到提示词资产 `*.{zh,en}.md`，由 core **运行时现读**。
 //
-// 两形态的**判别**只看本模块自身所在目录名是否为 `dist`（其余一律按源形态）—— 这是**位置事实**，
-// 不是猜测。关键约束（brief 明令）：**发布形态资产缺失时必须明确失败，绝不回读仓库源**掩盖漏包；
-// 因此 resolvePromptAssetDir 按形态**取单一目录**、不做「失败即换目录」的回落。缺资产 ⇒ 抛错。
+// g-496（负责人 2026-10-14 跨宿主资产所有权裁定）：公共提示词（`subagent-mode`、
+// `attempt-report-skeleton` 等跨宿主语义资产）只有**一份受版本控制的源码副本**，位于**仓库根
+// `prompts/`**（公共层）。`core` 属公共层 ⇒ **只依赖公共层**，**绝不读取宿主插件目录**
+// （`dsh-graph-host/**`）。此前 core 走 `../dsh-graph-host/prompts/` 是**所有权倒置**：公共内核
+// 反向依赖某个宿主适配器，未来 Claude / pi-ai / Codex 插件无法复用。
+//
+// 两项**明确静态定位**（不做 cwd 探测、不搜目录、不新增依赖、不在构建期生成）：
+//   · 源形态：本模块位于 `<repo>/core/` ⇒ 资产在 `<repo>/prompts/`；
+//   · 发布形态：本模块位于 `<root>/dist/core/` ⇒ 资产在 `<root>/dist/prompts/`。
+// 两形态**都是 `../prompts/`** —— 构建把公共层与宿主专属资产合并拷进 `dist/prompts/`，
+// 故相对定位在两形态下同形自洽（`dist/` 被整体复制到任意名字的目录后仍成立）。
+//
+// 关键约束（brief 明令）：**发布形态资产缺失时必须明确失败，绝不回读仓库源**掩盖漏包；
+// 因此这里按形态**取单一目录**、不做「失败即换目录」的回落。缺资产 ⇒ 抛错。
 //
 // 读取失败一律 fail-closed（抛 GraphError，绝不静默降级为空串或内置文本）—— 与 host 侧
 // `requirePromptAsset` 同口径，保证「资产没随包发布」不会被伪装成「正文为空」。
 
-/** 本模块在包内的位置事实：源形态 `<repo>/core/ops.ts`、发布形态 `<root>/dist/core/ops.js`。
+/** 资产目录：**公共提示词层**（唯一静态定位，两形态同形）。
  *
- *  返回 `true` ⟺ 本文件位于一个名为 `dist` 的目录之下的 `core/` 内（即祖父目录名为 `dist`）。
- *  这是**位置事实**（来自 `import.meta.url`），不是对 cwd / 环境变量的猜测。 */
-/** 两项**明确静态定位**（负责人批准）：源形态与发布形态各一个候选，二选一。
+ *  · 源形态（`<repo>/core/ops.ts`）      ⇒ `<repo>/prompts/`；
+ *  · 发布形态（`<root>/dist/core/ops.js`）⇒ `<root>/dist/prompts/`。
  *
- *  · 发布形态（`dist/core/ops.js`）⇒ `<root>/dist/prompts/`；
- *  · 源形态（`core/ops.ts`）⇒ `<repo>/dsh-graph-host/prompts/`。
+ *  两形态同为 `../prompts/`：构建把公共层 `prompts/` 与宿主专属 `dsh-graph-host/prompts/`
+ *  **合并**拷进 `dist/prompts/`。故本函数不依赖父目录恰好叫 `dist`，`dist/` 整体复制到
+ *  任意名字的目录后仍自洽。
  *
- *  判别只看**这两个候选目录本身是否存在**（不做 cwd 探测、不做目录搜索、不新增依赖）：
- *  发布产物里 `../prompts/` 存在、`../dsh-graph-host/prompts/` 不存在；源码树里反之。
- *  这样 `dist/` 被整体复制到任意名字的目录（如 hermetic 测试副本）后**仍然自洽**，
- *  不依赖父目录恰好叫 `dist`。 */
+ *  **所有权铁律**：core 属公共层，**只读公共层** `../prompts/` —— 绝不再定位、也绝不回退到
+ *  `dsh-graph-host/prompts/`（那是宿主适配器目录）。跨宿主复用要求 core 不依赖任何宿主插件。 */
 export function resolvePromptAssetDirUrl(): URL {
-  const distForm = new URL("../prompts/", import.meta.url);
-  const srcForm = new URL("../dsh-graph-host/prompts/", import.meta.url);
-  try {
-    if (statSync(distForm).isDirectory()) return distForm;
-  } catch { /* 不存在 ⇒ 试源形态 */ }
-  return srcForm;
+  return new URL("../prompts/", import.meta.url);
 }
 
 /** 读取一份 core 侧提示词资产正文（`<name>.<lang>.md`）；缺资产/不可读 ⇒ fail-closed 抛错。
@@ -1436,7 +1437,7 @@ export function normalizeSubagentMode(mode: unknown): SubagentMode | null {
 
 /** 模式策略提示词片段（仅影响执行策略/提示参数，不越过凭据/provider边界，不接受命令注入）
  *
- *  g-496：正文真源 = `dsh-graph-host/prompts/subagent-mode.{zh,en}.md`（**唯一事实源**，
+ *  g-496：正文真源 = 公共层 `prompts/subagent-mode.{zh,en}.md`（**唯一事实源**，
  *  代码不再持有第二副本）。本常量仍是**导出的可变表**、键集合仍恰为 SUBAGENT_MODES、
  *  `standard` 仍为空串（standard 不注入模式段）—— 既有 API 与断言口径不变。
  *
@@ -6903,7 +6904,7 @@ export const REVIEW_CONCLUSION_EXAMPLE_EN = "- **Verdict**: PASS";
 
 /** executor 报文骨架（8 项逐项必填；缺失即视为交付不完整）+ reviewer 报文骨架（6 项）。
  *
- *  g-496：**正文真源 = `dsh-graph-host/prompts/attempt-report-skeleton.{zh,en}.md`**（唯一事实源，
+ *  g-496：**正文真源 = 公共层 `prompts/attempt-report-skeleton.{zh,en}.md`**（唯一事实源，
  *  代码不再持有第二副本）。逻辑侧只保留「预算常量 / 结论示例 / begin-end 机器标记 / 占位符插值」——
  *  资产里以 `{{conclusion_example}}` 与 `{{soft_max_kib}}` 两处占位符引用它们，读取时由本模块替换，
  *  保证「预算与结论示例仍由逻辑提供」而正文不留第二份。
@@ -13656,7 +13657,7 @@ export function resolveSubagentPrompt(root: string, globalPrompt: string, agentT
  * 负责人 2026-10-08 裁决：本版只做**最小契约**——契约文本 + 留痕要求 + 结构守卫 + 默认 off 的开关。
  * 不引入新调度器、不做一目标多活跃 attempt、不新增强制门禁、不依赖第三方 Agent Teams 插件。
  *
- * 契约文本的唯一真源是 `dsh-graph-host/prompts/discipline.{zh,en}.md` 里的**定界块**（HTML 注释
+ * 契约文本的唯一真源是公共层 `prompts/agent-teams-contract.{zh,en}.md` 资产（历史上曾在 `discipline` 资产里用 HTML 注释
  * 标记，渲染不可见）。同一文本既出现在主管纪律（常驻文档），也（仅当开关 on）被抽出来注入
  * **派发提示词**的 `subagentPromptSection` 槽位。默认 off ⇒ 抽取结果为 null ⇒ 派发提示词逐字不变。
  * ========================================================================== */

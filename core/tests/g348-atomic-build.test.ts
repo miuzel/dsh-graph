@@ -224,6 +224,9 @@ function makeSandbox(): Sandbox {
   mkdirSync(repo, { recursive: true });
   cpSync(join(repoRoot, "scripts"), join(repo, "scripts"), { recursive: true });
   cpSync(join(repoRoot, "dsh-graph-host"), join(repo, "dsh-graph-host"), { recursive: true });
+  // g-496：提示词资产的**公共层**在仓库根 `prompts/`（构建合并两层的源之一）。
+  // 沙箱是「与真实仓库同构」的构建环境，必须一并镜像，否则 build.sh 会 fail-closed 报层目录缺失。
+  cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
   // core/ 只取构建真正需要的 *.ts（tsconfig include 就是 core/*.ts），测试文件不参与构建
   mkdirSync(join(repo, "core"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {

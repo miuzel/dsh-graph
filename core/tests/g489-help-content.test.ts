@@ -30,8 +30,8 @@ const distRoot = join(repoRoot, "dist");
 const helpModalPath = join(repoRoot, "dsh-graph-host/lib/client/help-modal.js");
 const i18nSrcPath = join(repoRoot, "dsh-graph-host/lib/client/i18n.js");
 const settingsModalPath = join(repoRoot, "dsh-graph-host/lib/client/settings-modal.js");
-const helpZhPromptPath = join(repoRoot, "dsh-graph-host/prompts/help.zh.md");
-const helpEnPromptPath = join(repoRoot, "dsh-graph-host/prompts/help.en.md");
+const helpZhPromptPath = join(repoRoot, "prompts/help.zh.md");
+const helpEnPromptPath = join(repoRoot, "prompts/help.en.md");
 
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 /** 归一化：只留数字/拉丁字母/CJK（去 emoji、空白、标点、大小写差异）⇒ 标签锚点比对不受装饰影响。 */

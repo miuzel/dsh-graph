@@ -72,7 +72,7 @@ const STRICT_TYPES = ["feature", "bug", "task", "improvement"] as const;
  * **本仓库 `.dsh-graph/project.yaml` 的有效配置镜像**（g-435 显式校准的登记值）。
  * 只用于行为断言；真实文件的只读探针在交付证据中单独给出。
  */
-const repoProjectRegions = ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "dsh-graph-host/prompts", "scripts"];
+const repoProjectRegions = ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "prompts", "scripts"];
 const repoProjectContractPaths = ["core/schema.ts", "schema/SCHEMA.md"];
 const repoProjectNonProductPrefixes = ["core/tests", "dist", "core-dist", "node_modules", ".worktrees"];
 

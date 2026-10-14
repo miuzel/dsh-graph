@@ -37,7 +37,7 @@ import { resolveWorktreeGuide } from "../../dist/index.js";
  */
 
 const REPO_ROOT = join(import.meta.dirname, "../..");
-const PROMPTS = join(REPO_ROOT, "dsh-graph-host", "prompts");
+const PROMPTS = join(REPO_ROOT, "prompts");
 const CLIENT = join(REPO_ROOT, "dsh-graph-host", "lib", "client");
 
 /** attempt.md 的可辨识枚举（core/worktree.ts WorktreeIsolationDecision.reason）。 */

@@ -4,7 +4,7 @@
 //  · 源码注释可以有内部编号/内部路径（豁免）；**给用户 supervisor 的提示词**与**运行期文案**
 //    不得假设能获取本仓库特有目录结构 / 脚本 / 分支模型 / 文件（含 `.dsh-graph` 内部文件名）。
 //  · A) 资产扫描（仅模型可读面，**每个预期资产都有粒度下限，防 fail-open**）：
-//      ① `dsh-graph-host/prompts/*.md` 与 `dsh-graph-host/supervisor-guide.{zh,en}.md`（源码 + dist 投递副本）；
+//      ① **公共层** `prompts/*.md`（含 `supervisor-guide.{zh,en}.md`）（源码 + dist 合并投递副本）；
 //      ② `dsh-graph-host/lib/server-i18n.js` 的**字符串值**（导入模块取 value ⇒ 键名/注释天然不计）；
 //      ③ `dsh-graph-host/lib/client/i18n.js`（GUI 可见文案）与 `dist/lib/client.js` 的
 //         **全部字符串字面量**（`'…'` / `"…"` / 反引号，含数组元素、赋值右侧、键名；拼接片段不可导入，
@@ -55,6 +55,9 @@ import {
 
 const repoRoot = join(import.meta.dirname, "../..");
 const HOST = join(repoRoot, "dsh-graph-host");
+// g-496：提示词资产（含 supervisor-guide）已归**公共层** `prompts/`；`HOST` 仍指插件自身目录
+// （`lib/client/i18n.js` 等未移动）。资产扫描必须以公共层为源侧根。
+const PUBLIC_PROMPTS = join(repoRoot, "prompts");
 const DIST = join(repoRoot, "dist");
 const CLIENT_I18N_SRC = join(HOST, "lib", "client", "i18n.js");
 const CLIENT_BUNDLE_DIST = join(DIST, "lib", "client.js");
@@ -439,13 +442,13 @@ function scanClientI18n(): string[] {
 /** 收集源码与投递副本两侧的 markdown 资产（含粒度下限与豁免行数上限）。 */
 function markdownAssets(): { label: string; text: string; maxMarkerLines: number }[] {
   const out: { label: string; text: string; maxMarkerLines: number }[] = [];
-  for (const [label, dir] of [["源", HOST], ["dist", DIST]] as const) {
-    const promptsDir = join(dir, "prompts");
+  // g-496：源侧资产根是**公共层** `prompts/`；dist 侧是合并后的 `dist/prompts/`。
+  // 迁移后**不再有**「根级非 prompts 资产」特例 —— 26 份资产同处一层（唯一源码副本）。
+  for (const [label, promptsDir] of [["源", PUBLIC_PROMPTS], ["dist", join(DIST, "prompts")]] as const) {
     for (const name of readdirSync(promptsDir).filter((n) => n.endsWith(".md")).sort()) {
-      out.push({ label: `${label}/prompts/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: 0 });
-    }
-    for (const name of ["supervisor-guide.zh.md", "supervisor-guide.en.md"]) {
-      out.push({ label: `${label}/${name}`, text: readFileSync(join(dir, name), "utf8"), maxMarkerLines: MARKER_LINE_CAP });
+      // supervisor-guide 两语言仍享「本项目示例」标记行豁免（口径不变，仅位置变了）。
+      const cap = name === "supervisor-guide.zh.md" || name === "supervisor-guide.en.md" ? MARKER_LINE_CAP : 0;
+      out.push({ label: `${label}/prompts/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: cap });
     }
   }
   return out;
@@ -480,12 +483,13 @@ async function scanAllAssets(): Promise<string[]> {
 test("g-444 判据3：模型可读资产（源码 + dist 投递副本）不含本仓库特有路径/命令/文件", async () => {
   const assets = markdownAssets();
   // 非恒真护栏：资产必须真被读到（清空/删减任一资产由每资产下限与文件枚举兜住）。
-  // g-496：不再钉死「14 个 prompts」魔法数字，改为按目录实际名数派生（× 2 侧 + 2 份指南 × 2 侧），
-  // 并就地核对源/随包两侧 prompts 同集 ⇒ 派生基准本身可信、无法靠删资产静默少扫。
-  const promptNames = readdirSync(join(HOST, "prompts")).filter((n) => n.endsWith(".md")).sort();
+  // g-496：资产现同处**一层**（公共层 prompts/，26 份，含 supervisor-guide），不再是
+  // 「prompts/ 目录 + 根级 2 份指南」两处。故按目录实际名数派生（× 2 侧），
+  // 并就地核对源/随包两侧同集 ⇒ 派生基准本身可信、无法靠删资产静默少扫。
+  const promptNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".md")).sort();
   const distPromptNames = readdirSync(join(DIST, "prompts")).filter((n) => n.endsWith(".md")).sort();
   assert.deepEqual(promptNames, distPromptNames, "源 prompts 与随包副本必须同集（派生基准可信）");
-  assert.equal(assets.length, promptNames.length * 2 + 4, `应扫到 ${promptNames.length} 个 prompts × 2 侧 + 2 份指南 × 2 侧（实得 ${assets.length}）`);
+  assert.equal(assets.length, promptNames.length * 2, `应扫到 ${promptNames.length} 个资产 × 2 侧（实得 ${assets.length}）`);
   const violations = await scanAllAssets();
   assert.deepEqual(violations, [], `资产命中禁用 token（应 0 命中）：\n${violations.join("\n")}`);
 });
@@ -765,17 +769,17 @@ test("g-444 B③：attempt 尾注骨架不含 npm 插件生态词（宿主 / eng
 });
 
 test("g-444 B④：zh/en 同步（骨架条目、指南行数、示例标记行数）", () => {
-  const zh = readFileSync(join(HOST, "supervisor-guide.zh.md"), "utf8");
-  const en = readFileSync(join(HOST, "supervisor-guide.en.md"), "utf8");
+  const zh = readFileSync(join(PUBLIC_PROMPTS, "supervisor-guide.zh.md"), "utf8");
+  const en = readFileSync(join(PUBLIC_PROMPTS, "supervisor-guide.en.md"), "utf8");
   assert.equal(zh.split("\n").length, en.split("\n").length, "指南 zh/en 行数必须相等");
   const markerLines = (text: string) => text.split("\n").filter((l) => new RegExp(MARK).test(l)).length;
   assert.equal(markerLines(zh), markerLines(en), "「本项目示例」标记行 zh/en 必须成对");
   assert.equal(markerLines(zh), MARKER_LINE_CAP, `指南豁免行数应恰为 ${MARKER_LINE_CAP}（实得 ${markerLines(zh)}）`);
-  const promptNames = readdirSync(join(HOST, "prompts")).filter((n) => n.endsWith(".zh.md"));
+  const promptNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".zh.md"));
   for (const name of promptNames) {
     const base = name.slice(0, -6);
-    const pzh = readFileSync(join(HOST, "prompts", `${base}.zh.md`), "utf8");
-    const pen = readFileSync(join(HOST, "prompts", `${base}.en.md`), "utf8");
+    const pzh = readFileSync(join(PUBLIC_PROMPTS, `${base}.zh.md`), "utf8");
+    const pen = readFileSync(join(PUBLIC_PROMPTS, `${base}.en.md`), "utf8");
     assert.equal(pzh.split("\n").length, pen.split("\n").length, `${base} 行数必须 zh/en 相等`);
   }
   assert.equal(
@@ -787,7 +791,7 @@ test("g-444 B④：zh/en 同步（骨架条目、指南行数、示例标记行�
 
 test("g-444 判据2：提示词不再要求用户项目存在或手工维护 INDEX.md（双向）", () => {
   for (const [side, name] of [["zh", "supervisor-guide.zh.md"], ["en", "supervisor-guide.en.md"]] as const) {
-    const text = readFileSync(join(HOST, name), "utf8");
+    const text = readFileSync(join(PUBLIC_PROMPTS, name), "utf8");
     assert.doesNotMatch(text, /INDEX\.md/, `${side} 仍提到 INDEX.md`);
     assert.doesNotMatch(text, /务必先阅读[^。\n]*索引|必须同步更新[^。\n]*索引/, `${side} 仍有「必读/必维护索引」要求`);
     assert.doesNotMatch(text, /always read[^.\n]*index|must also update[^.\n]*index (table|file)/i, `${side} 仍有「必读/必维护索引」要求`);

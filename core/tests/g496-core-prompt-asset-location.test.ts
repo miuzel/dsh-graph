@@ -5,8 +5,11 @@
  * **两种发布形态**下都能定位到资产，且资产缺失时**明确失败**（绝不回读仓库源掩盖漏包）。
  *
  * 负责人批准的两项**明确静态定位**（无 cwd 探测 / 无目录搜索 / 无新依赖 / 无构建生成链）：
- *   · 源形态（`core/ops.ts`）         ⇒ `<repo>/dsh-graph-host/prompts/`
+ *   · 源形态（`core/ops.ts`）         ⇒ `<repo>/prompts/`（**公共层**，两形态同形）
  *   · 发布形态（`dist/core/ops.js`）  ⇒ `<root>/dist/prompts/`
+ *
+ * g-496（跨宿主所有权裁定）：core 属**公共层**，只依赖公共层 `prompts/`，**绝不**读取宿主插件
+ * 目录 `dsh-graph-host/**`。构建把公共层与宿主专属层合并进 `dist/prompts/`。
  *
  * 本守卫断言的是**真实行为**（真读资产、真装配正文、真按目录切换），不是 `new Function`
  * 抽块或字符串自证：
@@ -36,7 +39,7 @@ import {
 
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
-const promptsSrc = join(repoRoot, "dsh-graph-host/prompts");
+const promptsSrc = join(repoRoot, "prompts");
 
 /** 已知由 core 读取的资产基名（迁移过来的正文真源）。 */
 const CORE_READ_ASSETS = [
@@ -46,7 +49,7 @@ const CORE_READ_ASSETS = [
 
 // ============================================================ A. 源码形态
 
-test("g-496 A：源码形态从 dsh-graph-host/prompts 真读正文，zh/en 各自取到对应语言", () => {
+test("g-496 A：源码形态从公共层 prompts/ 真读正文，zh/en 各自取到对应语言", () => {
   for (const name of CORE_READ_ASSETS) {
     for (const lang of ["zh", "en"] as const) {
       const file = join(promptsSrc, `${name}.${lang}.md`);
@@ -71,8 +74,10 @@ test("g-496 A：源码形态从 dsh-graph-host/prompts 真读正文，zh/en 各�
 
 test("g-496 B：发布形态解析到 dist/prompts；dist/ 整体复制到任意目录名后仍自洽", async () => {
   // 源码树当前形态：本测试文件在 core/tests 下、import 的是 core/ops.ts ⇒ 源形态。
-  assert.ok(resolvePromptAssetDirUrl().href.endsWith("/dsh-graph-host/prompts/"),
-    `源码树必须解析到 dsh-graph-host/prompts/，实得 ${resolvePromptAssetDirUrl().href}`);
+  assert.ok(resolvePromptAssetDirUrl().href.endsWith("/prompts/"),
+    `源码树必须解析到公共层 prompts/，实得 ${resolvePromptAssetDirUrl().href}`);
+  assert.ok(!resolvePromptAssetDirUrl().href.includes("dsh-graph-host"),
+    "core 资产定位**不得**含宿主插件目录（公共层不得依赖宿主适配器）");
 
   const tmpBase = join(repoRoot, "tmp");
   mkdirSync(tmpBase, { recursive: true });
@@ -105,7 +110,7 @@ test("g-496 C：只带 core/ 的裸拷贝 ⇒ import 即抛 GraphError（不回�
   mkdirSync(tmpBase, { recursive: true });
   const root = mkdtempSync(join(tmpBase, "g496-bare-"));
   try {
-    // 裸拷贝：只有 core/，既无 ../prompts/ 也无 ../dsh-graph-host/prompts/。
+    // 裸拷贝：只有 core/，无同级 ../prompts/。
     cpSync(join(distRoot, "core"), join(root, "core"), { recursive: true, dereference: true });
     assert.ok(!existsSync(join(root, "prompts")), "裸拷贝不得带 prompts");
     assert.ok(!existsSync(join(root, "dsh-graph-host")), "裸拷贝不得带 dsh-graph-host");
@@ -136,7 +141,7 @@ test("g-496 C2：发布形态**删掉** prompts/ ⇒ 明确失败，绝不回读
     cpSync(distRoot, pkg, { recursive: true, dereference: true });
     // 模拟「漏包」：prompts 缺失。仓库源**仍然存在且在磁盘上可达**，正是最容易被回读掩盖的场景。
     rmSync(join(pkg, "prompts"), { recursive: true, force: true });
-    // 同时造一个源形态目录，内容残缺（若实现错误地优先试源形态，会读到空/缺文件）。
+    // 同时造一个**宿主插件层**残目录，内容残缺：core 属公共层，绝不得回退读取宿主目录。
     mkdirSync(join(pkg, "dsh-graph-host", "prompts"), { recursive: true });
     writeFileSync(join(pkg, "dsh-graph-host", "prompts", "attempt-report-skeleton.zh.md"), "STALE-SOURCE\n", "utf8");
 
@@ -157,9 +162,11 @@ test("g-496 C2：发布形态**删掉** prompts/ ⇒ 明确失败，绝不回读
 
 test("g-496 D：core/ops.ts 只含批准的两项定位，无 cwd 探测 / 目录搜索 / 第二处正文副本", () => {
   const ops = readFileSync(join(repoRoot, "core/ops.ts"), "utf8");
-  // 两项候选都在（且只有这两项）。
-  assert.ok(ops.includes('new URL("../prompts/", import.meta.url)'), "发布形态定位必须存在");
-  assert.ok(ops.includes('new URL("../dsh-graph-host/prompts/", import.meta.url)'), "源形态定位必须存在");
+  // 单一公共层定位（源/发布两形态同形）。
+  assert.ok(ops.includes('new URL("../prompts/", import.meta.url)'), "公共层定位必须存在");
+  // 结构性铁律：core **绝不**定位宿主插件目录（所有权倒置守卫，g-496）。
+  assert.ok(!ops.includes('new URL("../dsh-graph-host/prompts/"'),
+    "core 不得再定位 dsh-graph-host/prompts（公共层不得依赖宿主适配器）");
   // 无 cwd 探测 / 目录搜索 / 环境变量开关。
   assert.doesNotMatch(ops, /process\.cwd\(\)/, "不得用 cwd 探测定位资产");
   assert.doesNotMatch(ops, /readdirSync\([^)]*prompts/, "不得对 prompts 目录做搜索式定位");

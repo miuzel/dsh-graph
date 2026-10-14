@@ -126,7 +126,7 @@ test("g-118：graph_help 工具注册，输出使用说明 + claim 指引（不�
   // 模块清单由**真实渲染函数**把 `{moduleId}` 占位替换成当前开关值 ⇒ 每个模块的**状态列**必须在
   // 真实输出里真的被渲染出来（不是靠 `|| out.help.includes("开启")` 这种恒真兜底）。
   // 变异：把真实资产里的某个模块占位改坏 ⇒ 真实渲染路径必须留下**未替换占位**（可观察的故障信号）。
-  const helpAsset = readFileSync(join(repoRootDir, "dsh-graph-host/prompts/help.zh.md"), "utf8");
+  const helpAsset = readFileSync(join(repoRootDir, "prompts/help.zh.md"), "utf8");
   const mutatedAsset = helpAsset.replace("{memory}", "{memry}");
   assert.notEqual(mutatedAsset, helpAsset, "负向对照必须真实改变输入（改坏模块占位）");
   assert.ok(mutatedAsset.includes("{memry}"), "变异后资产必须含改坏的占位");

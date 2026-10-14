@@ -40,11 +40,11 @@ const repoRoot = join(import.meta.dirname, "../..");
 const helpModalPath = join(repoRoot, "dsh-graph-host/lib/client/help-modal.js");
 const i18nSrcPath = join(repoRoot, "dsh-graph-host/lib/client/i18n.js");
 const bundlePath = join(repoRoot, "dist/lib/client.js");
-const usageZhPromptPath = join(repoRoot, "dsh-graph-host/prompts/usage.zh.md");
-const usageEnPromptPath = join(repoRoot, "dsh-graph-host/prompts/usage.en.md");
+const usageZhPromptPath = join(repoRoot, "prompts/usage.zh.md");
+const usageEnPromptPath = join(repoRoot, "prompts/usage.en.md");
 const engineSrcPath = join(repoRoot, "dsh-graph-host/index.js");
-const helpZhPromptPath = join(repoRoot, "dsh-graph-host/prompts/help.zh.md");
-const helpEnPromptPath = join(repoRoot, "dsh-graph-host/prompts/help.en.md");
+const helpZhPromptPath = join(repoRoot, "prompts/help.zh.md");
+const helpEnPromptPath = join(repoRoot, "prompts/help.en.md");
 
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
@@ -500,12 +500,12 @@ test("g-493 D1（g-495 改判）：graph_help 省略 topic 返回渲染后全文
   assert.equal(ge.help, runHelp({ topic: "图工程" }).help, "zh 别名与英文主题名必须取到同一段");
   // g-495 返工（裁决·出路 1）：点题段**已从 help 迁到按需面 usage** ⇒ 命中的切片必须来自 usage，
   // 且与 usage 资产里的该章节逐字相等（跨资产查找的**正**证据；负向对照见 D4）。
-  const usageAssetZh = readFileSync(join(repoRoot, "dsh-graph-host/prompts/usage.zh.md"), "utf8");
+  const usageAssetZh = readFileSync(join(repoRoot, "prompts/usage.zh.md"), "utf8");
   assert.ok(usageAssetZh.includes(ge.help), "topic=graph_engineering 的切片必须逐字取自 usage.zh.md 的该章节");
   assert.ok(!raw.includes(GRAPH_ENGINEERING_DEFINITION), "help.zh.md 仍不得含点题定义（载体只在 usage）");
   // en 侧同一路径：language 由配置解析（本夹具为 zh），故 en 不走 `execute()`，而是直接验证
   // **en usage 资产**承载了同名章节（跨资产查找对 en 面同样成立；英译对偶，不要求含 zh 逐字串）。
-  const usageAssetEn = readFileSync(join(repoRoot, "dsh-graph-host/prompts/usage.en.md"), "utf8");
+  const usageAssetEn = readFileSync(join(repoRoot, "prompts/usage.en.md"), "utf8");
   const enSection = usageAssetEn.split(/\n(?=## )/).find((s) => s.startsWith("## ") && /dsh-graph/.test(s.split("\n")[0]!) && /Graph Engineering/i.test(s.split("\n")[0]!));
   assert.ok(enSection, "usage.en.md 必须含「为什么叫 dsh-graph…」章节（en 查找面）");
   assert.ok(/Graph Engineering/.test(enSection!), "en 章节必须点题 Graph Engineering");
@@ -591,8 +591,8 @@ test("g-493 D3（g-495 返工项 4）：生命周期串在 tool.graph_transition
   const EN_CYCLE = "draft→planning→collecting→ready→in_progress→review→delivered";
   const zhDict = SERVER_I18N.zh as Record<string, string>;
   const enDict = SERVER_I18N.en as Record<string, string>;
-  const usageZh = readFileSync(join(repoRoot, "dsh-graph-host/prompts/usage.zh.md"), "utf8");
-  const usageEn = readFileSync(join(repoRoot, "dsh-graph-host/prompts/usage.en.md"), "utf8");
+  const usageZh = readFileSync(join(repoRoot, "prompts/usage.zh.md"), "utf8");
+  const usageEn = readFileSync(join(repoRoot, "prompts/usage.en.md"), "utf8");
   assert.ok(zhDict["tool.graph_transition"]!.includes(ZH_CYCLE), "tool.graph_transition(zh) 必须含生命周期序列");
   assert.ok(enDict["tool.graph_transition"]!.includes(EN_CYCLE), "tool.graph_transition(en) 必须含生命周期序列");
   assert.ok(usageZh.includes(ZH_CYCLE), "usage.zh.md 必须含同一生命周期序列");

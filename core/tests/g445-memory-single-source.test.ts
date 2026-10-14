@@ -382,7 +382,7 @@ test("g-445 判据4/7：工具、REST、交接显示同一条目与来源；REST
 // =====================================================================================
 
 test("g-445 判据2：指南 zh/en 不再要求索引维护，旧 md 保留为可选文档", () => {
-  for (const f of ["dsh-graph-host/supervisor-guide.zh.md", "dsh-graph-host/supervisor-guide.en.md"]) {
+  for (const f of ["prompts/supervisor-guide.zh.md", "prompts/supervisor-guide.en.md"]) {
     const text = readFileSync(join(repoRoot, f), "utf8");
     assert.ok(!text.includes("INDEX.md"), `${f} 不再强制读取/维护 INDEX.md`);
     assert.ok(text.includes("memory/memory.jsonl") || text.includes("`memory.jsonl`"), `${f} 指明结构化记忆真源`);

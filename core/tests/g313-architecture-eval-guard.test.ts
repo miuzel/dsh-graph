@@ -13,7 +13,7 @@
  *             `Report format requirement`）一个都没丢。
  *
  * 反自我满足设计：
- *  1. 断言全部打在 **dist 产物**上（`dist/supervisor-guide.{zh,en}.md` 与 `dist/core/ops.js`），
+ *  1. 断言全部打在 **dist 产物**上（`dist/prompts/supervisor-guide.{zh,en}.md` 与 `dist/core/ops.js`），
  *     不 grep `core/ops.ts` 源码，也不 grep `dsh-graph-host/` 源指南 —— 证明被验证的是**要发布的
  *     那一份**；源改了不重建必红（配合 g-312 的 dist 新鲜度套件）。
  *  2. 判别力自证：这些关键词在改动前的 zh/en 指南与 PM 提示词里**命中数为 0**，故断言不是
@@ -31,8 +31,8 @@ import { join } from "node:path";
 import { formatPmPrompt } from "../../dist/core/ops.js";
 
 const distRoot = join(import.meta.dirname, "../../dist");
-const ZH_GUIDE = join(distRoot, "supervisor-guide.zh.md");
-const EN_GUIDE = join(distRoot, "supervisor-guide.en.md");
+const ZH_GUIDE = join(distRoot, "prompts", "supervisor-guide.zh.md");
+const EN_GUIDE = join(distRoot, "prompts", "supervisor-guide.en.md");
 const BUILD_HINT = "指南与 PM 提示词运行时从 dist/ 读取：请先运行 `bash scripts/build.sh` 再跑测试（dist/ 是生成物，禁止手改）";
 
 /** 小节与矩阵：判据 1 的关键词（改动前 zh/en 指南命中数均为 0）。 */

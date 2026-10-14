@@ -75,7 +75,7 @@ test("g-253 判据 1：纪律文本单一真源——ROLE_PROFILES 消除'每动
     join(import.meta.dirname, "../ops.ts"),
     join(import.meta.dirname, "../../dist/prompts/discipline.zh.md"),
     join(import.meta.dirname, "../../dist/prompts/discipline.en.md"),
-    join(import.meta.dirname, "../../dist/supervisor-guide.zh.md"),
+    join(import.meta.dirname, "../../dist/prompts/supervisor-guide.zh.md"),
     join(import.meta.dirname, "../../docs/guide-auto-injection.md"),
   ];
   for (const filePath of filesToCheck) {

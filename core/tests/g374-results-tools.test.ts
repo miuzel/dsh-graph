@@ -28,7 +28,7 @@ import { apply } from "../../dist/index.js";
 //  - F3-b：工具必须被 agent「知道存在」（四处提示面 + 工具描述共同指路）。
 
 const repoRoot = join(import.meta.dirname, "../..");
-const promptPath = (name: string) => join(repoRoot, "dsh-graph-host", "prompts", name);
+const promptPath = (name: string) => join(repoRoot, "prompts", name);
 
 function createHarness() {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-tools-"));
@@ -402,8 +402,8 @@ test("g-374 F3-b：四个提示面 + 文档镜像都告知两个新工具，且�
   assert.ok(guideText.includes("不要自动接管 supervisor"), "引导真源必须点明「不要自动接管 supervisor」（claim 限制）");
   // 主管守则（skill 资产，主管显式加载后的主要依据）也必须指路
   for (const [label, path, scenarioNeedle] of [
-    ["supervisor-guide.zh.md", join(repoRoot, "dsh-graph-host", "supervisor-guide.zh.md"), "无子代理"],
-    ["supervisor-guide.en.md", join(repoRoot, "dsh-graph-host", "supervisor-guide.en.md"), "subagent-less"],
+    ["supervisor-guide.zh.md", join(repoRoot, "prompts", "supervisor-guide.zh.md"), "无子代理"],
+    ["supervisor-guide.en.md", join(repoRoot, "prompts", "supervisor-guide.en.md"), "subagent-less"],
   ] as const) {
     const text = readFileSync(path, "utf8");
     assert.ok(text.includes("graph_write_results"), `${label} 必须告知 graph_write_results`);

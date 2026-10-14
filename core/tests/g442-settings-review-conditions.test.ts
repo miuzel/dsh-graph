@@ -973,8 +973,8 @@ test("g-442 验收7：i18n 变量占位符与错误渲染自洽（{field}/{index
 
 test("g-442 验收7：与 g-435 指南「项目校准流程」口径一致（指南真源交叉核对）", () => {
   const { zh, en } = loadClientI18n();
-  const guideZh = readFileSync(join(repoRoot, "dsh-graph-host/supervisor-guide.zh.md"), "utf8");
-  const guideEn = readFileSync(join(repoRoot, "dsh-graph-host/supervisor-guide.en.md"), "utf8");
+  const guideZh = readFileSync(join(repoRoot, "prompts/supervisor-guide.zh.md"), "utf8");
+  const guideEn = readFileSync(join(repoRoot, "prompts/supervisor-guide.en.md"), "utf8");
   // 指南真源确实存在该小节（不是 UI 自造的说法）
   assert.ok(guideZh.includes("### Review 严格度校准（项目专属）"), "zh 指南含校准小节");
   assert.ok(guideEn.includes("### Review Strictness Calibration (Project-Specific)"), "en 指南含校准小节");

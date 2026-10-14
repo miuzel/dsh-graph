@@ -46,8 +46,8 @@ import { apply, resolveCanonicalRoot } from "../../dist/index.js";
 
 const dist = join(process.cwd(), "dist");
 const hostSource = () => readFileSync(join(dist, "index.js"), "utf8");
-const guideEn = () => readFileSync(join(dist, "supervisor-guide.en.md"), "utf8");
-const guideZh = () => readFileSync(join(dist, "supervisor-guide.zh.md"), "utf8");
+const guideEn = () => readFileSync(join(dist, "prompts", "supervisor-guide.en.md"), "utf8");
+const guideZh = () => readFileSync(join(dist, "prompts", "supervisor-guide.zh.md"), "utf8");
 
 // ---------------------------------------------------------------------------
 // g-396：测试隔离底座（自包含临时 workspace + 「真实看板零污染」观测器）

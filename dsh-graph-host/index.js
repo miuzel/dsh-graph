@@ -281,12 +281,13 @@ export function resolveDesignDiagramRequest(rawUrl) {
 export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
 /** g-496：帮助可达资产的**唯一 name → relativePath 注册**（冻结真源）。
  *
- *  为什么需要相对路径：资产不再全在 `prompts/` 下 —— `supervisor-guide.{zh,en}.md` 位于包根
- *  （`build.sh` 逐字复制到 `dist/` 根），而注入式提示词在 `prompts/`。此前白名单只存名字、
- *  处理器把名字硬拼到 `./prompts/` 下 ⇒ 根级资产根本无法通过白名单表达。
+ *  发布布局（g-496 起）：**全部**提示词资产（公共层 + 宿主专属层）由 `build.sh` 合并进单一的
+ *  包内 `prompts/` 目录 ⇒ 注册路径统一为 `prompts/<name>`。不再有根级资产。
+ *  （此前 `supervisor-guide.{zh,en}.md` 位于包根，故注册需相对路径以表达两类位置；合并后
+ *  该特例消失，但注册表作为**唯一 name → path 真源**的职责不变。）
  *
- *  注册同时是**白名单**与**目录投影**的单一来源：`HELP_PROMPT_ASSETS` 由它投影（顺序即展示顺序），
- *  处理器按 `relativePath` 读取。**不持有第二份清单** —— 新增一份资产 = 在此加一行。
+ *  注册同时是**白名单**与**目录投影**的单一来源：`HELP_PROMPT_ASSETS` 由它投影（顺序即展示
+ *  顺序），处理器按 `relativePath` 读取。**不持有第二份清单** —— 新增一份资产 = 在此加一行。
  *  安全口径不变：`relativePath` 只允许**受控的两类形态**（`<name>` 或 `prompts/<name>`），
  *  且 `<name>` 仍须过 `HELP_ASSET_NAME_RE`；`..` / 绝对路径 / 反斜杠一律拒绝（结构性守卫断言）。 */
 const HELP_ASSET_REGISTRY = Object.freeze([
@@ -310,8 +311,8 @@ const HELP_ASSET_REGISTRY = Object.freeze([
   { name: "no-isolation.zh.md", relativePath: "prompts/no-isolation.zh.md" },
   { name: "subagent-mode.en.md", relativePath: "prompts/subagent-mode.en.md" },
   { name: "subagent-mode.zh.md", relativePath: "prompts/subagent-mode.zh.md" },
-  { name: "supervisor-guide.en.md", relativePath: "supervisor-guide.en.md" },
-  { name: "supervisor-guide.zh.md", relativePath: "supervisor-guide.zh.md" },
+  { name: "supervisor-guide.en.md", relativePath: "prompts/supervisor-guide.en.md" },
+  { name: "supervisor-guide.zh.md", relativePath: "prompts/supervisor-guide.zh.md" },
   { name: "usage.en.md", relativePath: "prompts/usage.en.md" },
   { name: "usage.zh.md", relativePath: "prompts/usage.zh.md" },
   { name: "worktree.en.md", relativePath: "prompts/worktree.en.md" },
@@ -692,13 +693,70 @@ export function resolvePromptLanguage(override = "follow", ctx = null) {
   return "zh";
 }
 
+// ===== g-496：提示词资产读取（**按所有权分目录**，无跨目录静默回落）=====
+// 负责人 2026-10-14 跨宿主资产所有权裁定：提示词按**语义归属**分层，不按「谁当前投递」划分。
+//
+//   · **公共层** `<repo>/prompts/` —— 跨宿主共用正文（目标/attempt 纪律、人工 gate、证据/报告
+//     格式、Agent Teams 契约、模式策略、自动化指导、主管技能指南）。适配器（本插件、未来的
+//     Claude / pi-ai / Codex 插件、独立 MCP）都依赖它，它**不反向依赖任何宿主**。
+//   · **宿主专属层** `dsh-graph-host/prompts/` —— DSH 会话/section/GUI 动作语义专属正文。
+//
+// 发布形态下两层由 `build.sh` **合并**为单一 `dist/prompts/`（见该脚本的同名冲突 fail-closed
+// 检测）。因此运行期的读取根只有**一个**：`./prompts/`（包内）。
+//
+// **源形态**（直接在仓库内跑 `dsh-graph-host/index.js`）两层物理分离 ⇒ 按归属取对应根：
+// 公共资产走 `../prompts/`、宿主专属资产走 `./prompts/`。宿主专属资产**不回落到公共层**
+// （那会把「漏了宿主资产」伪装成「读到了公共资产」，掩盖所有权错误）。
+/** 本模块是否处于**发布形态**（`dist/` 包内的合并副本）。
+ *
+ *  判据是**单一、确定的**构造事实，不是目录搜索、也不是 cwd 探测：发布形态下
+ *  `./prompts/` 是构建**合并**两层后的完整资产层，其中必然含公共层资产
+ *  `agent-teams-contract.zh.md`；源形态下 `dsh-graph-host/prompts/` 只放宿主专属资产，
+ *  该文件必然**不在**。（`agent-teams-contract` 属公共层，任何归属调整都会让本判据先红，
+ *  不会静默漂移。）
+ *
+ *  ⚠️ 这**不是**「回落到源码仓库」的开关：发布形态一旦判真，公共资产只读包内
+ *  `./prompts/`，**绝不**再去看 `../prompts/` —— 否则把 `dist/` 放在源码仓库内时，
+ *  `../prompts/` 会命中源码树，使「包内缺资产」被源码掩盖（fail-open）。缺资产必须
+ *  fail-closed 暴露。 */
+function isPublishedPromptLayout() {
+  try {
+    return existsSync(new URL("./prompts/agent-teams-contract.zh.md", import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
 function readPromptAsset(name, language = "zh") {
   const lang = normalizePromptLanguage(language);
-  for (const candidate of [`./prompts/${name}.${lang}.md`, `./${name}.${lang}.md`]) {
-    try { return readFileSync(new URL(candidate, import.meta.url), "utf8"); } catch { /* fallback */ }
+  // 归属决定根：宿主专属资产只在插件内 `./prompts/`（**不回落**公共层，否则漏装会被
+  // 「读到了公共资产」掩盖）；公共资产按形态取根 —— 发布形态 `./prompts/`（合并层），
+  // 源形态 `../prompts/`（插件外的公共层）。
+  const candidates = isHostOwnedPromptAsset(name)
+    ? [`./prompts/${name}.${lang}.md`]
+    : isPublishedPromptLayout()
+      ? [`./prompts/${name}.${lang}.md`]
+      : [`../prompts/${name}.${lang}.md`];
+  for (const candidate of candidates) {
+    try { return readFileSync(new URL(candidate, import.meta.url), "utf8"); } catch { /* 试下一个 */ }
   }
   return "";
 }
+
+/** 宿主专属提示词资产名（**唯一清单**，非第二份白名单）。
+ *
+ *  这些正文按负责人裁定归 DSH 宿主适配器层：其内容绑定 DSH 的会话/模块/section 语义。
+ *  未登记的名字一律视为**公共层**资产（公共层是默认归属，新增公共资产无需改这里）。
+ *
+ *  布局不变量：源形态下公共层位于插件**外**（`<repo>/prompts/`）、宿主专属在插件**内**
+ *  （`dsh-graph-host/prompts/`）。若宿主专属资产被误放进公共层，读取会失败 ⇒ fail-closed
+ *  暴露归属错误，而不是静默读到。 */
+function isHostOwnedPromptAsset(name) {
+  return HOST_OWNED_PROMPT_ASSETS.has(name);
+}
+const HOST_OWNED_PROMPT_ASSETS = new Set(Object.freeze([
+  "help",
+]));
 
 function requirePromptAsset(name, language = "zh") {
   const content = readPromptAsset(name, language);
@@ -5143,8 +5201,8 @@ export function apply(ctx, config) {
     // g-481：使用说明弹窗的只读服务（提示词资产 md）。本插件第二条非 JSON 路由。
     // prefix 路由：尾段由 resolveHelpAssetRequest 按白名单裁决（见模块顶部常量）。
     // 只读 `readFileSync`，没有任何写路径；命中即内联返回。
-    // g-496：路径取自**冻结注册表**（`helpAssetRelativePath`）—— 资产既可能在 `prompts/`
-    //（注入式提示词），也可能在包根（`supervisor-guide.{zh,en}.md`）。**不拼接请求内容**，
+    // g-496：路径取自**冻结注册表**（`helpAssetRelativePath`）—— g-496 起两层提示词资产已由
+    // build.sh 合并进包内单一 `prompts/`，故注册路径统一为 `prompts/<name>`。**不拼接请求内容**，
     // 路径只能来自注册表（未注册 ⇒ 白名单已在上一行拦掉 ⇒ 此处必非 null）。
     {
       kind: "prefix",

@@ -38,7 +38,7 @@
 
 ```js
 // 引导正文的**唯一真源**是资产文件本身（g-496 移除本节的逐字副本，正文不再有第二份）：
-//   dsh-graph-host/prompts/guide-hint.<lang>.md —— 引导提示词正文（所有会话每 turn 注入）
+//   prompts/guide-hint.<lang>.md —— 引导提示词正文（所有会话每 turn 注入）
 // 读取方式（宿主实际实现 `index.js:6090`，语言取 resolvePromptLanguage）：
 const hint = localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
 // localizedPrompt ⇒ requirePromptAsset：**资产不可读即抛错**，绝不静默降级为空串或内置文本
@@ -67,8 +67,8 @@ if (sp) {
 
 ```js
 // 纪律正文的**唯一真源**是资产文件本身（g-496 移除本节的逐字副本，正文不再有第二份）：
-//   dsh-graph-host/prompts/discipline.<lang>.md        —— 主管纪律正文（每 turn 注入）
-//   dsh-graph-host/prompts/agent-teams-contract.<lang>.md —— Agent Teams 契约段（默认 off，
+//   prompts/discipline.<lang>.md        —— 主管纪律正文（每 turn 注入）
+//   prompts/agent-teams-contract.<lang>.md —— Agent Teams 契约段（默认 off，
 //                                                           on 时注入派发提示词）
 // 读取方式（宿主实际实现，语言取 resolvePromptLanguage）：
 const localizedPrompt = (base, lang) => requirePromptAsset(base, lang); // 经 dist/prompts/<base>.<lang>.md；不可读即抛错

@@ -23,6 +23,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -56,12 +57,31 @@ interface DirPair {
 function parseBuildCopyPlan(buildScript: string): { files: FilePair[]; dirs: DirPair[] } {
   const files: FilePair[] = [];
   const dirs: DirPair[] = [];
+  // g-496：`_merge_prompts_layer` 是个 shell **函数**，函数体内的 `cp "$f" "$dest"` 是
+  // 逐文件复制（变量形参，不是真实资产路径）。必须跟踪函数作用域并跳过其内部行，
+  // 否则会把 `"$f"` 当成源路径收进清单（清单污染 ⇒ 镜像报 ENOENT）。
+  let inMergeFn = false;
   for (const line of buildScript.split("\n")) {
-    const match = /^cp\s+(-r\s+)?(\S+)\s+(\S+)\s*$/.exec(line.trim());
-    if (!match) continue;
-    const [, recursive, source, target] = match;
-    if (recursive) dirs.push({ source, target });
-    else files.push({ source, target });
+    const trimmed = line.trim();
+    // 进入/离开 `_merge_prompts_layer() { ... }` 函数体。
+    if (/^_merge_prompts_layer\s*\(\)\s*\{?/.test(trimmed)) { inMergeFn = true; continue; }
+    if (inMergeFn) {
+      if (trimmed === "}") inMergeFn = false;
+      continue;
+    }
+    const match = /^cp\s+(-r\s+)?(\S+)\s+(\S+)\s*$/.exec(trimmed);
+    if (match) {
+      const [, recursive, source, target] = match;
+      if (recursive) dirs.push({ source, target });
+      else files.push({ source, target });
+      continue;
+    }
+    // 提示词资产由 `_merge_prompts_layer` **合并两层**（公共层 `prompts/` +
+    // 宿主专属层 `dsh-graph-host/prompts/`）到 `dist/prompts/`，同名冲突 fail-closed。
+    // 合并是文件级逐份复制 ⇒ 每次调用展开为「该源目录 → dist/prompts」目录对，
+    // **逐字节一致**的检查口径不变（`collectVerbatimDrift` 逐文件比对，两层全覆盖）。
+    const merge = /^_merge_prompts_layer\s+"([^"]+)"\s+"([^"]+)"(?:\s+"(?:required|optional)")?/.exec(trimmed);
+    if (merge) dirs.push({ source: merge[1], target: "dist/prompts" });
   }
   return { files, dirs };
 }
@@ -71,6 +91,9 @@ const copyPlan = parseBuildCopyPlan(readFileSync(buildScriptPath, "utf8"));
 /** 列出目录下的全部普通文件（相对该目录的路径，排序稳定）。 */
 function listFiles(root: string, prefix = ""): string[] {
   const out: string[] = [];
+  // g-496：宿主专属提示词层允许不存在（DSH 专属资产按内容归属公共层目录），
+  // 缺失即视为「本层无文件」，而不是 scandir 抛错。
+  if (!existsSync(join(root, prefix))) return out;
   for (const name of readdirSync(join(root, prefix), { withFileTypes: true })) {
     const rel = prefix ? `${prefix}/${name.name}` : name.name;
     if (name.isDirectory()) out.push(...listFiles(root, rel));
@@ -99,17 +122,37 @@ function collectVerbatimDrift(opts: { repoRoot: string; files: FilePair[]; dirs:
     if (!sourceBuf.equals(targetBuf)) drift.push(`内容不一致：${target} != ${source}`);
   };
   for (const pair of opts.files) compare(pair.source, pair.target);
+  // g-496：多个源目录可**合并**进同一目标目录（公共层 prompts/ + 宿主专属层
+  // dsh-graph-host/prompts/ → dist/prompts/）。故按目标目录聚合：
+  //   · 逐文件比对时，该文件可来自**任一同目标源目录**（取存在的那个）；
+  //   · 「产物多余」以**全体源的并集**为基准，不得把另一层资产误判成多余。
+  const byTarget = new Map<string, string[]>();
   for (const dir of opts.dirs) {
-    const sourceFiles = listFiles(join(opts.repoRoot, dir.source));
-    for (const rel of sourceFiles) compare(`${dir.source}/${rel}`, `${dir.target}/${rel}`);
+    const list = byTarget.get(dir.target) ?? [];
+    list.push(dir.source);
+    byTarget.set(dir.target, list);
+  }
+  for (const [target, sources] of byTarget) {
+    const union = new Set<string>();
+    for (const source of sources) {
+      for (const rel of listFiles(join(opts.repoRoot, source))) union.add(rel);
+    }
+    for (const rel of [...union].sort()) {
+      // 同一文件可能同时属于两层 —— 合并布局下构建会**拒绝**这种同名冲突，
+      // 故此处若真出现同名，逐源比对会各自报「内容不一致」，反而是正确的红。
+      for (const source of sources) {
+        const srcAbs = join(opts.repoRoot, source, rel);
+        if (existsSync(srcAbs)) compare(`${source}/${rel}`, `${target}/${rel}`);
+      }
+    }
     let targetFiles: string[] = [];
     try {
-      targetFiles = listFiles(join(opts.repoRoot, dir.target));
+      targetFiles = listFiles(join(opts.repoRoot, target));
     } catch {
       targetFiles = [];
     }
     for (const rel of targetFiles) {
-      if (!sourceFiles.includes(rel)) drift.push(`产物多余（源已无此文件）：${dir.target}/${rel}`);
+      if (!union.has(rel)) drift.push(`产物多余（源已无此文件）：${target}/${rel}`);
     }
   }
   return drift;
@@ -180,18 +223,20 @@ function compiledPairs(repoRoot: string): FilePair[] {
 
 test("g-312 判据 4：逐字复制族（build.sh 的 cp 清单）dist 与源逐字节一致", () => {
   // 解析下限校验：清单空掉会让下面的断言变成永真，必须显式防住。
-  assert.ok(copyPlan.files.length >= 6, `build.sh 应至少含 6 条 cp 文件拷贝，实际 ${copyPlan.files.length}`);
+  assert.ok(copyPlan.files.length >= 4, `build.sh 应至少含 4 条 cp 文件拷贝，实际 ${copyPlan.files.length}`);
   // g-462：目录拷贝由 1 条（prompts）增至 2 条（+ diagrams，设计哲学图随包发布）。
-  assert.equal(copyPlan.dirs.length, 2, "build.sh 应恰含 2 条 cp -r 目录拷贝（prompts、diagrams）");
+  // g-496：prompts 不再整目录 `cp -r`，改由 `_merge_prompts_layer` **两次调用**合并两层
+  // （公共层 prompts/ + 宿主专属层 dsh-graph-host/prompts/）⇒ 目录对共 3 条（2 层 + diagrams）。
+  assert.equal(copyPlan.dirs.length, 3, "build.sh 应恰含 3 条目录来源（公共层 prompts、宿主专属 prompts、diagrams）");
   assert.deepEqual(
-    copyPlan.dirs.map((d) => d.source).sort(),
-    ["dsh-graph-host/diagrams", "dsh-graph-host/prompts"],
-    "build.sh 的目录拷贝清单发生变化时必须同步复核本断言",
+    [...new Set(copyPlan.dirs.map((d) => d.source))].sort(),
+    ["dsh-graph-host/diagrams", "dsh-graph-host/prompts", "prompts"],
+    "build.sh 的目录来源清单发生变化时必须同步复核本断言",
   );
   assert.deepEqual(
-    copyPlan.dirs.map((d) => d.target).sort(),
+    [...new Set(copyPlan.dirs.map((d) => d.target))].sort(),
     ["dist/diagrams", "dist/prompts"],
-    "目录拷贝的目标必须与源一一对应",
+    "目录拷贝的目标必须与源一一对应（两层合并进同一 dist/prompts）",
   );
   assert.deepEqual(
     copyPlan.files.map((pair) => pair.source).sort(),
@@ -201,8 +246,6 @@ test("g-312 判据 4：逐字复制族（build.sh 的 cp 清单）dist 与源逐
       "dsh-graph-host/cordis.patch.yml",
       "dsh-graph-host/index.js",
       "dsh-graph-host/lib/server-i18n.js",
-      "dsh-graph-host/supervisor-guide.en.md",
-      "dsh-graph-host/supervisor-guide.zh.md",
     ].sort(),
     "build.sh 的复制清单发生变化时必须同步复核本断言（防止清单被悄悄缩减）",
   );
@@ -210,9 +253,15 @@ test("g-312 判据 4：逐字复制族（build.sh 的 cp 清单）dist 与源逐
   const drift = collectVerbatimDrift({ repoRoot, ...copyPlan });
   assert.deepEqual(drift, [], `${BUILD_HINT}\n${drift.join("\n")}`);
 
-  // prompts 目录必须被真的逐文件比对过（不能因为目录不存在而「零检查全绿」）。
-  const promptFiles = listFiles(join(repoRoot, "dsh-graph-host", "prompts"));
-  assert.ok(promptFiles.length >= 14, `prompts 目录应至少 14 个文件，实际 ${promptFiles.length}`);
+  // 两层资产必须被真的逐文件比对过（不能因为目录不存在而「零检查全绿」）。
+  // g-496：合并后产物含两层全部资产；公共层是**唯一**源码副本，宿主专属层当前为空。
+  const publicPromptFiles = listFiles(join(repoRoot, "prompts"));
+  assert.ok(publicPromptFiles.length >= 26,
+    `公共层 prompts 目录应至少 26 个文件（两层合并后的随包资产全集），实际 ${publicPromptFiles.length}`);
+  const publicNames = publicPromptFiles.map((f) => f.split("/").pop()).sort();
+  for (const name of ["supervisor-guide.zh.md", "supervisor-guide.en.md", "help.zh.md", "discipline.zh.md"]) {
+    assert.ok(publicNames.includes(name), `公共层必须含 ${name}（合并后随包发布）`);
+  }
 });
 
 test("g-312 判据 4：生成族 dist/package.json 与源 package.json 字段一致（版本号改动不重建必红）", () => {
@@ -269,9 +318,24 @@ test("g-312 判据 4 负向对照：在 tmp 镜像里手改源不重建，三族
       mkdirSync(dirname(join(mirror, pair.source)), { recursive: true });
       cpSync(from, join(mirror, pair.source));
     }
+    // g-496：目录对可能**多源合并到同一目标**（两层 → dist/prompts）。镜像必须复现
+    // 真实构建的合并语义：先把各源目录原样镜像，再把产物目录按 union 重建。
+    const dirTargets = [...new Set(copyPlan.dirs.map((d) => d.target))];
     for (const dir of copyPlan.dirs) {
+      if (!existsSync(join(repoRoot, dir.source))) continue; // g-496：可选层缺席（见 listFiles）
       cpSync(join(repoRoot, dir.source), join(mirror, dir.source), { recursive: true });
-      cpSync(join(repoRoot, dir.target), join(mirror, dir.target), { recursive: true });
+    }
+    for (const target of dirTargets) {
+      const destDir = join(mirror, target);
+      rmSync(destDir, { recursive: true, force: true });
+      mkdirSync(destDir, { recursive: true });
+      for (const dir of copyPlan.dirs.filter((d) => d.target === target)) {
+        const srcDir = join(repoRoot, dir.source);
+        if (!existsSync(srcDir)) continue; // g-496：可选层缺席
+        for (const f of readdirSync(srcDir)) {
+          cpSync(join(srcDir, f), join(destDir, f));
+        }
+      }
     }
     for (const name of readdirSync(join(repoRoot, "dsh-graph-host", "lib", "client"))) {
       if (!name.endsWith(".js")) continue;
@@ -290,14 +354,14 @@ test("g-312 判据 4 负向对照：在 tmp 镜像里手改源不重建，三族
     assert.deepEqual(collectPackageDrift(mirror), [], "未改动镜像的 package.json 不应有漂移");
 
     // 对照 1：只改镜像里的**源**（真实文件名 supervisor-guide.zh.md），不动产物。
-    const mutatedRel = "dsh-graph-host/supervisor-guide.zh.md";
+    const mutatedRel = "prompts/supervisor-guide.zh.md";
     const realBefore = readFileSync(join(repoRoot, mutatedRel));
     const mutatedPath = join(mirror, mutatedRel);
     writeFileSync(mutatedPath, readFileSync(mutatedPath, "utf8") + "\n<!-- 未重建的空改 -->\n");
     const verbatimDrift = collectVerbatimDrift({ repoRoot: mirror, ...copyPlan });
     assert.deepEqual(
       verbatimDrift,
-      [`内容不一致：dist/supervisor-guide.zh.md != dsh-graph-host/supervisor-guide.zh.md`],
+      [`内容不一致：dist/prompts/supervisor-guide.zh.md != prompts/supervisor-guide.zh.md`],
       `手改源不重建必须被逐字复制族抓到，实际：${JSON.stringify(verbatimDrift)}`,
     );
 

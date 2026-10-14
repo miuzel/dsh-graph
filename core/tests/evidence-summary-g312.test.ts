@@ -68,6 +68,9 @@ import { SERVER_I18N } from "../../dist/lib/server-i18n.js";
 import { formatAttemptPrompt } from "../../dist/index.js";
 
 const sourceRoot = join(import.meta.dirname, "../../dsh-graph-host");
+// g-496：提示词资产单一源码副本在**公共层** `prompts/`；发布形态是合并后的 `dist/prompts/`。
+// `sourceRoot` 仍指插件目录（`lib/server-i18n.js` 等宿主文件未移动），资产侧用下面两个根。
+const promptsSourceRoot = join(import.meta.dirname, "../../prompts");
 const shippedRoot = join(import.meta.dirname, "../../dist");
 const readAsset = (root: string, ...parts: string[]) => readFileSync(join(root, ...parts), "utf8");
 
@@ -352,7 +355,7 @@ test("g-312 判据 1：supervisor-guide 与 prompts 资产（源码 + dist 投�
     "one suite per line",
     "lightweight screenshot verification",
   ];
-  for (const [label, root] of [["源码", sourceRoot], ["投递副本 dist", shippedRoot]] as const) {
+  for (const [label, root] of [["源码", promptsSourceRoot], ["投递副本 dist", join(shippedRoot, "prompts")]] as const) {
     const zh = readAsset(root, "supervisor-guide.zh.md");
     const en = readAsset(root, "supervisor-guide.en.md");
     for (const token of zhGuideTokens) assert.ok(zh.includes(token), `${label} supervisor-guide.zh.md 缺少「${token}」`);
@@ -364,8 +367,8 @@ test("g-312 判据 1：supervisor-guide 与 prompts 资产（源码 + dist 投�
       `${label} supervisor-guide 行数必须仍相等（zh/en 成对改）`,
     );
     // 每轮注入的主管纪律提醒也含同一证据条目。
-    const zhDiscipline = readAsset(root, "prompts", "discipline.zh.md");
-    const enDiscipline = readAsset(root, "prompts", "discipline.en.md");
+    const zhDiscipline = readAsset(root, "discipline.zh.md");
+    const enDiscipline = readAsset(root, "discipline.en.md");
     assert.ok(zhDiscipline.includes("证据形式（断言化，禁长文倾倒）"), `${label} prompts/discipline.zh.md 缺少证据条目`);
     assert.ok(zhDiscipline.includes("evidence: suite=<id>"), `${label} prompts/discipline.zh.md 缺少格式样例`);
     assert.ok(enDiscipline.includes("Evidence form (assertion-based; no long-form dumping)"), `${label} prompts/discipline.en.md 缺少证据条目`);
@@ -445,7 +448,7 @@ test("g-312 判据 1：g-496 起逐 turn 提示词正文只有唯一真源（doc
   ] as const;
 
   for (const a of assets) {
-    const sourceText = readAsset(sourceRoot, "prompts", a.file);
+    const sourceText = readAsset(promptsSourceRoot, a.file);
 
     // ①-a 旧数组名必须消失（按名断言，挡住「原样保留」）。
     for (const name of a.legacyNames) {
@@ -482,7 +485,7 @@ test("g-312 判据 1：g-496 起逐 turn 提示词正文只有唯一真源（doc
 
 test("g-312 判据 1 防删除反向断言：旧「详尽长文」口径不得回归，新规范任何一处删掉即红", () => {
   // 反向断言 1：结构性诱因已被改写掉——指南不得再要求「详尽的测试核验记录与证据」。
-  for (const [label, root] of [["源码", sourceRoot], ["投递副本 dist", shippedRoot]] as const) {
+  for (const [label, root] of [["源码", promptsSourceRoot], ["投递副本 dist", join(shippedRoot, "prompts")]] as const) {
     const zh = readAsset(root, "supervisor-guide.zh.md");
     const en = readAsset(root, "supervisor-guide.en.md");
     assert.doesNotMatch(zh, /追加详尽的测试核验记录与证据/, `${label} 指南仍残留「详尽测试核验记录」诱因`);

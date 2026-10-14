@@ -40,8 +40,8 @@ import { MEMORY_LIMITS, HARNESS_MODULE_IDS } from "../ops.ts";
 const repoRoot = join(import.meta.dirname, "../..");
 const ROOT_README = join(repoRoot, "README.md");
 const HOST_README = join(repoRoot, "dsh-graph-host", "README.md");
-const HELP_ZH = join(repoRoot, "dsh-graph-host", "prompts", "help.zh.md");
-const HELP_EN = join(repoRoot, "dsh-graph-host", "prompts", "help.en.md");
+const HELP_ZH = join(repoRoot, "prompts", "help.zh.md");
+const HELP_EN = join(repoRoot, "prompts", "help.en.md");
 const INDEX_JS = join(repoRoot, "dsh-graph-host", "index.js");
 
 /** 判据 1 明文要求的工具数；引擎加工具时必须同步所有文档面并改这一个常量（刻意的防静默漂移门禁）。 */
@@ -362,8 +362,8 @@ const COUNT_DOCS = () => [
  * 负向对照由调用方给出（把模块数改错 / 删掉声明行 ⇒ 必红）。
  */
 const HELP_MODULE_COUNT_FACES: Array<{ id: string; re: RegExp; why: string }> = [
-  { id: "dsh-graph-host/prompts/help.zh.md", re: /共\s*(\d+)\s*个功能模块/g, why: "help.zh 模块数声明" },
-  { id: "dsh-graph-host/prompts/help.en.md", re: /(\d+)\s+feature modules/g, why: "help.en 模块数声明" },
+  { id: "prompts/help.zh.md", re: /共\s*(\d+)\s*个功能模块/g, why: "help.zh 模块数声明" },
+  { id: "prompts/help.en.md", re: /(\d+)\s+feature modules/g, why: "help.en 模块数声明" },
 ];
 
 function helpModuleCountProblems(
@@ -462,8 +462,8 @@ test("g-371 判据1（g-436 增量，g-495 改判后）：工具计数声明覆�
 
 test("g-371 判据1（g-495 改判）：help.zh/en 不再声明工具数，改声明模块数 == 引擎模块注册表长度", () => {
   const helpDocs = [
-    { id: "dsh-graph-host/prompts/help.zh.md", text: REAL_TEXT.helpZh },
-    { id: "dsh-graph-host/prompts/help.en.md", text: REAL_TEXT.helpEn },
+    { id: "prompts/help.zh.md", text: REAL_TEXT.helpZh },
+    { id: "prompts/help.en.md", text: REAL_TEXT.helpEn },
   ];
   const expected = HARNESS_MODULE_IDS.length;
   assert.ok(expected > 0, "引擎模块注册表不得为空（否则本判据退化）");

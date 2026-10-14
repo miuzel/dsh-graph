@@ -40,8 +40,8 @@ import { normalizeSubagentMode } from "../../dist/core/ops.js";
 
 const dist = join(process.cwd(), "dist");
 const hostSource = () => readFileSync(join(dist, "index.js"), "utf8");
-const guideEn = () => readFileSync(join(dist, "supervisor-guide.en.md"), "utf8");
-const guideZh = () => readFileSync(join(dist, "supervisor-guide.zh.md"), "utf8");
+const guideEn = () => readFileSync(join(dist, "prompts", "supervisor-guide.en.md"), "utf8");
+const guideZh = () => readFileSync(join(dist, "prompts", "supervisor-guide.zh.md"), "utf8");
 
 const PROJECT_TMP = join(process.cwd(), "tmp");
 const ENTRY = "dsh-graph-host";

@@ -559,7 +559,7 @@ test("g-435 判据 6：段边界、最长前缀、顺序与路径规范化；旧
 test("g-435 判据 7：旧样本对拍（在显式配置夹具下保持 policy/strictReasons 判定等价）", () => {
   const repoExplicit = {
     contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
-    regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "dsh-graph-host/prompts", "scripts"],
+    regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "prompts", "scripts"],
     nonProductPrefixes: ["core/tests", "dist", "core-dist", "node_modules", ".worktrees"],
   };
 

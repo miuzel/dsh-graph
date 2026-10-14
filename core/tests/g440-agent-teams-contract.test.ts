@@ -64,16 +64,16 @@ import { apply } from "../../dist/index.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const clientDir = join(repoRoot, "dsh-graph-host/lib/client");
-const sourceDiscipline = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host/prompts", `discipline.${lang}.md`), "utf8");
+const sourceDiscipline = (lang: "zh" | "en") => readFileSync(join(repoRoot, "prompts", `discipline.${lang}.md`), "utf8");
 const distDiscipline = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/prompts", `discipline.${lang}.md`), "utf8");
 // g-496：契约正文真源从 discipline 迁出到**独立资产**（主管每 turn 注入面不再常驻该段）。
 // 抽取函数与全部关键句/变异负向对照判据**不变**，只把「读取源」指向新资产。
-const sourceContract = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host/prompts", `agent-teams-contract.${lang}.md`), "utf8");
+const sourceContract = (lang: "zh" | "en") => readFileSync(join(repoRoot, "prompts", `agent-teams-contract.${lang}.md`), "utf8");
 const distContract = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/prompts", `agent-teams-contract.${lang}.md`), "utf8");
 /** g-496：引导提示词真源（去镜像后 docs 不再持副本，正文完整性施于此处 + 真实渲染）。 */
-const sourceGuideHint = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host/prompts", `guide-hint.${lang}.md`), "utf8");
+const sourceGuideHint = (lang: "zh" | "en") => readFileSync(join(repoRoot, "prompts", `guide-hint.${lang}.md`), "utf8");
 const distGuideHint = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dist/prompts", `guide-hint.${lang}.md`), "utf8");
-const sourceGuide = (lang: "zh" | "en") => readFileSync(join(repoRoot, "dsh-graph-host", `supervisor-guide.${lang}.md`), "utf8");
+const sourceGuide = (lang: "zh" | "en") => readFileSync(join(repoRoot, "prompts", `supervisor-guide.${lang}.md`), "utf8");
 const sourceOps = () => readFileSync(join(repoRoot, "core/ops.ts"), "utf8");
 const sourceModal = () => readFileSync(join(clientDir, "settings-modal.js"), "utf8");
 const sourceI18n = () => readFileSync(join(clientDir, "i18n.js"), "utf8");
@@ -192,9 +192,10 @@ test("g-440 判据 1（负向对照）：删改任一关键句 / 摘掉定界标
 });
 
 test("g-440 判据 1：双语对称（guide/discipline/契约资产行数）+ docs 去镜像 + 两份指南都写明契约", () => {
-  for (const name of ["supervisor-guide", "prompts/discipline", "prompts/agent-teams-contract"]) {
-    const zh = lines(readFileSync(join(repoRoot, "dsh-graph-host", `${name}.zh.md`), "utf8"));
-    const en = lines(readFileSync(join(repoRoot, "dsh-graph-host", `${name}.en.md`), "utf8"));
+  // g-496：资产（含 supervisor-guide）已归**公共层** `prompts/`，源码侧根随之更新。
+  for (const name of ["supervisor-guide", "discipline", "agent-teams-contract"]) {
+    const zh = lines(readFileSync(join(repoRoot, "prompts", `${name}.zh.md`), "utf8"));
+    const en = lines(readFileSync(join(repoRoot, "prompts", `${name}.en.md`), "utf8"));
     assert.equal(zh.length, en.length, `${name}：zh/en 总行数必须相等`);
     assert.equal(
       zh.filter((l) => l.trim() !== "").length,

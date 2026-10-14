@@ -641,8 +641,8 @@ const OS_SITE_ROWS = [
   ["core/ops.ts", "rmSync", 18, ["addCard", "convertOwnedToShared", "convertSharedToOwned", "deleteSharedCard", "atomicWrite", "deleteAttachment", "deleteCard", "startAttempt", "deleteGoal", "acquireTagsLock", "setGoalTags"],
    "目标目录删除 / trash 清理 / 失败回滚清理",
    "ws:T3.dir_delete_archived,ws:T3.attachments_store_delete,ws:T3.flat_archive_delete"],
-  ["core/ops.ts", "statSync", 7, ["versionSlugDiagnostics", "readAttemptResultsFile", "buildBoardGoalItem", "setGoalTags", "resolvePromptAssetDirUrl"],
-   "版本诊断 / 结果文件大小 / 标签写前 mode 快照 / prompt 资产目录形态判别（g-496：两项静态定位的存在性检查）",
+  ["core/ops.ts", "statSync", 6, ["versionSlugDiagnostics", "readAttemptResultsFile", "buildBoardGoalItem", "setGoalTags"],
+   "版本诊断 / 结果文件大小 / 标签写前 mode 快照（g-496：提示词资产定位改为单一 `../prompts/` 静态相对定位，删去了两形态存在性判别，故不再有 statSync 调用点）",
    "ws:T3.tags_write,ws:T3.validate"],
   ["core/ops.ts", "unlinkSync", 2, ["releaseTagsLock"],
    "标签锁释放",
@@ -2744,14 +2744,14 @@ function mutationCheck(opt) {
     mkdirSync(dest, { recursive: true });
     cpSync(join(pkgDir, "core"), join(dest, "core"), { recursive: true });
     // g-496：core 现在会在**模块加载期**读取提示词正文资产（如 `attempt-report-skeleton.<lang>.md`），
-    // 且按模块位置解析：本夹具的 `opsPath` 不在名为 `dist` 的目录下 ⇒ 走源形态
-    // `<dest>/core/ops.js` → `../dsh-graph-host/prompts/`。故必须把 prompts 一并复制到该位置，
-    // 否则 import 即 fail-closed 抛错（不是断言失败，而是整个突变对照跑不起来）。
+    // 且按模块位置解析：发布包内 `core/ops.js` 的资产在**同级** `prompts/`
+    // （`<dest>/core/ops.js` → `../prompts/`，两层资产已在构建期合并进该目录）。
+    // 故必须把 prompts 一并复制到该位置，否则 import 即 fail-closed 抛错
+    // （不是断言失败，而是整个突变对照跑不起来）。
     // **只补依赖，不放宽任何负向裁决**：突变体的判红口径与断言一字未改。
     const promptsSrc = join(pkgDir, "prompts");
     if (existsSync(promptsSrc)) {
-      mkdirSync(join(dest, "dsh-graph-host"), { recursive: true });
-      cpSync(promptsSrc, join(dest, "dsh-graph-host", "prompts"), { recursive: true });
+      cpSync(promptsSrc, join(dest, "prompts"), { recursive: true });
     }
     writeFileSync(join(dest, "core", "ops.js"), built.text, "utf8");
     const res = runCoreSmoke(smokeDir, join(dest, "core", "ops.js"), join(workRoot, `root-${m.kind}`));
@@ -2816,12 +2816,11 @@ function mutationCheckHarness(opt, ctx) {
     const dest = join(workRoot, `pkg-h-${m.kind}`);
     mkdirSync(join(dest, "core"), { recursive: true });
     cpSync(join(pkgDir, "core"), join(dest, "core"), { recursive: true });
-    // g-496：同 T3 突变体 —— core 加载期读提示词资产，须把 prompts 复制到源形态解析位置
-    // （`<dest>/core/ops.js` → `../dsh-graph-host/prompts/`）。只补依赖，不放宽任何负向裁决。
+    // g-496：同 T3 突变体 —— core 加载期读提示词资产，须把 prompts 复制到解析位置
+    // （`<dest>/core/ops.js` → `../prompts/`，合并后的单一资产目录）。只补依赖，不放宽任何负向裁决。
     const promptsSrcH = join(pkgDir, "prompts");
     if (existsSync(promptsSrcH)) {
-      mkdirSync(join(dest, "dsh-graph-host"), { recursive: true });
-      cpSync(promptsSrcH, join(dest, "dsh-graph-host", "prompts"), { recursive: true });
+      cpSync(promptsSrcH, join(dest, "prompts"), { recursive: true });
     }
     writeFileSync(join(dest, "core", "ops.js"), built.text, "utf8");
     const run = runHarnessProbesSync(repo, dest, join(workRoot, `h-${m.kind}`));
