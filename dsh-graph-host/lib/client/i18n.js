@@ -521,6 +521,10 @@
       // g-272 att-002：定义/润色「发送给主管」路径的复制结果提示
       'exec.requestCopiedOpened': '✅ 请求已复制，已打开主管会话，请粘贴发送',
       'exec.autocopyFailedRequest': '⚠️ 自动复制失败，请手动复制下方请求',
+      // g-496：定义/润色模板的**插值占位取值**（UI 层语义，随 locale）——模板骨架在宿主资产里，
+      // 这两个占位不进资产正文，避免把界面语言相关文案固化进模板。
+      'exec.goalPathUnknown': '（路径未知）',
+      'exec.guidanceNone': '（无）',
       // g-327：能直发时的如实反馈（不得复用「已复制…请粘贴发送」）
       'exec.requestDelivered': '✅ 请求已直接发送给主管会话',
       'exec.requestDeliveredOpened': '✅ 请求已直接发送给主管会话，已打开主管会话',
@@ -1272,6 +1276,16 @@
       'help.asset.subagent-mode': '子代理模式策略',
       'help.asset.supervisor-guide': '主管工作指南',
       'help.asset.worktree': '隔离执行指引',
+      // g-496：GUI 提示词模板资产标签（正文在宿主专属层 md 资产里，此处只是帮助页签的展示标签）。
+      'help.asset.gui-criteria-feedback-supervisor': '判据反馈（转主管）',
+      'help.asset.gui-criteria-feedback-executor': '判据反馈（发执行会话）',
+      'help.asset.gui-define-polish-request': '目标定义/润色请求',
+      'help.asset.gui-accept-review-request': '单目标交付复核请求',
+      'help.asset.gui-backward-reason': '泳道拖放回退理由',
+      'help.asset.gui-reexecute': '拖放重新执行通知',
+      'help.asset.gui-batch-accept-review-request': '批量交付复核请求',
+      'help.asset.gui-deliver-notice': '交付确认通知',
+      'help.asset.gui-help-takeover-example': '接管主管示例提示词',
       'help.tools.intro': '共 {count} 个工具，清单来自引擎的当前注册（名称与说明同源，随注册变化自动跟随）。',
       'help.tools.langHint': '说明语言：{lang}（跟随提示词语言设置）',
       'help.tools.loading': '读取中…',
@@ -1295,7 +1309,9 @@
       'help.entry.title': '第一步：先指定一个主管 Agent',
       'help.entry.body': 'dsh-graph 的看板由「主管 Agent」维护：它登记目标与判据、派发执行、汇总结果。新会话里先让一个 Agent 加载 dsh-graph-supervisor 技能（完整的主管工作守则）或 dsh-graph 技能，再执行 graph_claim_supervisor() 完成接管（claim）——接管后它会读到看板现状与交接文档，后续工作都从这里开始。',
       'help.entry.promptLabel': '可直接复制的示例提示词：',
-      'help.entry.prompt': '请加载 dsh-graph-supervisor 技能并接管本工作区的主管（supervisor）：先执行 graph_claim_supervisor() 完成 claim，读一遍看板现状与交接文档，然后告诉我当前有哪些目标、建议下一步做什么。',
+      // g-496：示例提示词**正文**已移出字典（唯一事实源 = 宿主专属资产 gui-help-takeover-example.*.md，
+      // 经 /api/dsh-graph/help/asset/ 只读读取）；此处只保留展示标签，杜绝第二份正文副本。
+      'gui.promptAssetLoadFail': '⚠️ 提示词资产加载失败，请重试',
       'help.entry.copy': '复制',
       'help.entry.copied': '已复制',
       'help.entry.copyFail': '复制失败，请手动选择文本',
@@ -1886,6 +1902,9 @@
       // g-272 att-002: copy-result hints for the define/polish "send to supervisor" path
       'exec.requestCopiedOpened': '✅ Request copied, supervisor session opened — paste to send',
       'exec.autocopyFailedRequest': '⚠️ Auto-copy failed, please copy the request below manually',
+      // g-496: placeholder values for the define/polish template (UI-level, follows locale).
+      'exec.goalPathUnknown': '(path unknown)',
+      'exec.guidanceNone': '(none)',
       // g-327: honest feedback when the request is delivered straight to the supervisor session
       'exec.requestDelivered': '✅ Request sent directly to the supervisor session',
       'exec.requestDeliveredOpened': '✅ Request sent directly to the supervisor session — session opened',
@@ -2636,6 +2655,16 @@
       'help.asset.subagent-mode': 'Subagent mode strategy',
       'help.asset.supervisor-guide': 'Supervisor guide',
       'help.asset.worktree': 'Isolated execution guide',
+      // g-496: GUI prompt-template asset labels (body lives in the host-owned md assets).
+      'help.asset.gui-criteria-feedback-supervisor': 'Criteria feedback (to supervisor)',
+      'help.asset.gui-criteria-feedback-executor': 'Criteria feedback (to executor)',
+      'help.asset.gui-define-polish-request': 'Goal definition/polish request',
+      'help.asset.gui-accept-review-request': 'Single-goal delivery review request',
+      'help.asset.gui-backward-reason': 'Lane drag-back reason',
+      'help.asset.gui-reexecute': 'Drag re-execution notice',
+      'help.asset.gui-batch-accept-review-request': 'Batch delivery review request',
+      'help.asset.gui-deliver-notice': 'Delivery confirmation notice',
+      'help.asset.gui-help-takeover-example': 'Supervisor takeover example prompt',
       'help.tools.intro': '{count} tools in total; the list comes from what the engine currently registers (names and descriptions share one source and follow it automatically).',
       'help.tools.langHint': 'Description language: {lang} (follows the prompt language setting)',
       'help.tools.loading': 'Loading…',
@@ -2659,7 +2688,9 @@
       'help.entry.title': 'Step 1: pick a supervisor agent first',
       'help.entry.body': 'The dsh-graph board is maintained by a supervisor agent: it records goals and criteria, dispatches executions and collects results. In a new session, have one agent load the dsh-graph-supervisor skill (the full supervisor playbook) or the dsh-graph skill, then run graph_claim_supervisor() to take over (claim) - the agent then reads the current board state and the handoff document, and all further work starts there.',
       'help.entry.promptLabel': 'Example prompt you can copy:',
-      'help.entry.prompt': 'Load the dsh-graph-supervisor skill and take over as the supervisor of this workspace: run graph_claim_supervisor() to claim the role, read the current board state and the handoff document, then tell me which goals exist and what you suggest doing next.',
+      // g-496: the example prompt body moved out of the dictionary (single source of truth =
+      // host-owned asset gui-help-takeover-example.*.md, read via /api/dsh-graph/help/asset/).
+      'gui.promptAssetLoadFail': '⚠️ Failed to load the prompt asset, please retry',
       'help.entry.copy': 'Copy',
       'help.entry.copied': 'Copied',
       'help.entry.copyFail': 'Copy failed - please select the text manually',
@@ -2764,6 +2795,21 @@
         const template = (zh[key] !== undefined) ? zh[key] : key;
         return applyParams(template, params);
       };
+    }
+
+    /** g-496：**界面生效语言**（`"zh"` | `"en"`）——供 GUI 提示词模板资产按语言取正文。
+     *
+     *  复用既有 locale 服务口径（`preference` / 活跃语言），**不新建第二套语言状态**：
+     *  locale 服务缺席或读值异常时按既有降级语义回 **zh**（与 `createTranslator` 无 locale
+     *  时"直接用中文字典"完全一致）。只读，绝不写 locale。 */
+    function resolveInterfaceLanguage(localeService) {
+      try {
+        const pref = localeService?.preference ?? localeService?.locale ?? localeService?.active;
+        const raw = String(pref ?? "").trim().toLowerCase();
+        return raw.startsWith("en") ? "en" : "zh";
+      } catch {
+        return "zh";
+      }
     }
 
     /** 注册 dsh-graph 命名空间到 DSH locale 服务。在 plugin apply 阶段调用。

@@ -45,7 +45,7 @@ import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import {
   apply, DESIGN_DIAGRAM_ROUTE, HELP_ASSET_ROUTE, HELP_CATALOG_ROUTE, HELP_PROMPT_ASSETS,
-  helpAssetRelativePath, helpPromptAssetEntries, resolveHelpAssetRequest,
+  helpAssetRelativePath, helpAssetOwnership, helpPromptAssetEntries, resolveHelpAssetRequest,
 } from "../../dist/index.js";
 
 const repoRoot = join(import.meta.dirname, "../..");
@@ -60,6 +60,9 @@ const clientConstantsPath = join(repoRoot, "dsh-graph-host/lib/client/constants.
 const bundlePath = join(distRoot, "lib/client.js");
 const promptsSrcDir = join(repoRoot, "prompts");
 const promptsDistDir = join(distRoot, "prompts");
+// g-496 att-007：资产分两层，源侧根按归属选择（包侧仍是合并后的单一 prompts/）。
+const publicPromptSrcDir = promptsSrcDir;
+const hostPromptSrcDir = join(repoRoot, "dsh-graph-host/prompts");
 
 const MARKDOWN_CT = "text/markdown; charset=utf-8";
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
@@ -124,14 +127,28 @@ const packagedNames = (dir: string) =>
   readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
 
 /** g-496：可达资产的**位置真源** —— 注册表把「名字 → 包内相对路径」冻结下来。
- *  g-496 起两层资产（公共层 + 宿主专属层）由构建合并进**单一** `prompts/`，故注册路径统一为
- *  `prompts/<name>`；源侧根是**公共层** `prompts/`（唯一受版本控制的副本）。
- *  本 helper 由**注册投影**给出每个名字的源/包**绝对路径**，供 A1 做「源 ↔ 包 ↔ 真实响应字节」对账。 */
+ *  g-496 起资产分两层（公共层 `prompts/` + 宿主专属层 `dsh-graph-host/prompts/`），
+ *  由构建合并进**单一** `dist/prompts/`（故包内相对路径统一为 `prompts/<name>`）；
+ *  但**源侧**根取决于**归属**：public → 仓库根 `prompts/`；host → `dsh-graph-host/prompts/`。
+ *  本 helper 由**注册投影 + 归属投影**给出每个名字的源/包**绝对路径**，
+ *  供 A1 做「源 ↔ 包 ↔ 真实响应字节」对账。
+ *
+ *  g-496 att-007 改判（负责人 2026-10-15 批准）：原实现把**每一份**资产的源根钉死为
+ *  `repoRoot/prompts`。资产分层所有权落地后该钉法结构性失效（host 资产根本不在公共层）。
+ *  改为**按 `helpAssetOwnership(base)` 解析源根** —— 属等价/更强载体改判：
+ *  断言强度不降（源↔包↔真实 HTTP 响应三方字节一致、未注册 404 等防护逐项保留），
+ *  且**新增**「归属必须与源根实际所在层一致」的正向校验（原实现无法发现归属标错）。
+ *  注意：`helpAssetOwnership` 接受**基名**（不含 `.<lang>.md`）。 */
+const baseOfAssetName = (name: string) => name.replace(/\.(zh|en)\.md$/, "");
+const promptLayerRoot = (name: string) =>
+  helpAssetOwnership(baseOfAssetName(name)) === "host"
+    ? hostPromptSrcDir
+    : publicPromptSrcDir;
 const registryPath = (name: string, root: "src" | "dist") => {
   const rel = helpAssetRelativePath(name);
   assert.ok(rel, `${name} 必须在注册表内（白名单不得含未注册名字）`);
-  // 源侧：`prompts/<name>` → 仓库根公共层；包侧：`dist/prompts/<name>`。
-  return root === "dist" ? join(distRoot, rel!) : join(repoRoot, rel!);
+  // 源侧：按归属落到对应层的根；包侧：合并后的 `dist/prompts/<name>`。
+  return root === "dist" ? join(distRoot, rel!) : join(promptLayerRoot(name), name);
 };
 
 // ================================================================ A. 宿主只读资产路由
@@ -165,7 +182,14 @@ test("g-481 A1：白名单 ≡ 注册表投影的随包资产（源 ↔ 包 ↔ 
     assert.equal(sha256(bodyOf(res)), sha256(distBuf), `${name} 响应必须与随包产物逐字节一致`);
     // 「提示词模板」页签要有真内容可显示（不是占位/空文件；注入式提示词本就不必带 `#` 标题）。
     const text = distBuf.toString("utf8");
-    assert.ok(text.trim().length >= 100, `${name} 必须是实质内容（≥100 字符）`);
+    // g-496 att-007：宿主专属层的 **GUI 注入载荷**天然短（如回退理由只有一行模板），
+    // 原先一刀切的 ≥100 字符是为公共层帮助文档写的。改为**按归属分级**：
+    // 公共层仍 ≥100；宿主层要求「非空且 ≥20 字符」—— 仍能拦住占位/空文件，
+    // 且下方「不得残留未完成标记」「内容不得与其他资产重复」两条判据对两层一视同仁。
+    const isHostAsset = helpAssetOwnership(baseOfAssetName(name)) === "host";
+    const floor = isHostAsset ? 20 : 100;
+    assert.ok(text.trim().length >= floor,
+      `${name} 必须是实质内容（归属 ${isHostAsset ? "host" : "public"} ⇒ ≥${floor} 字符，实得 ${text.trim().length}）`);
     assert.doesNotMatch(text, /TODO|FIXME|待补/, `${name} 不得残留未完成标记`);
     assert.ok(!digests.has(sha256(distBuf)), `${name} 内容与其他资产重复（疑似复制粘贴占位）`);
     digests.add(sha256(distBuf));
@@ -173,9 +197,30 @@ test("g-481 A1：白名单 ≡ 注册表投影的随包资产（源 ↔ 包 ↔ 
   // ③ 目录派生（不放弱）：白名单 ≡ 合并后 `prompts/` 下**全部** md（新增资产自动纳入，无死条目）
   const distNames = packagedNames(promptsDistDir);
   const srcNames = packagedNames(promptsSrcDir);
-  assert.deepEqual(srcNames, distNames, "源 prompts 与随包副本必须同集");
+  // g-496 att-007：`src prompts == dist prompts` 在**分层**后不再成立（dist 是两层的合并集）。
+  // 原断言编码的是「单层时代」的等价关系，故改判为**更强**的等价关系（见 ③-b）：
+  // 源侧两层并集 ≡ 随包集 ≡ 白名单 —— 三层互为同一集合，单层时代的「无死条目/无遗漏」语义原样保留。
   assert.deepEqual([...HELP_PROMPT_ASSETS].sort(), distNames,
     "白名单必须恰等于随包 dist/prompts 的全部 md（目录派生，无死条目、无遗漏）");
+  // ③-b（g-496 att-007 新增，更强）：**源侧两层并集**也必须恰等于白名单 ——
+  // 既保证每份 host 资产确有版本控制副本，也保证没有「只在 dist 里、源里没有」的幽灵资产。
+  const srcLayerNames = [
+    ...packagedNames(publicPromptSrcDir),
+    ...packagedNames(hostPromptSrcDir),
+  ].sort();
+  assert.deepEqual([...HELP_PROMPT_ASSETS].sort(), srcLayerNames,
+    "白名单必须恰等于源侧两层（prompts/ ∪ dsh-graph-host/prompts/）的全部 md");
+  // ③-c：两层的**归属标注**必须与实际所在层一一对应（错标即判红 —— 原实现看不出来）。
+  const publicSrcSet = new Set(packagedNames(publicPromptSrcDir));
+  const hostSrcSet = new Set(packagedNames(hostPromptSrcDir));
+  for (const name of HELP_PROMPT_ASSETS) {
+    const own = helpAssetOwnership(baseOfAssetName(name));
+    const inPublic = publicSrcSet.has(name);
+    const inHost = hostSrcSet.has(name);
+    assert.notEqual(inPublic, inHost, `${name} 必须恰在两层之一（不得同时存在或双双缺失）`);
+    assert.equal(own === "host", inHost,
+      `${name} 归属标注（${own}）与实际所在层（${inHost ? "host" : "public"}）必须一致`);
+  }
   // ④ supervisor-guide 已随合并进入 prompts/，且**不再**位于包根（证明归一为单一位置）
   assert.ok(HELP_PROMPT_ASSETS.includes("supervisor-guide.zh.md"), "supervisor-guide 必须可达（g-496）");
   assert.ok(HELP_PROMPT_ASSETS.includes("supervisor-guide.en.md"), "supervisor-guide.en 必须可达（g-496）");

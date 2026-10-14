@@ -155,6 +155,8 @@ test("g-272 att-002: reason 枚举 → i18n 双语映射（zh 逐字保留、en 
 // —— client 模块复扫：非注释代码中的 CJK 必须全部带 i18n-keep 标记（禁止静默遗留）——
 
 const CLIENT_DIR = join(hostRoot, "lib/client");
+// g-496 att-007：宿主专属提示词资产目录（GUI 模板正文的载体）。
+const HOST_PROMPTS_DIR = join(hostRoot, "prompts");
 // 从一行代码中剔除注释后的「代码部分」（够用的近似：先去 /* */ 块，再去非 : 后的 // 行注释）。
 function codePart(line: string): string {
   let s = line.replace(/\/\*[\s\S]*?\*\//g, " ");
@@ -205,17 +207,33 @@ test("g-272 att-002: client 模块复扫——代码中残留 CJK 全部有 i18n
 });
 
 test("g-272 att-002: 保留项锚点——提示词模板与遗留值匹配串必须存在且带标记", () => {
+  // g-496 att-007：三类 GUI 模板正文已迁入**宿主只读资产**（`dsh-graph-host/prompts/`），
+  // 源码里不再有 CJK 字面量（因此也无需 i18n-keep 标记 —— 「零静默遗留」的判据反而更强）。
+  // 原锚点编码的是「正文内联在源码中」这一事实，故改判为：
+  //   ① 源码不再含该 CJK 字面量（反向，确保真的搬走了）；
+  //   ② 资产正文确实含该字面量（正文没丢，只是换了载体）。
+  // 其余锚点（i18n-keep 语义仍然成立的真·保留串）原样逐字保留。
+  // 每项 = [源码文件, 源码中**必须已消失**的 CJK 模板字面量, 资产名, 资产正文中**必须原样保留**的片段]
+  // （源码用 JS 模板串形态 `${x}`，资产用插值占位符形态 `{x}` —— 载体变了，正文骨架不变。）
+  const migratedToAssets: [string, string, string, string][] = [
+    ["goal-actions.js", "【${props.goalId} 判据反馈】", "gui-criteria-feedback-executor.zh.md", "【{goalId} 判据反馈】{criterion}"],
+    ["goal-actions.js", "【主管处理请求｜${goalId}｜目标定义/润色】", "gui-define-polish-request.zh.md", "【主管处理请求｜{goalId}｜目标定义/润色】"],
+    ["goal-actions.js", "【负责人交付复核请求】", "gui-accept-review-request.zh.md", "【负责人交付复核请求】负责人已在看板对目标「{goalId}」确认交付。"],
+    ["drag-prompts.js", "【${goalId} 回退理由】", "gui-backward-reason.zh.md", "【{goalId} 回退理由】{reason}"],
+    ["drag-prompts.js", "【重新执行】用户从看板拖放触发重新执行目标", "gui-reexecute.zh.md", "【重新执行】用户从看板拖放触发重新执行目标 {goalId}。"],
+    ["drag-prompts.js", "【交付通知】", "gui-deliver-notice.zh.md", "【交付通知】目标「{title}」（{goalId}）即将标记为已交付。"],
+  ];
+  for (const [file, gone, asset, preserved] of migratedToAssets) {
+    const raw = readFileSync(join(CLIENT_DIR, file), "utf8");
+    assert.equal(raw.indexOf(gone), -1,
+      `${file} 不得再内联 CJK 模板正文（应已迁入资产）: ${gone}`);
+    const assetText = readFileSync(join(HOST_PROMPTS_DIR, asset), "utf8");
+    assert.ok(assetText.includes(preserved),
+      `${asset} 资产正文必须原样保留该模板骨架: ${preserved}`);
+  }
+
   const anchors: [string, string][] = [
-    ["goal-actions.js", "【${props.goalId} 判据反馈】"],
-    ["goal-actions.js", "【主管处理请求｜${goalId}｜目标定义/润色】"],
-    // g-391：原 ["goal-actions.js", "【${goalId} 反馈】"] 锚点随不可达反馈 UI（prefillText 及其
-    // 无 setMode("feedback") 入口的分支）一并删除——保留该字面锚点等于逼迫仓库保留无效文本。
-    // 覆盖改由 core/tests/client.test.ts 的「g-391 结构契约」承担：死路径缺席 + 活入口存在（更严）。
-    ["goal-actions.js", "【负责人交付复核请求】"],
     ["goal-actions.js", "空闲|完成|待命|已交付|结束|等待"],
-    ["drag-prompts.js", "【${goalId} 回退理由】"],
-    ["drag-prompts.js", "【重新执行】用户从看板拖放触发重新执行目标"],
-    ["drag-prompts.js", "【交付通知】"],
     ["goal-modal.js", 'section(d.body, "目标描述")'],
     ["goal-modal.js", 'status === "正常"'],
     ["goal-modal.js", 'status === "已锁定"'],

@@ -90,15 +90,29 @@
     }
 
     /** g-489 入门第一步：先指定主管 Agent（技能名 + 接管这一步 + 可直接复制的示例提示词）。
-     *  说明文案与示例提示词全部走 i18n（本模块不得出现任何工具名字面量）。 */
+     *  g-496：**示例提示词正文**改由宿主只读资产提供（`gui-help-takeover-example.*.md`），
+     *  i18n 字典只留展示标签（`help.entry.promptLabel`）。读取失败**不得**静默显示空示例：
+     *  明确提示不可用并禁用复制按钮（避免把空串复制进剪贴板）。 */
     function HelpEntryStep() {
       const [note, setNote] = React.useState("");
-      const prompt = dgT("help.entry.prompt");
+      // g-496：示例提示词异步取自宿主资产（跟随界面语言）；null = 尚未取到，"" = 读取失败。
+      const [prompt, setPrompt] = React.useState(null);
+      React.useEffect(() => {
+        let alive = true;
+        loadGuiPromptAsset("gui-help-takeover-example")
+          .then((text) => { if (alive) setPrompt(text); })
+          .catch((e) => {
+            console.warn("[dsh-graph-host] help entry: prompt asset load failed:", e);
+            if (alive) setPrompt("");
+          });
+        return () => { alive = false; };
+      }, []);
       React.useEffect(() => {
         if (!note) return undefined;
         const timer = setTimeout(() => setNote(""), 2400);
         return () => clearTimeout(timer);
       }, [note]);
+      const promptReady = typeof prompt === "string" && prompt.length > 0;
       return h("div", {
         className: "dg-help-entry",
         style: {
@@ -118,7 +132,10 @@
           h("button", {
             className: "dg-btn dg-help-entry-copy",
             style: { ...S.btn, padding: "2px 10px", fontSize: 12 },
+            // 资产未就绪 / 读取失败时禁用：绝不把空串或半截文本复制进剪贴板。
+            disabled: !promptReady,
             onClick: async () => {
+              if (!promptReady) return;
               // 复用工厂作用域既有的复制实现（Clipboard API + execCommand 回退），不新增第二套。
               const ok = await copyText(prompt);
               setNote(ok ? dgT("help.entry.copied") : dgT("help.entry.copyFail"));
@@ -134,7 +151,7 @@
             whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit",
             background: "rgba(128,128,128,.10)",
           },
-        }, prompt));
+        }, promptReady ? prompt : dgT("gui.promptAssetLoadFail")));
     }
 
     /** g-489 分模块章节：一章一块，三要素逐行标出（是什么 / 怎么用 / 关键操作）。 */

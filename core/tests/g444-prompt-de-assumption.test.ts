@@ -58,13 +58,20 @@ const HOST = join(repoRoot, "dsh-graph-host");
 // g-496：提示词资产（含 supervisor-guide）已归**公共层** `prompts/`；`HOST` 仍指插件自身目录
 // （`lib/client/i18n.js` 等未移动）。资产扫描必须以公共层为源侧根。
 const PUBLIC_PROMPTS = join(repoRoot, "prompts");
+// g-496 att-007：宿主专属层（GUI 模板注入载荷）的源侧根；dist 侧仍为合并后的 `dist/prompts/`。
+const HOST_PROMPTS = join(HOST, "prompts");
 const DIST = join(repoRoot, "dist");
 const CLIENT_I18N_SRC = join(HOST, "lib", "client", "i18n.js");
 const CLIENT_BUNDLE_DIST = join(DIST, "lib", "client.js");
 
 /** 每个资产的粒度下限（防「清空任一资产仍绿」的 fail-open）。 */
 const MD_MIN_LINES = 1;
+/** g-496 att-007：宿主专属层的 GUI **注入载荷**天然短（如回退理由只有一行模板）。
+ *  原先一刀切的 100 字节是为公共层帮助文档写的，改为**按层分级**：
+ *  公共层仍 100；宿主层 20 —— 仍能拦住「清空/截断成空文件」，
+ *  且「禁用 token 0 命中」判据对两层一视同仁（本判据的保护目标不变）。 */
 const MD_MIN_BYTES = 100;
+const MD_MIN_BYTES_HOST = 20;
 const MARKER_LINE_CAP = 2;
 const SERVER_I18N_MIN_PER_SIDE = 40;
 /** 客户端 i18n 字面量分辨率下限（实测源码 3962 / dist 10485）。 */
@@ -439,17 +446,31 @@ function scanClientI18n(): string[] {
   return out;
 }
 
-/** 收集源码与投递副本两侧的 markdown 资产（含粒度下限与豁免行数上限）。 */
-function markdownAssets(): { label: string; text: string; maxMarkerLines: number }[] {
-  const out: { label: string; text: string; maxMarkerLines: number }[] = [];
-  // g-496：源侧资产根是**公共层** `prompts/`；dist 侧是合并后的 `dist/prompts/`。
-  // 迁移后**不再有**「根级非 prompts 资产」特例 —— 26 份资产同处一层（唯一源码副本）。
-  for (const [label, promptsDir] of [["源", PUBLIC_PROMPTS], ["dist", join(DIST, "prompts")]] as const) {
+/** 收集源码与投递副本两侧的 markdown 资产（含粒度下限与豁免行数上限）。
+ *  g-496 att-007：源侧现有**两层**（公共层 `prompts/` + 宿主专属层 `dsh-graph-host/prompts/`），
+ *  dist 侧是二者合并后的 `dist/prompts/`。故源侧按层分别读取（各自带该层的字节下限），
+ *  dist 侧按合并目录读取（用公共层下限 —— 已含所有公共层资产）。 */
+function markdownAssets(): { label: string; text: string; maxMarkerLines: number; minBytes: number }[] {
+  const out: { label: string; text: string; maxMarkerLines: number; minBytes: number }[] = [];
+  const isGuide = (n: string) => n === "supervisor-guide.zh.md" || n === "supervisor-guide.en.md";
+  // supervisor-guide 两语言仍享「本项目示例」标记行豁免（口径不变，仅位置变了）。
+  const cap = (n: string) => (isGuide(n) ? MARKER_LINE_CAP : 0);
+  for (const [label, promptsDir, minBytes] of [
+    ["源", PUBLIC_PROMPTS, MD_MIN_BYTES],
+    ["源", HOST_PROMPTS, MD_MIN_BYTES_HOST],
+  ] as const) {
     for (const name of readdirSync(promptsDir).filter((n) => n.endsWith(".md")).sort()) {
-      // supervisor-guide 两语言仍享「本项目示例」标记行豁免（口径不变，仅位置变了）。
-      const cap = name === "supervisor-guide.zh.md" || name === "supervisor-guide.en.md" ? MARKER_LINE_CAP : 0;
-      out.push({ label: `${label}/prompts/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: cap });
+      out.push({ label: `${label}/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: cap(name), minBytes });
     }
+  }
+  // dist 侧的**最低**下限：取公共层阈值（宿主层资产在源侧已按其自身阈值单独核过）。
+  for (const name of readdirSync(join(DIST, "prompts")).filter((n) => n.endsWith(".md")).sort()) {
+    out.push({
+      label: `dist/prompts/${name}`,
+      text: readFileSync(join(DIST, "prompts", name), "utf8"),
+      maxMarkerLines: cap(name),
+      minBytes: isGuide(name) ? MD_MIN_BYTES : MD_MIN_BYTES_HOST,
+    });
   }
   return out;
 }
@@ -460,7 +481,7 @@ async function scanAllAssets(): Promise<string[]> {
   let scannedLines = 0;
   for (const asset of markdownAssets()) {
     out.push(...scanText(asset.label, asset.text, {
-      minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES, maxMarkerLines: asset.maxMarkerLines,
+      minLines: MD_MIN_LINES, minBytes: asset.minBytes, maxMarkerLines: asset.maxMarkerLines,
     }));
     scannedLines += asset.text.split("\n").length;
   }
@@ -483,13 +504,19 @@ async function scanAllAssets(): Promise<string[]> {
 test("g-444 判据3：模型可读资产（源码 + dist 投递副本）不含本仓库特有路径/命令/文件", async () => {
   const assets = markdownAssets();
   // 非恒真护栏：资产必须真被读到（清空/删减任一资产由每资产下限与文件枚举兜住）。
-  // g-496：资产现同处**一层**（公共层 prompts/，26 份，含 supervisor-guide），不再是
-  // 「prompts/ 目录 + 根级 2 份指南」两处。故按目录实际名数派生（× 2 侧），
-  // 并就地核对源/随包两侧同集 ⇒ 派生基准本身可信、无法靠删资产静默少扫。
-  const promptNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".md")).sort();
+  // g-496 att-007：源侧两层（公共层 prompts/ + 宿主专属层 dsh-graph-host/prompts/）合并投递为
+  // `dist/prompts/`。故原「源一层 ≡ dist」改判为**更强的三方等价**：
+  // `公共层 ∪ 宿主层 ≡ dist ≡ 被扫资产（去重按 dist 计数）` —— 单层时代的
+  // 「无法靠删资产静默少扫」语义原样保留，且新增「两层并集必须恰好等于投递集」（漏投一份即红）。
+  const publicNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".md")).sort();
+  const hostNames = readdirSync(HOST_PROMPTS).filter((n) => n.endsWith(".md")).sort();
   const distPromptNames = readdirSync(join(DIST, "prompts")).filter((n) => n.endsWith(".md")).sort();
-  assert.deepEqual(promptNames, distPromptNames, "源 prompts 与随包副本必须同集（派生基准可信）");
-  assert.equal(assets.length, promptNames.length * 2, `应扫到 ${promptNames.length} 个资产 × 2 侧（实得 ${assets.length}）`);
+  const srcUnion = [...publicNames, ...hostNames].sort();
+  assert.deepEqual(srcUnion, distPromptNames, "源侧两层并集与随包副本必须同集（派生基准可信）");
+  assert.equal(new Set(srcUnion).size, srcUnion.length, "两层资产名不得重复（合并会 fail-closed）");
+  // 被扫条目 = 源侧两层（逐层各按其下限）+ dist 合并层。
+  assert.equal(assets.length, srcUnion.length + distPromptNames.length,
+    `应扫到 源 ${srcUnion.length} 份 + dist ${distPromptNames.length} 份（实得 ${assets.length}）`);
   const violations = await scanAllAssets();
   assert.deepEqual(violations, [], `资产命中禁用 token（应 0 命中）：\n${violations.join("\n")}`);
 });
@@ -603,7 +630,7 @@ test("g-444 逐资产粒度下限：清空/截断任一预期资产即判红（�
   // 真实资产侧：每个资产都必须满足非空行/字节下限（阈值与主扫描一致）。
   for (const asset of markdownAssets()) {
     const hits = scanText(asset.label, asset.text, {
-      minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES, maxMarkerLines: asset.maxMarkerLines,
+      minLines: MD_MIN_LINES, minBytes: asset.minBytes, maxMarkerLines: asset.maxMarkerLines,
     });
     assert.deepEqual(hits, [], `${asset.label} 覆盖不足或命中 token：\n${hits.join("\n")}`);
   }

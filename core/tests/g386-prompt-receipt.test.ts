@@ -15,7 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
 
@@ -290,6 +290,40 @@ test("g-386 负向对照：把回执判定改回恒真（模拟回退修复）�
 });
 
 // ===== 8. 调用方消费：润色失败退回复制兜底，不报「已投递」 =====
+// g-496 att-007：模板正文迁入宿主只读资产 ⇒ 调用方现在**先经 renderGuiPrompt 取模板再投递**。
+// 下面前提从 helpers.js 抠出**真实**读取/插值实现，`fetch` 打到**真实资产文件**，使被测闭包
+// 消费真实链路（读取器或插值被破坏 ⇒ 本文件判红），而不是给一条空桩糊过去。
+const repoRoot = join(import.meta.dirname, "../..");
+const guiPromptAssets = new Map<string, string>();
+{
+  const dir = join(repoRoot, "dsh-graph-host/prompts");
+  for (const f of readdirSync(dir)) {
+    if (f.endsWith(".md")) guiPromptAssets.set(f, readFileSync(join(dir, f), "utf8"));
+  }
+}
+const helpersSource = readClient("helpers");
+const realRenderGuiPrompt: (base: string, vars?: Record<string, unknown>) => Promise<string> =
+  new Function(
+    "fetch", "dgLang", "GUI_PROMPT_ASSET_URL",
+    `const guiPromptAssetCache = new Map();
+     ${extractBalanced(helpersSource, "function normalizeGuiPromptAsset(")}
+     ${extractBalanced(helpersSource, "function guiPromptAssetLang(")}
+     ${extractBalanced(helpersSource, "async function loadGuiPromptAsset(")}
+     ${extractBalanced(helpersSource, "function interpolateGuiPrompt(")}
+     ${extractBalanced(helpersSource, "async function renderGuiPrompt(")}
+     return renderGuiPrompt;`,
+  )(
+    async (url: string) => {
+      const name = String(url).split("/").pop() ?? "";
+      const body = guiPromptAssets.get(name);
+      return body === undefined
+        ? { ok: false, status: 404, text: async () => "" }
+        : { ok: true, status: 200, text: async () => body };
+    },
+    "zh",
+    "/api/dsh-graph/help/asset/",
+  );
+
 let cachedClientI18n: { zh: Record<string, string>; en: Record<string, string>; dgT: any } | null = null;
 function clientI18n() {
   if (cachedClientI18n) return cachedClientI18n;
@@ -305,13 +339,15 @@ function makeOpenSupervisorRunner(opts: { rt: any; supervisorSession: any; reque
   const arrow = extractBalanced(src, "const openSupervisor = ").slice("const openSupervisor = ".length).trim();
   const state = { notes: [] as any[], toasts: [] as string[], copied: [] as string[], fallbacks: [] as any[], loading: [] as boolean[], modes: [] as any[], activated: 0, opened: [] as any[] };
   const make = new Function(
-    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "request",
+    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue",
     "copyText", "openSessionTarget", "activateChatTab", "showToast",
     "setLoading", "setMode", "setNote", "setFallback",
+    // g-496 att-007：模板改由 renderGuiPrompt 取资产；goalId/goalPath/guidance 是其插值变量。
+    "setRequest", "renderGuiPrompt", "goalId", "goalPath", "guidance",
     `return ${arrow};`,
   );
   const run = make(
-    clientI18n().dgT, opts.rt, null, opts.supervisorSession, loadHelper(readClient("session-hooks")), opts.request,
+    clientI18n().dgT, opts.rt, null, opts.supervisorSession, loadHelper(readClient("session-hooks")),
     async (text: string) => { state.copied.push(text); return opts.copyText ? await opts.copyText(text) : false; },
     (...args: any[]) => { state.opened.push(args); },
     () => { state.activated += 1; },
@@ -320,20 +356,28 @@ function makeOpenSupervisorRunner(opts: { rt: any; supervisorSession: any; reque
     (v: any) => { state.modes.push(v); },
     (v: any) => { state.notes.push(v); },
     (v: any) => { state.fallbacks.push(v); },
+    () => {},
+    (base: string, vars?: Record<string, unknown>) => realRenderGuiPrompt(base, vars),
+    "g-1", "/tmp/g-1", "",
   ) as () => Promise<void>;
   return { run, state };
 }
 
 test("g-386 目标润色：投递负回执时绝不报「已投递」，且完整走复制兜底", async () => {
   const requests: any[] = [];
+  // g-496 att-007：投递/复制的正文现在是**资产渲染结果**（不再是内联字面量 "REQ"）。
+  // 期望值同样由真实资产 + 真实插值算出 ⇒ 断言强度不降（既校验兜底真的发生，也校验兜底的是哪份正文）。
+  const expected = await realRenderGuiPrompt("gui-define-polish-request",
+    { goalId: "g-1", goalPath: "/tmp/g-1", guidance: clientI18n().dgT("exec.guidanceNone") });
   const { run, state } = makeOpenSupervisorRunner({
     rt: legacyHost({ prompt: async (parts: any, mode: any) => { requests.push({ parts, mode }); return { ok: false, error: { code: "subagent/delivery-unavailable" } }; } }),
-    supervisorSession: "sup-1", request: "REQ", copyText: (t: string) => t === "REQ",
+    supervisorSession: "sup-1", request: "REQ", copyText: (t: string) => t === expected,
   });
   await run();
   const { zh } = clientI18n();
   assert.equal(requests.length, 1, "确实尝试过直发");
-  assert.deepEqual(state.copied, ["REQ"], "负回执必须退回复制兜底");
+  assert.deepEqual(state.copied, [expected], "负回执必须退回复制兜底，且兜底的是同一份资产正文");
+  assert.equal(requests[0].parts[0].text, expected, "投递的与兜底复制的是同一份正文（先取模板再投递）");
   assert.deepEqual(state.toasts, [zh["exec.requestCopied"]], "不得显示「已直接发送」toast");
   assert.ok(!state.toasts.includes(zh["exec.requestDelivered"]), "绝不虚报已投递");
   assert.deepEqual(settledNotes(state.notes), [zh["exec.requestCopiedOpened"]]);
@@ -349,12 +393,15 @@ function makeDoAcceptRunner(opts: { rt: any; supervisorSession: any; jsonResult:
   const make = new Function(
     "confirm", "dgT", "goalId", "setLoading", "setNote", "fetch", "graphUrl",
     "onRefresh", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "console",
+    // g-496 att-007：单卡接受的主管通知文案同样改由 renderGuiPrompt 取资产。
+    "renderGuiPrompt",
     `return ${arrow};`,
   );
   const run = make(
     () => true, clientI18n().dgT, "g-1", (v: boolean) => { state.loading.push(v); }, (v: any) => { state.notes.push(v); },
     async () => ({ json: async () => opts.jsonResult }), (p: string) => p,
     opts.onRefresh ?? (() => {}), opts.rt, null, opts.supervisorSession, loadHelper(readClient("session-hooks")), console,
+    (base: string, vars?: Record<string, unknown>) => realRenderGuiPrompt(base, vars),
   ) as () => Promise<void>;
   return { run, state };
 }

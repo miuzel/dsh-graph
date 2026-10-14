@@ -1,0 +1,1 @@
+Load the dsh-graph-supervisor skill and take over as the supervisor of this workspace: run graph_claim_supervisor() to claim the role, read the current board state and the handoff document, then tell me which goals exist and what you suggest doing next.

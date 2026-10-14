@@ -183,18 +183,29 @@ test("g-496 R3：任意命名的独立包（与仓库无关）可正常读取包
 
 // ---------------------------------------------------------------- ④ source 形态 help 读对层
 
-test("g-496 R4：source 形态下 help 归属公共层，reader 从公共层读到正确正文", async () => {
+test("g-496 R4：source 形态下公共层资产归属 public、宿主专属资产归属 host，reader 各读其层", async () => {
   const marker = JSON.parse(readFileSync(join(repoRoot, "dsh-graph-host/package.json"), "utf8"));
   assert.equal(marker?.dsh?.promptAssets?.layout, "source", "源码清单必须声明 source 布局");
   assert.equal(marker?.dsh?.promptAssets?.publicDir, "../prompts", "source 公共层目录必须是 ../prompts");
   assert.equal(marker?.dsh?.promptAssets?.hostDir, "./prompts", "source 宿主层目录必须是 ./prompts");
 
-  // 唯一注册表必须**携带所有权**且当前 help 为 public（g-496 返工改判）。
+  // 唯一注册表必须**携带所有权**。
   const hostSrc = readFileSync(join(repoRoot, "dsh-graph-host/index.js"), "utf8");
   assert.ok(!/HOST_OWNED_PROMPT_ASSETS\s*=\s*new Set\(/.test(hostSrc),
     "不得再持有第二份宿主专属清单（所有权必须与注册表同源）");
-  assert.ok(!/ownership:\s*"host"/.test(hostSrc),
-    "当前无 host 资产：help 归公共层，注册表不得再有 host 登记");
+  // g-496 att-007：宿主专属层现在**确有** host 资产（9 类 GUI 提示词模板 × zh/en = 18）。
+  // 原断言「注册表不得再有 host 登记」编码的是该层为空时的状态；分层判据本身不变 ——
+  // 改为断言：host 登记**恰好**覆盖宿主专属层的 18 份，且每份都标 host（归属不得漏标/多标）。
+  const hostAssetNames = readdirSync(join(repoRoot, "dsh-graph-host/prompts")).filter((n) => n.endsWith(".md"));
+  assert.equal(hostAssetNames.length, 18, `宿主专属层应恰 18 份，实得 ${hostAssetNames.length}`);
+  for (const n of hostAssetNames) {
+    assert.ok(hostSrc.includes(`{ name: "${n}", ownership: "host"`),
+      `${n} 必须在注册表中登记为 host（源码位于宿主专属层）`);
+  }
+  // 反向：注册表里 host 条目的条数必须恰等于宿主层文件数（不得多标）。
+  const hostRegCount = (hostSrc.match(/ownership:\s*"host"/g) ?? []).length;
+  assert.equal(hostRegCount, hostAssetNames.length,
+    `注册表 host 条目数（${hostRegCount}）必须等于宿主专属层文件数（${hostAssetNames.length}）`);
 
   // 真实行为：模拟 source 形态（登记表 → 建包内 prompts 仅含 host 层、公共层在包外），
   // 断言 help 从**公共层**读到正文，而不是从空的 host 层。

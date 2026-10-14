@@ -973,4 +973,83 @@
       }
     }
 
+    // ===== g-496：GUI 提示词模板的**宿主只读资产**读取与一次扫描插值 =====
+    // 提示词正文（发往主管/执行子代理会话的 session.prompt 载荷）**不再内联在本 bundle 或 i18n 字典**：
+    // 正文的唯一事实源是宿主专属层 `dsh-graph-host/prompts/gui-*.{zh,en}.md`（构建合并进包内
+    // `dist/prompts/`），客户端只经**既有只读路由** `/api/dsh-graph/help/asset/<name>` 现取。
+    //
+    // 语言：跟随界面当前**生效语言** —— 复用 plugin 在注册/切换 locale 时一并写入的 `dgLang`
+    // （与 dgT 同源同生命周期），不另建第二套语言状态；缺该语言资产时回落另一语言。
+    //
+    // 失败口径（负责人硬性要求）：**绝不静默、绝不发送空串或半截正文** —— 读取失败一律 reject，
+    // 由调用方保持用户已输入内容并给出可重试的明确错误。
+    const GUI_PROMPT_ASSET_URL = "/api/dsh-graph/help/asset/";
+    /** 资产正文的进程内缓存（key = 资产名，**已按语言解析后的最终名**）。
+     *  模板是**随包只读产物**，进程内不会变 ⇒ 缓存安全；缓存只在**成功**时写入，失败不缓存（可重试）。 */
+    const guiPromptAssetCache = new Map();
+
+    /** 当前界面语言（`zh` | `en`）——读 dgT 同源的 dgLang（plugin 在注册/切换时更新），
+     *  **不自建语言探测**；缺省与 dgT 降级口径一致（中文）。 */
+    function guiPromptAssetLang() {
+      return dgLang === "en" ? "en" : "zh";
+    }
+
+    /** 归一化资产正文：**只**剥掉文件末尾那一个换行（POSIX 文本文件的收尾约定）。
+     *
+     *  为什么必须做：md 资产按惯例以 `\n` 结尾，而迁移前内联模板**不含**结尾换行。若原样投递，
+     *  每条提示词都会多一个尾随换行 —— 那是「迁移引入的载荷差异」，不是等价迁移。
+     *  **只剥一个**且**只在末尾**：正文内部换行、行尾空格、乃至用户输入里的换行一律原样保留
+     *  （插值发生在归一化**之后**，用户输入不受影响）。 */
+    function normalizeGuiPromptAsset(raw) {
+      return typeof raw === "string" ? raw.replace(/\r?\n$/, "") : "";
+    }
+
+    /** 读取一份 GUI 提示词模板正文（按当前界面语言，缺则回落另一语言）。
+     *  @returns {Promise<string>} 正文（已归一化末尾换行，其余原样）
+     *  @throws  {Error} 资产不可读（非 2xx / 网络异常 / 正文为空）——调用方必须据此报错并可重试。 */
+    async function loadGuiPromptAsset(base) {
+      const lang = guiPromptAssetLang();
+      const primary = `${base}.${lang}.md`;
+      const fallback = `${base}.${lang === "en" ? "zh" : "en"}.md`;
+      for (const name of [primary, fallback]) {
+        if (guiPromptAssetCache.has(name)) {
+          const hit = guiPromptAssetCache.get(name);
+          if (hit) return hit;
+          continue; // 该语言明确为空 ⇒ 试回落语言
+        }
+        let text = "";
+        try {
+          const res = await fetch(GUI_PROMPT_ASSET_URL + name, { headers: { accept: "text/markdown" } });
+          if (res.ok) text = normalizeGuiPromptAsset(await res.text());
+        } catch {
+          text = "";
+        }
+        if (text) {
+          guiPromptAssetCache.set(name, text);
+          return text;
+        }
+        // 失败/空：**不缓存失败**（允许重试），继续尝试回落语言。
+      }
+      throw new Error(`dsh-graph GUI prompt asset unreadable: ${primary}`);
+    }
+
+    /** 纯函数：**一次扫描**的占位符插值（非递归、无 eval）。
+     *
+     *  - 只替换 `{key}` 形态；`vars[key]` 缺失则**原样保留占位符**（暴露而非静默清空）；
+     *  - 替换值一律 `String(v)` **原文注入** —— 用户输入（反馈内容、回退理由、补充指导、标题等）
+     *    中的 `{...}` **不再被二次替换**（非递归：单遍扫描，替换文本不参与后续匹配）；
+     *  - 不做 HTML/正则转义、不 eval、不 new Function：返回值只是字符串，交给 session.prompt。 */
+    function interpolateGuiPrompt(template, vars) {
+      return String(template).replace(/\{([A-Za-z0-9_]+)\}/g, (whole, key) => {
+        const v = vars ? vars[key] : undefined;
+        return v === undefined || v === null ? whole : String(v);
+      });
+    }
+
+    /** 读取模板 + 插值（调用方主入口）。失败**抛错**，绝不返回空串。 */
+    async function renderGuiPrompt(base, vars) {
+      const template = await loadGuiPromptAsset(base);
+      return interpolateGuiPrompt(template, vars);
+    }
+
     // ===== g-107 会话内嵌实时：复用 DSH 客户端会话机制，不自建数据通道 =====    // Contract marker: 看板数据自动刷新

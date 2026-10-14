@@ -274,7 +274,8 @@ export function resolveDesignDiagramRequest(rawUrl) {
 // 「提示词模板」页签把**随包发布**的 `prompts/*.md` 逐个只读展示给用户 —— 展示的内容与引擎
 // 实际投递给 Agent 的资产是**同一份产物**（`dist/prompts/`），不复制、不改写、不新增第二份文案。
 // 安全口径（与 g-462 图路由同一形状：单一路径入口、**无任何写路径**）：
-//   ① 白名单是**唯一**入口：只有下面这 16 个文件名（8 个资产 × zh/en）可被读取，其余一律拒绝；
+//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-496 起 44 个 = 22 个资产
+//      × zh/en）可被读取，其余一律拒绝；清单**不在此处硬编码**（注册表是唯一真源）；
 //   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
 //      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
 //      （即使判定失误，也只会在 `prompts/` 白名单目录里按白名单名读取）。
@@ -304,6 +305,27 @@ const HELP_ASSET_REGISTRY = Object.freeze([
   { name: "executor-discipline.zh.md", ownership: "public", relativePath: "prompts/executor-discipline.zh.md" },
   { name: "guide-hint.en.md", ownership: "public", relativePath: "prompts/guide-hint.en.md" },
   { name: "guide-hint.zh.md", ownership: "public", relativePath: "prompts/guide-hint.zh.md" },
+  // g-496：GUI 提示词模板（9 类 × zh/en）—— **宿主专属层**所有权：这些正文绑定 DSH 会话
+  // `session.prompt` 载荷与看板 GUI 动作语义（发往主管/执行会话的提示词），跨宿主插件不复用。
+  // 正文的唯一事实源是 `dsh-graph-host/prompts/gui-*.{zh,en}.md`（构建合并进包内 prompts/）。
+  { name: "gui-accept-review-request.en.md", ownership: "host", relativePath: "prompts/gui-accept-review-request.en.md" },
+  { name: "gui-accept-review-request.zh.md", ownership: "host", relativePath: "prompts/gui-accept-review-request.zh.md" },
+  { name: "gui-backward-reason.en.md", ownership: "host", relativePath: "prompts/gui-backward-reason.en.md" },
+  { name: "gui-backward-reason.zh.md", ownership: "host", relativePath: "prompts/gui-backward-reason.zh.md" },
+  { name: "gui-batch-accept-review-request.en.md", ownership: "host", relativePath: "prompts/gui-batch-accept-review-request.en.md" },
+  { name: "gui-batch-accept-review-request.zh.md", ownership: "host", relativePath: "prompts/gui-batch-accept-review-request.zh.md" },
+  { name: "gui-criteria-feedback-executor.en.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-executor.en.md" },
+  { name: "gui-criteria-feedback-executor.zh.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-executor.zh.md" },
+  { name: "gui-criteria-feedback-supervisor.en.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-supervisor.en.md" },
+  { name: "gui-criteria-feedback-supervisor.zh.md", ownership: "host", relativePath: "prompts/gui-criteria-feedback-supervisor.zh.md" },
+  { name: "gui-define-polish-request.en.md", ownership: "host", relativePath: "prompts/gui-define-polish-request.en.md" },
+  { name: "gui-define-polish-request.zh.md", ownership: "host", relativePath: "prompts/gui-define-polish-request.zh.md" },
+  { name: "gui-deliver-notice.en.md", ownership: "host", relativePath: "prompts/gui-deliver-notice.en.md" },
+  { name: "gui-deliver-notice.zh.md", ownership: "host", relativePath: "prompts/gui-deliver-notice.zh.md" },
+  { name: "gui-help-takeover-example.en.md", ownership: "host", relativePath: "prompts/gui-help-takeover-example.en.md" },
+  { name: "gui-help-takeover-example.zh.md", ownership: "host", relativePath: "prompts/gui-help-takeover-example.zh.md" },
+  { name: "gui-reexecute.en.md", ownership: "host", relativePath: "prompts/gui-reexecute.en.md" },
+  { name: "gui-reexecute.zh.md", ownership: "host", relativePath: "prompts/gui-reexecute.zh.md" },
   { name: "help.en.md", ownership: "public", relativePath: "prompts/help.en.md" },
   { name: "help.zh.md", ownership: "public", relativePath: "prompts/help.zh.md" },
   { name: "minor-task.en.md", ownership: "public", relativePath: "prompts/minor-task.en.md" },
@@ -327,6 +349,15 @@ export const HELP_PROMPT_ASSETS = Object.freeze(HELP_ASSET_REGISTRY.map((e) => e
 export function helpAssetRelativePath(name) {
   const hit = HELP_ASSET_REGISTRY.find((e) => e.name === name);
   return hit ? hit.relativePath : null;
+}
+
+/** g-496：白名单资产名 → 其**语义归属**（`"public"` | `"host"`）。
+ *
+ *  只读投影自 `HELP_ASSET_REGISTRY`（所有权唯一真源，**不新增第二份清单**）；未注册名按公共层
+ *  口径返回 `"public"`（与内部 reader 的 `assetOwnership` 同语义）。供守卫与诊断使用：
+ *  「资产标称归属」必须与「源码实际所在层」双向对齐，否则分层在注册表里已失真。 */
+export function helpAssetOwnership(name) {
+  return assetOwnership(name);
 }
 /** 合法资产名：小写字母/数字起头，只含 `[a-z0-9.-]`，`.md` 结尾。 */
 const HELP_ASSET_NAME_RE = /^[a-z0-9][a-z0-9.-]*\.md$/;
@@ -810,9 +841,11 @@ function readPromptAsset(name, language = "zh") {
  *  未登记的名字一律视为**公共层**资产（公共层是默认归属，新增公共资产无需登记归属；
  *  只有真正绑定 DSH 宿主语义的资产才需要登记为 host）。
  *
- *  当前**没有任何资产是 host**：`help` 内容是通用 graph 模块说明（工具表/主题索引），
- *  并非 DSH 会话 API 专属，按负责人 2026-10-15 裁定统一归**公共层**。后续真正属于
- *  插件层的 GUI 模板正文再登记为 host。 */
+ *  入参是资产的**基名**（不带 `.zh`/`.en` 后缀）——归属是资产的**跨语言**属性，两种语言同属一层。
+ *
+ *  当前 **host 归属 = 9 类 GUI 提示词模板**（g-496 att-007 迁入宿主专属层 `dsh-graph-host/prompts/`）：
+ *  这些正文是 DSH 会话 `session.prompt` 载荷 / 看板 GUI 动作语义专属，跨宿主插件不复用。
+ *  其余资产（含 `help`：通用 graph 模块说明，按负责人 2026-10-15 裁定）仍统一归**公共层**。 */
 function assetOwnership(name) {
   const hit = HELP_ASSET_REGISTRY.find((e) => e.name === `${name}.zh.md` || e.name === `${name}.en.md`);
   return hit?.ownership === "host" ? "host" : "public";

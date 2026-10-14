@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -3226,11 +3226,16 @@ test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’�
   assert.match(actions, /"✅ 交付已生效"/);
   assert.match(actions, /confirm\(/);
   assert.match(actions, /session\.prompt/);
-  assert.match(actions, /【负责人交付复核请求】/);
+  // g-496 att-007：模板正文迁入宿主只读资产 ⇒ 源码/bundle 面改判「经共享读取器引用该资产名」，
+  // 正文面由 g-323 的行为断言（真实资产 + 真实插值）承担。
+  assert.match(actions, /renderGuiPrompt\(\s*"gui-accept-review-request"/);
   assert.match(actions, /"queue"/);
   assert.match(constants, /get "review\.requested"\(\) \{ return dgT\('event\.reviewRequested'\); \}/);
   assert.match(constants, /get "review\.objected"\(\) \{ return dgT\('event\.reviewObjected'\); \}/);
-  assert.match(bundle, /【负责人交付复核请求】/);
+  assert.match(bundle, /"gui-accept-review-request"/);
+  // 反向：正文不得再内联在源码或 bundle 中（唯一事实源 = 资产）。
+  assert.doesNotMatch(actions, /【负责人交付复核请求】/);
+  assert.doesNotMatch(bundle, /【负责人交付复核请求】/);
   assert.doesNotMatch(bundle, /等待主管裁决/);
 });
 
@@ -4309,6 +4314,42 @@ function loadPromptSessionQueueHelper(): any {
   return helper;
 }
 
+// ===== g-496 att-007：GUI 提示词模板正文已迁入宿主只读资产 =====
+// doAccept 现在**先经 renderGuiPrompt 取模板再投递**。这里从 helpers.js 抠出**真实**读取+插值实现，
+// 并把 fetch 打到**真实资产文件**——被测闭包消费真实实现（读取器/插值若被破坏，本文件用例一起失败）。
+const helpersClientSrc = () => readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/helpers.js"), "utf8");
+const guiPromptAssets = new Map<string, string>();
+{
+  const dir = join(process.cwd(), "dsh-graph-host/prompts");
+  for (const f of readdirSync(dir)) {
+    if (f.endsWith(".md")) guiPromptAssets.set(f, readFileSync(join(dir, f), "utf8"));
+  }
+}
+const realRenderGuiPrompt: (base: string, vars?: Record<string, unknown>) => Promise<string> =
+  new Function(
+    "fetch", "dgLang", "GUI_PROMPT_ASSET_URL",
+    `const guiPromptAssetCache = new Map();
+     ${extractBalanced(helpersClientSrc(), "function normalizeGuiPromptAsset(")}
+     ${extractBalanced(helpersClientSrc(), "function guiPromptAssetLang(")}
+     ${extractBalanced(helpersClientSrc(), "async function loadGuiPromptAsset(")}
+     ${extractBalanced(helpersClientSrc(), "function interpolateGuiPrompt(")}
+     ${extractBalanced(helpersClientSrc(), "async function renderGuiPrompt(")}
+     return renderGuiPrompt;`,
+  )(
+    async (url: string) => {
+      const name = String(url).split("/").pop() ?? "";
+      const body = guiPromptAssets.get(name);
+      return body === undefined
+        ? { ok: false, status: 404, text: async () => "" }
+        : { ok: true, status: 200, text: async () => body };
+    },
+    "zh",
+    "/api/dsh-graph/help/asset/",
+  );
+
+/** 单卡接受通知的期望正文（真实资产 + 真实插值）。 */
+const expectedAcceptReview = (goalId: string) => realRenderGuiPrompt("gui-accept-review-request", { goalId });
+
 /** 真实 doAccept：抠出箭头函数并把闭包自由变量做成形参注入，返回可直接 await 的调用器。 */
 function makeDoAcceptRunner(rt: any, supervisorSession: any, goalId: string, jsonResult: any, onRefresh?: () => void) {
   const src = goalActionsClientSrc();
@@ -4317,12 +4358,14 @@ function makeDoAcceptRunner(rt: any, supervisorSession: any, goalId: string, jso
   const make = new Function(
     "confirm", "dgT", "goalId", "setLoading", "setNote", "fetch", "graphUrl",
     "onRefresh", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "console",
+    "renderGuiPrompt",
     `return ${arrow};`,
   );
   return make(
     () => true, (k: string) => k, goalId, () => {}, () => {},
     async () => ({ json: async () => jsonResult }), (p: string) => p,
     onRefresh ?? (() => {}), rt, null, supervisorSession, loadPromptSessionQueueHelper(), console,
+    (base: string, vars?: any) => realRenderGuiPrompt(base, vars),
   ) as () => Promise<void>;
 }
 
@@ -4349,7 +4392,10 @@ function makeDsh016RetainHost(session: any, record: { releases: number; retains:
 test("g-323 单卡接受：0.1.6 retain 宿主（无 get）下 doAccept 发出恰好一条 queue 主管通知且 release 配平", async () => {
   const arrow = extractBalanced(goalActionsClientSrc(), "const doAccept = ");
   assert.match(arrow, /promptSessionQueue\(rt, supervisorSession, parts,/, "doAccept 必须消费共享 helper");
-  assert.match(arrow, /【负责人交付复核请求】/, "单卡文案逐字不变");
+  // g-496 att-007：正文已迁入宿主只读资产 ⇒ 源码面判据改为「经共享读取器取模板」，
+  // 正文面的「逐字不变」由下方行为断言（真实资产 + 真实插值）承担，判据强度只增不减。
+  assert.match(arrow, /renderGuiPrompt\(\s*"gui-accept-review-request"/, "doAccept 必须经共享读取器取模板");
+  assert.doesNotMatch(arrow, /【负责人交付复核请求】/, "正文不得再内联在 doAccept 内");
   assert.doesNotMatch(arrow, /typeof\s+\w+\??\.\s*(using|retain)\s*===/, "doAccept 不得自带能力探测");
 
   const prompts: any[] = [];
@@ -4363,9 +4409,10 @@ test("g-323 单卡接受：0.1.6 retain 宿主（无 get）下 doAccept 发出�
   assert.equal(prompts.length, 1, "单卡接受必须恰好一条主管通知（不得 0 条，也不得 N 条）");
   assert.equal(prompts[0].mode, "queue");
   const text = String(prompts[0].parts[0].text);
-  assert.match(text, /【负责人交付复核请求】/);
+  // g-496 att-007：正文由**真实资产 + 真实插值**给出（迁移前是内联字面量，逐字等价）。
+  assert.equal(text, await expectedAcceptReview("g-1"), "单卡文案与资产骨架逐字一致（含 id 代入）");
   assert.match(text, /「g-1」/, "文案含被接受的目标 id");
-  assert.doesNotMatch(text, /【负责人批量交付复核请求】/, "单卡不得误用批量文案");
+  assert.doesNotMatch(text, /「g-9」/, "不得混入其它目标 id");
   assert.equal(record.releases, 1, "release 必须恰好配平一次（无代际泄漏）");
 });
 
@@ -4377,7 +4424,8 @@ test("g-323 单卡接受：0.1.5 被动回退（只有 binding、无 retain/get�
   await doAccept();
   assert.equal(prompts.length, 1, "0.1.5 被动回退仍须恰好一条 queue 主管通知");
   assert.equal(prompts[0].mode, "queue");
-  assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
+  assert.equal(String(prompts[0].parts[0].text), await expectedAcceptReview("g-9"),
+    "0.1.5 被动回退下文案同样取自资产骨架");
   assert.match(String(prompts[0].parts[0].text), /「g-9」/);
 });
 
@@ -4441,7 +4489,8 @@ test("g-323 单卡接受：0.1.6 有 using 的宿主优先走 using，恰好一�
   assert.equal(retainCalls.length, 0, "using 可用时不得再自行 retain");
   assert.equal(prompts.length, 1, "单卡接受恰好一条 queue 主管通知");
   assert.equal(prompts[0].mode, "queue");
-  assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
+  assert.equal(String(prompts[0].parts[0].text), await expectedAcceptReview("g-7"),
+    "using 路径下文案同样取自资产骨架");
   assert.match(String(prompts[0].parts[0].text), /「g-7」/);
   assert.equal(record.releases, 1, "release 必须恰好一次（无代际泄漏）");
 });
@@ -4469,21 +4518,26 @@ function makeOpenSupervisorRunner(opts: {
   rt: any; supervisorSession: any; request: string;
   copyText?: (text: string) => boolean | Promise<boolean>;
   appCtx?: any;
+  renderGuiPrompt?: (base: string, vars?: Record<string, unknown>) => Promise<string>;
 }) {
   const arrow = extractBalanced(goalActionsClientSrc(), "const openSupervisor = ").slice("const openSupervisor = ".length).trim();
   assert.match(arrow, /^async \(\) => \{/, "抠到的确实是 openSupervisor 箭头函数");
   const state = {
     loading: [] as boolean[], notes: [] as any[], modes: [] as any[], fallbacks: [] as any[],
     toasts: [] as string[], opened: [] as any[], activated: 0, copied: [] as string[],
+    requests: [] as string[],
   };
   const make = new Function(
-    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "request",
+    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue",
     "copyText", "openSessionTarget", "activateChatTab", "showToast",
-    "setLoading", "setMode", "setNote", "setFallback",
+    "setLoading", "setMode", "setNote", "setFallback", "setRequest", "renderGuiPrompt",
+    // g-496 att-007：模板改为由 renderGuiPrompt 插值 ⇒ `goalId`/`goalPath`/`guidance`
+    // 成为 openSupervisor 求值插值变量时的闭包自由变量，必须一并注入（否则在读模板处 ReferenceError）。
+    "goalId", "goalPath", "guidance",
     `return ${arrow};`,
   );
   const run = make(
-    goalActionsI18n().dgT, opts.rt, opts.appCtx ?? null, opts.supervisorSession, loadPromptSessionQueueHelper(), opts.request,
+    goalActionsI18n().dgT, opts.rt, opts.appCtx ?? null, opts.supervisorSession, loadPromptSessionQueueHelper(),
     // 记录每一次调用：直发成功分支若也走剪贴板，state.copied 会立刻非空（强负向对照）
     async (text: string) => { state.copied.push(text); return opts.copyText ? await opts.copyText(text) : false; },
     (...args: any[]) => { state.opened.push(args); },
@@ -4493,6 +4547,11 @@ function makeOpenSupervisorRunner(opts: {
     (v: any) => { state.modes.push(v); },
     (v: any) => { state.notes.push(v); },
     (v: any) => { state.fallbacks.push(v); },
+    // g-496 att-007：模板改为异步取资产后，复制失败的手动预览正文由 state 承接。
+    (v: string) => { state.requests.push(v); },
+    // 真实读取器 + 真实资产（opts.request 作为「资产渲染结果」的可注入替身，便于故障注入用例）。
+    opts.renderGuiPrompt ?? (async () => opts.request),
+    "g-7", "/tmp/g-7", "",
   ) as () => Promise<void>;
   return { run, state };
 }
@@ -4529,7 +4588,7 @@ test("g-327 直发契约（源码）：先投递后复制、直发成功分支�
 
   // 顺序：投递尝试必须先于剪贴板复制（复制只是投递失败后的兜底）
   const deliverAt = code.indexOf("promptSessionQueue(");
-  const copyAt = code.indexOf("copyText(request)");
+  const copyAt = code.indexOf("copyText(text)");
   assert.ok(deliverAt >= 0, "存在直发调用");
   assert.ok(copyAt > deliverAt, "必须先尝试直发，copyText 只能是投递失败后的兜底");
 
@@ -4545,7 +4604,7 @@ test("g-327 直发契约（源码）：先投递后复制、直发成功分支�
   assert.match(deliveredBody, /activateChatTab\(\)/);
 
   // 兜底复制契约逐字保留（copyText / openSessionTarget / activateChatTab / setFallback 仍被真实调用）
-  assert.match(code, /const copied = await copyText\(request\);/);
+  assert.match(code, /const copied = await copyText\(text\);/);
   assert.match(code, /if \(copied\) showToast\(dgT\("exec\.requestCopied"\)\);/);
   assert.match(code, /setFallback\(!copied\)/);
   assert.match(code, /setNote\(copied \? dgT\("exec\.requestCopiedOpened"\) : dgT\("exec\.autocopyFailedRequest"\)\);/);

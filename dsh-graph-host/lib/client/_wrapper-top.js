@@ -19,3 +19,7 @@ window.__ModuleLoader__.load({
     // g-230：全局翻译函数——在 plugin apply 阶段由 registerI18n + createTranslator 初始化。
     // 所有组件通过 dgT('key', params) 获取当前语言翻译。
     let dgT = (key) => key;
+    // g-496：**生效界面语言**（`"zh"` | `"en"`）——与 dgT 同源、同生命周期地由 plugin 在
+    // 注册/切换语言时一并更新（apply 与 refreshLocale）。GUI 提示词模板读取器据它选择
+    // `<base>.<lang>.md`；**不新增第二套语言状态**，缺省与 dgT 的降级口径一致（中文）。
+    let dgLang = "zh";

@@ -69,9 +69,17 @@ test("g-281: goal-actions.js 与 client.js 判据列表行内按钮与 Tooltip �
     );
 
     // 内部提示词前缀与 session.prompt 契约完全保留
+    // g-496 att-007：模板正文已迁入**宿主只读资产** ⇒ 源码面改判为「经共享读取器引用该资产」；
+    // 「前缀契约逐字保留」由下方对**资产正文**的断言承担（等价且更强：连资产一起校验，
+    // 且新增反向断言确保正文不再有第二副本）。
     assert.ok(
-      src.includes("【${props.goalId} 判据反馈】${criterion}\\n${t}"),
-      `${name} 必须保留【\${props.goalId} 判据反馈】提示词模板契约`
+      src.includes('renderGuiPrompt("gui-criteria-feedback-executor"') ||
+      src.includes('renderGuiPrompt("gui-criteria-feedback-supervisor"'),
+      `${name} 必须经共享读取器 renderGuiPrompt 取判据反馈模板`
+    );
+    assert.ok(
+      !src.includes("【${props.goalId} 判据反馈】"),
+      `${name} 不得再内联【\${props.goalId} 判据反馈】模板正文（唯一事实源 = 资产）`
     );
     assert.ok(
       src.includes('dgT("criteria.feedbackNotConnected")') &&
@@ -80,4 +88,16 @@ test("g-281: goal-actions.js 与 client.js 判据列表行内按钮与 Tooltip �
       `${name} 必须完整保留反馈状态提示契约`
     );
   }
+
+  // 模板前缀契约的**新载体**（资产）必须逐字保留两条通道的正文骨架。
+  const executorAsset = readFileSync(join(hostRoot, "prompts/gui-criteria-feedback-executor.zh.md"), "utf8");
+  const supervisorAsset = readFileSync(join(hostRoot, "prompts/gui-criteria-feedback-supervisor.zh.md"), "utf8");
+  assert.ok(
+    executorAsset.includes("【{goalId} 判据反馈】{criterion}\n{feedback}"),
+    "执行会话资产必须逐字保留【{goalId} 判据反馈】模板契约"
+  );
+  assert.ok(
+    supervisorAsset === "【{goalId} 判据反馈（该目标无执行会话 → 转主管）】{criterion}\n{feedback}\n",
+    "主管通道资产必须逐字保留判据反馈模板与其区分性标记"
+  );
 });

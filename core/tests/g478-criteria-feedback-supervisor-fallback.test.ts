@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
 
@@ -60,6 +60,47 @@ function loadI18n() {
 }
 const { zh, en, dgT } = loadI18n();
 
+// ===== g-496 att-007：GUI 提示词模板正文已迁入宿主只读资产 =====
+// sendFb 现在**先经 renderGuiPrompt 取模板再投递**（两条通路都是）。这里从 helpers.js 抠出**真实**
+// 读取+插值实现，并把 fetch 打到**真实资产文件**——被测闭包消费真实实现，读取器/插值若被破坏则本文件判红。
+const repoRoot = join(import.meta.dirname, "../..");
+const helpersSrc = readClient("helpers");
+const guiPromptAssets = new Map<string, string>();
+{
+  const dir = join(repoRoot, "dsh-graph-host/prompts");
+  for (const f of readdirSync(dir)) {
+    if (f.endsWith(".md")) guiPromptAssets.set(f, readFileSync(join(dir, f), "utf8"));
+  }
+}
+const realRenderGuiPrompt: (base: string, vars?: Record<string, unknown>) => Promise<string> =
+  new Function(
+    "fetch", "dgLang", "GUI_PROMPT_ASSET_URL",
+    `const guiPromptAssetCache = new Map();
+     ${extractBalanced(helpersSrc, "function normalizeGuiPromptAsset(")}
+     ${extractBalanced(helpersSrc, "function guiPromptAssetLang(")}
+     ${extractBalanced(helpersSrc, "async function loadGuiPromptAsset(")}
+     ${extractBalanced(helpersSrc, "function interpolateGuiPrompt(")}
+     ${extractBalanced(helpersSrc, "async function renderGuiPrompt(")}
+     return renderGuiPrompt;`,
+  )(
+    async (url: string) => {
+      const name = String(url).split("/").pop() ?? "";
+      const body = guiPromptAssets.get(name);
+      return body === undefined
+        ? { ok: false, status: 404, text: async () => "" }
+        : { ok: true, status: 200, text: async () => body };
+    },
+    "zh",
+    "/api/dsh-graph/help/asset/",
+  );
+
+/** 期望的主管反馈正文（真实资产 + 真实插值）。 */
+const expectedSupervisorFb = (goalId: string, criterion: string, feedback: string) =>
+  realRenderGuiPrompt("gui-criteria-feedback-supervisor", { goalId, criterion, feedback });
+/** 期望的执行会话反馈正文。 */
+const expectedExecutorFb = (goalId: string, criterion: string, feedback: string) =>
+  realRenderGuiPrompt("gui-criteria-feedback-executor", { goalId, criterion, feedback });
+
 const CRITERION = "所有新增单测必须覆盖三条分支";
 const OPINION = "请把第三条分支的负回执也覆盖到";
 
@@ -75,6 +116,8 @@ interface Harness {
 function makeSendFb(env: {
   session?: any; supervisorSession?: any; rt?: any; appCtx?: any; fbText?: string;
   mutate?: (src: string) => string;
+  /** g-496 att-007：替换模板读取器（故障注入用）；缺省为真实资产 + 真实插值。 */
+  renderGuiPrompt?: (base: string, vars?: Record<string, unknown>) => Promise<string>;
 }): Harness {
   const src = env.mutate ? env.mutate(goalActionsSrc) : goalActionsSrc;
   const arrow = extractBalanced(src, "const sendFb = ").slice("const sendFb = ".length).trim();
@@ -85,6 +128,8 @@ function makeSendFb(env: {
     "session", "props", "fbText", "setFbNote", "setFbText", "setFbIdx", "dgT",
     "sessionQueueState", "subagentDispatchErrorText", "promptSessionQueue",
     "sessionsRt", "appCtx", "openSessionTarget", "activateChatTab", "showToast", "console",
+    // g-496 att-007：模板改为由 renderGuiPrompt 从宿主只读资产读取 ⇒ 它成为闭包自由变量。
+    "renderGuiPrompt",
     `return ${arrow};`,
   );
   const sendFb = make(
@@ -102,11 +147,13 @@ function makeSendFb(env: {
     env.appCtx ?? null,
     (...a: any[]) => state.opened.push(a),
     () => { state.activated += 1; },
-    (t: string) => state.toasts.push(t),
-    consoleRecorder,
-  );
-  return { sendFb, state };
-}
+     (t: string) => state.toasts.push(t),
+     consoleRecorder,
+     // g-496 att-007：默认走**真实资产 + 真实插值**；env.renderGuiPrompt 供故障注入用例替换。
+     env.renderGuiPrompt ?? ((base: string, vars?: Record<string, unknown>) => realRenderGuiPrompt(base, vars)),
+   );
+   return { sendFb, state };
+ }
 
 /** 0.1.6 形态宿主：无 get(id)，retain 才借得到 binding；release 后读 binding 抛错（真实语义）。 */
 function retainHost(session: any, record: { retains: any[]; releases: number; opened: any[] }) {
@@ -311,13 +358,26 @@ test("g-478 结构契约：sendFb 只消费共享 helper（无第二份 using/re
   assert.doesNotMatch(sendFbBody, /\.using\b/, "不得自带第二份 using 能力探测");
   assert.doesNotMatch(sendFbBody, /\.retain\b/, "不得自带第二份 retain 能力探测");
   assert.doesNotMatch(sendFbBody, /0\.1\.[56]/, "不得写版本号分支");
-  assert.match(goalActionsSrc, /【\$\{props\.goalId\} 判据反馈】\$\{criterion\}\\n\$\{t\}`/, "执行会话载荷模板仍逐字保留");
+  // g-496 att-007：载荷模板正文迁入宿主只读资产 ⇒ 源码面改判「经共享读取器引用该资产名」；
+  // 「逐字保留」由上方行为用例（真实资产 + 真实插值 + 注入安全）承担，判据强度只增不减。
+  assert.match(sendFbBody, /renderGuiPrompt\(\s*"gui-criteria-feedback-executor"/, "执行会话载荷必须经共享读取器取模板");
+  assert.match(sendFbBody, /renderGuiPrompt\(\s*"gui-criteria-feedback-supervisor"/, "主管通路载荷必须经共享读取器取模板");
+  assert.doesNotMatch(goalActionsSrc, /【\$\{props\.goalId\} 判据反馈】/, "载荷正文不得再内联在源码中");
+  // 读取失败必须明确报错并保持输入，绝不发空串/半截正文
+  assert.match(sendFbBody, /gui\.promptAssetLoadFail/, "资产读取失败必须给出可重试的明确提示");
   // 调用点补传 supervisorSession（CriteriaChecklist 此前拿不到它）
   assert.match(goalModalSrc, /h\(CriteriaChecklist, \{[^}]*supervisorSession: props\.supervisorSession[^}]*\}\)/, "goal-modal.js 调用点必须补传 supervisorSession");
   // 生成物同步
-  assert.ok(bundleSource.includes("判据反馈（该目标无执行会话 → 转主管）"), "bundle 必须含转主管载荷标记");
+  // g-496 att-007：转主管载荷标记已随正文迁入资产（bundle 不再含它）⇒ 改判为
+  // 「bundle 经共享读取器引用该资产名」+「资产正文确实带该标记」，语义等价且更强（连资产一起校验）。
+  assert.ok(bundleSource.includes("gui-criteria-feedback-supervisor"), "bundle 必须引用转主管载荷资产");
+  assert.ok(guiPromptAssets.get("gui-criteria-feedback-supervisor.zh.md")?.includes("判据反馈（该目标无执行会话 → 转主管）"),
+    "转主管资产正文必须含该载荷标记");
   assert.ok(bundleSource.includes("supervisorSession: props.supervisorSession"), "bundle 必须含补传后的调用点");
   assert.ok(bundleSource.includes("criteria.feedbackSupervisorDelivered"), "bundle 必须含新词条");
+  // g-496 att-007：bundle 必须带上共享读取器，且不得再内联载荷正文（唯一事实源 = 资产）。
+  assert.match(bundleSource, /async function loadGuiPromptAsset\(/, "bundle 必须含共享资产读取器");
+  assert.doesNotMatch(bundleSource, /【\$\{props\.goalId\} 判据反馈】/, "bundle 不得再内联载荷正文");
 });
 
 // ===== 判据 5：i18n 新增/修订 key 中英双语齐备、语义对应 =====

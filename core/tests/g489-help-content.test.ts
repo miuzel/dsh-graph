@@ -112,9 +112,23 @@ function modalProblems(modal: string): string[] {
   }
   if (!/HELP_CHAPTER_FIELDS\.map\(/.test(modal)) problems.push("三要素必须由 HELP_CHAPTER_FIELDS 驱动");
   // ③ 入门第一步：主管技能 + 可直接复制的示例提示词（示例文本走 i18n，本模块零工具名字面量）。
-  for (const needle of ['dgT("help.entry.title")', 'dgT("help.entry.body")', 'dgT("help.entry.prompt")', 'dgT("help.entry.promptLabel")', 'dgT("help.entry.copy")', 'className: "dg-help-entry-prompt"']) {
+  // g-496 att-007：示例提示词正文由字典迁入**宿主只读资产** ⇒ 源码面改判为
+  // 「经共享读取器按资产名异步取用」，且**不得**再出现 `dgT("help.entry.prompt")`（唯一事实源 = 资产）。
+  for (const needle of ['dgT("help.entry.title")', 'dgT("help.entry.body")', 'dgT("help.entry.promptLabel")', 'dgT("help.entry.copy")', 'className: "dg-help-entry-prompt"']) {
     if (!modal.includes(needle)) problems.push(`入门第一步缺 ${needle}`);
   }
+  if (!modal.includes('loadGuiPromptAsset("gui-help-takeover-example")')) {
+    problems.push('入门第一步的示例提示词必须经 loadGuiPromptAsset("gui-help-takeover-example") 取资产');
+  }
+  if (modal.includes('dgT("help.entry.prompt")')) {
+    problems.push("示例提示词不得再从字典取（dgT(\"help.entry.prompt\") 应已无常量副本）");
+  }
+  // 资产未就绪/读取失败时必须禁用复制入口（绝不复制空串或半截文本）。
+  if (!/const promptReady = typeof prompt === "string" && prompt\.length > 0/.test(modal)) {
+    problems.push("示例提示词必须有 promptReady 就绪判定（未就绪不得可复制）");
+  }
+  if (!/disabled: !promptReady/.test(modal)) problems.push("复制按钮必须以 !promptReady 禁用（防复制空串）");
+  if (!/if \(!promptReady\) return;/.test(modal)) problems.push("复制回调必须自行再判 promptReady（防竞态）");
   if (!/await copyText\(prompt\)/.test(modal)) problems.push("示例提示词必须复用工厂作用域的 copyText 复制实现");
   if (!/dgT\("help\.entry\.copied"\)/.test(modal) || !/dgT\("help\.entry\.copyFail"\)/.test(modal)) {
     problems.push("复制必须给出成功/失败的可读反馈（copied / copyFail）");
@@ -143,12 +157,19 @@ function modalProblems(modal: string): string[] {
 }
 
 /** 文案检查器（字典进、问题清单出）。 */
-function copyProblems(zh: Record<string, string>, en: Record<string, string>, tools: Set<string>, skills: Set<string>): string[] {
+function copyProblems(zh: Record<string, string>, en: Record<string, string>, tools: Set<string>, skills: Set<string>, assets?: Map<string, string>): string[] {
   const problems: string[] = [];
   const pairs = (key: string): [string, string] => [zh[key] ?? "", en[key] ?? ""];
   // ① 入门第一步：技能名 + 接管（claim）这一步 + 真实工具名。
   const [entryBody, entryBodyEn] = pairs("help.entry.body");
-  const [entryPrompt, entryPromptEn] = pairs("help.entry.prompt");
+  // g-496 att-007：示例提示词正文由字典迁入**宿主只读资产**（按界面语言择一）。
+  // 断言面同步迁移（强度不降：仍要求 zh/en 双份、仍要求含技能名与接管工具名、
+  // 仍要求 zh≠en），只是取值来源换成唯一事实源。`assets` 缺省时回退查字典，
+  // 使负向变异对照（内存注入假字典）仍可独立驱动本检查器。
+  const assetText = (name: string) => assets?.get(name) ?? "";
+  const [entryPrompt, entryPromptEn] = assets
+    ? [assetText("gui-help-takeover-example.zh.md"), assetText("gui-help-takeover-example.en.md")]
+    : pairs("help.entry.prompt");
   for (const [label, text, extra] of [["help.entry.body", entryBody, /接管/], ["help.entry.body(en)", entryBodyEn, /claim/i]] as Array<[string, string, RegExp]>) {
     if (!text.includes("dsh-graph-supervisor")) problems.push(`${label} 必须点名 dsh-graph-supervisor 技能`);
     if (!/dsh-graph(?![-\w])/.test(text)) problems.push(`${label} 必须提到 dsh-graph 技能作为并列选项`);
@@ -163,6 +184,9 @@ function copyProblems(zh: Record<string, string>, en: Record<string, string>, to
     problems.push("en 示例提示词必须含技能名与接管工具名");
   }
   if (norm(entryPrompt) === norm(entryPromptEn)) problems.push("示例提示词 zh/en 不得逐字相同（en 必须是真英文）");
+  // en 示例提示词不得混 CJK（与九章 en 文案同口径；原字典形态由「en 无 CJK」通用扫描兜住，
+  // 迁入资产后必须显式补上 —— 否则本判据在资产载体上会退化）。
+  if (CJK.test(entryPromptEn)) problems.push("示例提示词 en 文案含 CJK");
   // ② 九章：三要素齐全、非占位、非重复、en 零 CJK、锚点真实。
   const seenText = new Set<string>();
   for (const chapter of CHAPTERS) {
@@ -224,6 +248,18 @@ function readDicts(): [Record<string, string>, Record<string, string>] {
   const sandbox: any = { React: {} };
   vm.runInNewContext(readFileSync(i18nSrcPath, "utf8") + "; this.zh = zh; this.en = en;", sandbox);
   return [sandbox.zh as Record<string, string>, sandbox.en as Record<string, string>];
+}
+
+/** g-496 att-007：宿主专属层资产目录（示例提示词等 GUI 模板正文的唯一事实源）。 */
+const hostPromptsDir = join(repoRoot, "dsh-graph-host/prompts");
+/** 读入宿主层资产（名字 → 正文）；缺文件即为空串，由下方断言点名判红。 */
+function readHostAssets(): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const name of ["gui-help-takeover-example.zh.md", "gui-help-takeover-example.en.md"]) {
+    const p = join(hostPromptsDir, name);
+    out.set(name, existsSync(p) ? readFileSync(p, "utf8") : "");
+  }
+  return out;
 }
 
 // ================================================================ A. 分类真源 ≡ 注册真源（+ 负向对照）
@@ -296,7 +332,7 @@ test("g-489 B1：客户端由清单驱动渲染入门第一步与九章三要素
 
 test("g-489 B2：文案 zh/en 对称、真实（锚点指向现存界面标签）、非占位，且提到的工具/技能真实注册", () => {
   const [zh, en] = readDicts();
-  const problems = copyProblems(zh, en, new Set(registeredToolNames), new Set(registeredSkillNames));
+  const problems = copyProblems(zh, en, new Set(registeredToolNames), new Set(registeredSkillNames), readHostAssets());
   assert.deepEqual(problems, [], "文案断言必须全绿");
   // 红线条（g-495 改判）：help.*.md 不再声明**工具**数（改为功能模块清单 + 当前开关状态），
   // 故计数真源从「注册工具数」改判为「引擎模块注册表长度」。工具侧不变：注册真源仍须 == 51。
@@ -321,7 +357,20 @@ test("g-489 B2b（负向对照·内存变异）：占位行 / 缺三要素 / 编
   const [zh, en] = readDicts();
   const tools = new Set(registeredToolNames);
   const skills = new Set(registeredSkillNames);
-  assert.deepEqual(copyProblems(zh, en, tools, skills), [], "基线必须为绿");
+  const assets = readHostAssets();
+  assert.deepEqual(copyProblems(zh, en, tools, skills, assets), [], "基线必须为绿");
+  // 资产侧负向对照（g-496 att-007）：示例提示词迁入资产后，**资产本身**也必须受同一组判据约束
+  // —— 缺一份 / 清空 / en 是中文照抄 ⇒ 逐条必红（证明断言真的在读资产，而非恒真）。
+  const mutatedAssets: Array<[string, Map<string, string>, string]> = [
+    ["资产缺 en", new Map([...assets].filter(([n]) => !n.endsWith(".en.md"))), "示例提示词必须 zh/en 都有"],
+    ["资产 en 被清空", new Map([...assets].map(([n, v]) => [n, n.endsWith(".en.md") ? "" : v] as [string, string])), "示例提示词必须 zh/en 都有"],
+    ["资产 en 照抄 zh", new Map([...assets].map(([n, v]) => [n, n.endsWith(".en.md") ? assets.get("gui-help-takeover-example.zh.md")! : v] as [string, string])), "不得逐字相同"],
+    ["资产删掉技能名", new Map([...assets].map(([n, v]) => [n, v.replace("dsh-graph-supervisor", "dsh-graph")] as [string, string])), "必须含技能名与接管工具名"],
+  ];
+  for (const [label, mAssets, expect] of mutatedAssets) {
+    const got = copyProblems(zh, en, tools, skills, mAssets);
+    assert.ok(got.some((p) => p.includes(expect)), `资产变异「${label}」必须报红并点名「${expect}」，实际：${JSON.stringify(got)}`);
+  }
   type Mut = [string, Record<string, string>, Record<string, string>, string];
   const base = { ...zh };
   const mutations: Mut[] = [
@@ -336,7 +385,7 @@ test("g-489 B2b（负向对照·内存变异）：占位行 / 缺三要素 / 编
   ];
   for (const [label, mzh, men, expect] of mutations) {
     assert.ok(mzh !== base || men !== en, `负向对照「${label}」必须真实改变输入`);
-    const got = copyProblems(mzh, men, tools, skills);
+    const got = copyProblems(mzh, men, tools, skills, assets);
     assert.ok(got.some((p) => p.includes(expect)), `变异「${label}」必须报红并点名「${expect}」，实际：${JSON.stringify(got)}`);
   }
   assert.deepEqual([readDicts()[0]["help.mod.board.what"]], [zh["help.mod.board.what"]], "负向对照必须 hermetic（真实文件零改动）");

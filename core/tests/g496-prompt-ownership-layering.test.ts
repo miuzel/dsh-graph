@@ -9,15 +9,15 @@
  *   · **宿主专属层** `dsh-graph-host/prompts/` —— DSH 会话/section/GUI 动作语义专属正文。
  *
  * 本守卫断言的是**真实行为与真实布局**，不是注释自证：
- *   A. 布局不变量：26 份资产**只有一份受版本控制的源码副本**，全部在公共层 `prompts/`；
- *      宿主专属源目录**不含**任何资产（`help` 也归公共层源码，见下）；
- *      **没有**任何资产同时在两层出现（重复所有权 = 双源漂移）。
+ *   A. 布局不变量：**两层各自**只有一份受版本控制的源码副本 —— 公共层 26 份（24 提示词 + 2 主管
+ *      指南）、宿主专属层 18 份（g-496 att-007 迁入的 9 类 GUI 提示词模板 × zh/en）；
+ *      **没有**任何资产同时在两层出现（重复所有权 = 双源漂移）；zh/en 对偶是**跨层整体**属性。
  *   B. core 的定位与读取落在公共层（源形态 `../prompts/`），且**绝不**含宿主插件路径
  *      —— 结构性铁律：公共内核不得反向依赖某个宿主适配器。
  *   C. 宿主读取**按归属分根**：公共资产在源形态读 `../prompts/`、宿主专属读 `./prompts/`；
  *      宿主专属资产**不回落**公共层（漏宿主资产必须暴露，不得被公共资产悄悄顶替）。
  *   D. 构建**合并**两层 → `dist/prompts/`，且同名冲突 **fail-closed**（不依赖复制顺序覆盖）。
- *   E. 发布包内资产与公共层源码**逐字节一致**（复制是产物，不是第二份维护源码）；发布包
+ *   E. 发布包内资产与其**所属层**源码逐字节一致（复制是产物，不是第二份维护源码）；发布包
  *      **不依赖源码仓库**即可读取。
  */
 
@@ -38,30 +38,38 @@ const hostPrompts = join(repoRoot, "dsh-graph-host/prompts");
 const readMd = (dir: string) =>
   existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith(".md")).sort() : [];
 
-/** 期望的 26 份资产（24 提示词 + 2 主管指南，两语言对偶）。 */
+/** 期望的**公共层**资产数（24 提示词 + 2 主管指南，两语言对偶）。
+ *  g-496 att-007：GUI 提示词模板（9 类 × zh/en = 18 份）迁入**宿主专属层** ⇒ 公共层仍是 26，
+ *  随包总量 = 26 + 18 = 44。两个数各自独立断言（见下），不得互相顶替。 */
 const EXPECTED_ASSET_COUNT = 26;
+/** 宿主专属层资产数（g-496 att-007：9 类 GUI 提示词模板 × zh/en）。 */
+const EXPECTED_HOST_ASSET_COUNT = 18;
+/** 随包合并总量（公共层 + 宿主专属层）——**由两层清单相加得出，不硬编码**，
+ *  避免「新增/删除一类资产时忘记同步常量」把守卫变成假绿。 */
+const EXPECTED_MERGED_ASSET_COUNT = EXPECTED_ASSET_COUNT + EXPECTED_HOST_ASSET_COUNT;
 
 // ============================================================ A. 布局不变量
 
-test("g-496 L-A：26 份资产单一源码副本全在公共层，宿主源目录无资产、两层无重名", () => {
+test("g-496 L-A：公共层 26 份 / 宿主专属层 18 份，各自单一源码副本、两层无重名、zh/en 对偶", () => {
   const pub = readMd(publicPrompts);
   const host = readMd(hostPrompts);
 
   assert.equal(pub.length, EXPECTED_ASSET_COUNT,
     `公共层必须有 ${EXPECTED_ASSET_COUNT} 份资产，实得 ${pub.length}：${pub.join(", ")}`);
 
-  // 宿主专属**源**目录当前为空：唯一宿主专属资产（help）按语义归属仍以公共层为源码位置？
-  // 否 —— 见下方断言：help 的**源码**也必须在公共层，宿主层不得持有第二份。
-  assert.equal(host.length, 0,
-    `宿主专属源目录不得残留资产（否则形成第二份维护源码），实得：${host.join(", ")}`);
+  // g-496 att-007：宿主专属层**现在承载 9 类 GUI 提示词模板**（zh/en 对偶）。
+  // 原守卫要求该目录为空，是因为当时尚无宿主专属资产；**所有权分层的判据本身不变**：
+  // 每个资产在两层中**恰有一份**受版本控制的源码副本，且两层不得同名。
+  assert.equal(host.length, EXPECTED_HOST_ASSET_COUNT,
+    `宿主专属层必须有 ${EXPECTED_HOST_ASSET_COUNT} 份资产（9 类 GUI 模板 × zh/en），实得 ${host.length}：${host.join(", ")}`);
 
   // 重复所有权守卫：同名资产绝不得同时在两层存在。
   const overlap = pub.filter((n) => host.includes(n));
   assert.deepEqual(overlap, [], `两层不得有同名资产（重复所有权）：${overlap.join(", ")}`);
 
-  // zh/en 对偶：每个 base 恰有 zh/en 两份。
+  // zh/en 对偶：**两层合并后**每个 base 恰有 zh/en 两份（对偶是跨层的整体属性）。
   const bases = new Map<string, string[]>();
-  for (const n of pub) {
+  for (const n of [...pub, ...host]) {
     const m = /^(.+)\.(zh|en)\.md$/.exec(n);
     assert.ok(m, `资产名必须形如 <base>.<lang>.md，实得 ${n}`);
     bases.set(m![1], [...(bases.get(m![1]) ?? []), m![2]]);
@@ -71,8 +79,7 @@ test("g-496 L-A：26 份资产单一源码副本全在公共层，宿主源目�
   }
 });
 
-test("g-496 L-A2：主管指南与全部注入资产都在公共层（含 supervisor-guide 迁出包根）", () => {
-  // 主管技能指南按裁定归公共层（跨宿主守则），且不再位于插件根目录。
+test("g-496 L-A2：主管指南与全部注入资产都在公共层（含 supervisor-guide 迁出包根）", () => {  // 主管技能指南按裁定归公共层（跨宿主守则），且不再位于插件根目录。
   for (const n of ["supervisor-guide.zh.md", "supervisor-guide.en.md"]) {
     assert.ok(existsSync(join(publicPrompts, n)), `${n} 必须在公共层 prompts/`);
     assert.ok(!existsSync(join(repoRoot, "dsh-graph-host", n)),
@@ -154,11 +161,37 @@ test("g-496 L-C：宿主读取按归属分根；宿主专属资产不回落公�
   assert.ok(typeof mod.helpAssetRelativePath === "function", "注册表投影必须可读");
   // 全部注册项都指向合并后的 prompts/ 布局（不再有根级特例）。
   const { HELP_PROMPT_ASSETS } = mod;
-  assert.equal(HELP_PROMPT_ASSETS.length, EXPECTED_ASSET_COUNT,
-    `白名单必须覆盖全部 ${EXPECTED_ASSET_COUNT} 份随包资产，实得 ${HELP_PROMPT_ASSETS.length}`);
+  // g-496 att-007：白名单覆盖**两层合并后的全部**随包资产（公共 26 + 宿主 18 = 44）。
+  assert.equal(HELP_PROMPT_ASSETS.length, EXPECTED_MERGED_ASSET_COUNT,
+    `白名单必须覆盖全部 ${EXPECTED_MERGED_ASSET_COUNT} 份随包资产（公共层 + 宿主专属层），实得 ${HELP_PROMPT_ASSETS.length}`);
   for (const name of HELP_PROMPT_ASSETS) {
     assert.equal(mod.helpAssetRelativePath(name), `prompts/${name}`,
       `${name} 的注册路径必须在合并后的 prompts/ 布局`);
+  }
+  // ⑤ g-496 att-007：**所有权真源仍唯一起作用** —— 宿主观测到的归属必须与源码所在层**双向对齐**。
+  //    经由导出的只读投影 helpAssetOwnership（内部 assetOwnership 的公开面，同一注册表真源，
+  //    不新增第二份清单）读取，判据等价于 reader 内部使用的那一条。
+  //    口径：入参是**基名**（不带 `.zh`/`.en` 语言后缀）——归属是资产的**跨语言**属性。
+  assert.ok(typeof mod.helpAssetOwnership === "function", "归属投影必须可读（只读，投影自注册表）");
+  const baseOf = (n: string) => n.replace(/\.(zh|en)\.md$/, "");
+  const hostNames = readMd(hostPrompts);
+  const pubNames2 = readMd(publicPrompts);
+  assert.equal(hostNames.length, EXPECTED_HOST_ASSET_COUNT,
+    `宿主专属层应为 ${EXPECTED_HOST_ASSET_COUNT} 份，实得 ${hostNames.length}`);
+  for (const n of hostNames.map(baseOf)) {
+    assert.equal(mod.helpAssetOwnership(n), "host", `${n} 的归属必须是 host（源码位于宿主专属层）`);
+    assert.ok(HELP_PROMPT_ASSETS.includes(`${n}.zh.md`) && HELP_PROMPT_ASSETS.includes(`${n}.en.md`),
+      `${n} 的 zh/en 两份都必须登记进白名单`);
+  }
+  for (const n of pubNames2.map(baseOf)) {
+    assert.notEqual(mod.helpAssetOwnership(n), "host",
+      `${n} 的源码在公共层，归属不得被判为 host`);
+  }
+  // 归属与真实源码位置**双向对齐**：标 host 的必须真在宿主层文件里存在（且公共层不得有同名）。
+  const hostBases = new Set(hostNames.map(baseOf));
+  for (const name of HELP_PROMPT_ASSETS) {
+    if (mod.helpAssetOwnership(baseOf(name)) !== "host") continue;
+    assert.ok(hostBases.has(baseOf(name)), `${name} 标为 host 但宿主层无此文件（归属失真）`);
   }
 });
 
@@ -227,18 +260,28 @@ test("g-496 L-D2：合并冲突检测真实生效——造同名资产必须判�
 
 // ============================================================ E. 产物一致性与独立包
 
-test("g-496 L-E：随包 dist/prompts 与公共层源码逐字节一致（复制是产物，非第二源码）", () => {
+test("g-496 L-E：随包 dist/prompts 与两层源码逐字节一致（复制是产物，非第二源码）", () => {
   const distPrompts = join(distRoot, "prompts");
   assert.ok(existsSync(distPrompts), "dist/prompts 必须存在（先跑 bash scripts/build.sh）");
   const distNames = readMd(distPrompts);
   const pubNames = readMd(publicPrompts);
+  const hostNames = readMd(hostPrompts);
 
-  assert.equal(distNames.length, EXPECTED_ASSET_COUNT,
-    `随包资产必须恰 ${EXPECTED_ASSET_COUNT} 份，实得 ${distNames.length}`);
-  assert.deepEqual(distNames, pubNames, "随包资产集合必须与公共层源码集合一致");
+  // g-496 att-007：随包资产 = 两层合并（公共 26 + 宿主 18 = 44）。
+  assert.equal(distNames.length, EXPECTED_MERGED_ASSET_COUNT,
+    `随包资产必须恰 ${EXPECTED_MERGED_ASSET_COUNT} 份（公共层 + 宿主专属层），实得 ${distNames.length}`);
+  // 合并后的集合必须**精确等于**两层并集（既不漏层，也不多出无源资产）。
+  assert.deepEqual(distNames, [...pubNames, ...hostNames].sort(),
+    "随包资产集合必须精确等于公共层 ∪ 宿主专属层（不得漏层或凭空多出）");
+  // 逐份断言「产物 ≡ 其**所属层**的源码」，逐字节（复制是产物，不是第二份维护源码）。
   for (const n of pubNames) {
     assert.equal(readFileSync(join(distPrompts, n), "utf8"), readFileSync(join(publicPrompts, n), "utf8"),
       `${n}：随包产物必须与公共层源码逐字节一致`);
+  }
+  // g-496 att-007 新增：宿主专属层同样必须逐字节一致（此前该层为空 ⇒ 这条腿无从检验）。
+  for (const n of hostNames) {
+    assert.equal(readFileSync(join(distPrompts, n), "utf8"), readFileSync(join(hostPrompts, n), "utf8"),
+      `${n}：随包产物必须与宿主专属层源码逐字节一致`);
   }
 });
 

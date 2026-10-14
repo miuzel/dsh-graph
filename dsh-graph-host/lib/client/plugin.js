@@ -291,6 +291,8 @@
         const localeService = optionalService(ctx, "locale");
         const localeBind = registerI18n({ locale: localeService });
         dgT = createTranslator(localeBind);
+        // g-496：模板语言与 dgT **同源同时更新**（guiPromptAssetLang 只读该变量，不自行探测语言）。
+        dgLang = localeService ? resolveInterfaceLanguage(localeService) : "zh";
         // 记录「字典已注册在哪个服务实例上」：同一实例只注册一次（locale.register 对同一 ns+locale 会抛
         // `already has locale`），而服务实例更换（provider 重启/重放）时必须**重新注册**——否则新实例上
         // 命名空间缺失，翻译会退回本地中文字典（语言又不跟随了）。
@@ -307,6 +309,8 @@
         const refreshLocale = (svc) => {
           // bind 返回稳定引用、按当前活跃语言求值；语言切换后必须重新取一次翻译函数。
           try { dgT = createTranslator(svc.bind("dsh-graph")); } catch { return; }
+          // g-496：模板语言跟随界面语言切换（同一处、同一真源，避免两处判定漂移）。
+          dgLang = resolveInterfaceLanguage(svc);
           // 通知已挂载的看板组件重渲染（useLocaleRevision 订阅本事件）；无 DOM 环境静默降级。
           if (typeof window !== "undefined") {
             try { window.dispatchEvent(new CustomEvent('dsh-graph:locale-changed')); } catch { /* 静默 */ }
