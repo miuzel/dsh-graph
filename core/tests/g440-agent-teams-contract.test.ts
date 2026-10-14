@@ -218,12 +218,22 @@ test("g-440 判据 1：双语对称（guide/discipline/契约资产行数）+ do
     "docs 必须指向契约新资产的路径（否则读者找不到契约真源）",
   );
   // 正文完整性**直接施于真源**：契约关键句必须逐条在契约资产里（载体从 docs 副本前移到真源）。
+  // 注意：此处**不得**写 `for (l of lines(contractZh)) assert.ok(contractZh.includes(l))` —— 那是恒真自指
+  // （被查集合与来源集合是同一份文本），零保护力。改锚到**独立见证源**：资产行数对称 + 关键句承重。
   const contractZh = sourceContract("zh");
-  for (const l of lines(contractZh)) {
-    if (l.trim() === "") continue;
-    assert.ok(contractZh.includes(l), `契约真源自包含失败：${l.slice(0, 40)}…`);
+  const contractEn = sourceContract("en");
+  assert.equal(
+    lines(contractZh).filter((l) => l.trim() !== "").length,
+    lines(contractEn).filter((l) => l.trim() !== "").length,
+    "契约资产 zh/en 非空行数必须对称",
+  );
+  const nonEmpty = lines(contractZh).filter((l) => l.trim() !== "");
+  assert.ok(nonEmpty.length >= 7, "契约资产行数下限（防被掏空成空壳）");
+  // 逐条承重句：每一条都必须在真源里真实存在，且**删掉任一条**后真源确实变化（证明不是恒真）。
+  for (const k of KEYS_ZH) {
+    assert.ok(contractZh.includes(k), `契约真源缺承重关键句：${k}`);
+    assert.notEqual(contractZh.replace(k, ""), contractZh, `关键句必须是可删除的实体：${k}`);
   }
-  for (const k of KEYS_ZH) assert.ok(contractZh.includes(k), `契约真源缺承重关键句：${k}`);
   // 且**不再**要求 docs 含这些行（反向：若 docs 仍逐行复制契约，上面的 doesNotMatch 会先红）。
 });
 

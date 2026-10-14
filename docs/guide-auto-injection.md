@@ -94,23 +94,6 @@ sp.section({
   },
 });
 ```
-// apply() 的 registerGuideSection 内：
-sp.section({
-  name: "dsh-graph-supervisor-discipline",
-  order: 11,
-  text: (context) => {
-    try {
-      const sessionId = context?.agent?.session?.id;
-      if (!sessionId) return "";
-      const supervisorId = readSupervisorSession(root);
-      if (!supervisorId || supervisorId !== sessionId) return "";
-      return "\n" + localizedPrompt("discipline", language);
-    } catch {
-      return "";
-    }
-  },
-});
-```
 
 - **仅主管会话注入**：通过 `context.agent.session.id` 与 `project.yaml` 的 `supervisor.session` 比对，
   不匹配时返回空字符串（零 token 成本）；
