@@ -29,7 +29,7 @@
 import { test } from "node:test";
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, renameSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
 import { apply, _helpTopicText, _isGraphEngineeringSectionTitle } from "../../dist/index.js";
@@ -79,6 +79,27 @@ const registeredToolNames: string[] = captured.registered.map((d) => String(d?.n
 const helpDef = captured.registered.find((d) => d.name === "graph_help");
 assert.ok(helpDef, "必须注册 graph_help");
 const runHelp = (args: any): any => helpDef.execute(args ?? {}, { agent: undefined, signal: new AbortController().signal });
+
+/** g-495 att-005（D6）：在**私有可写包副本**里真实加载插件并取 `graph_help.execute()`。
+ *  副本是 `dist/` 的逐字节复制（index.js + prompts/ + core/ + lib/），故走的是**同一份引擎代码与
+ *  同一套资产读取路径**（`import.meta.url` 相对解析 ⇒ 天然指向副本内的 `prompts/`）；副本可写，
+ *  运行树保持只读零改动。返回的函数与 `runHelp` 同形（同一真实 run 入口）。 */
+async function loadCopyHelp(entryPath: string): Promise<(args: any) => any> {
+  const mod: any = await import(entryPath);
+  const registered: any[] = [];
+  const webServer = { register: () => () => {} };
+  const ctx: any = {
+    inject: () => ctx,
+    effect: (fn: any) => fn(),
+    get: (name: string) => (name === "webServer" ? webServer : null),
+    tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
+    webServer,
+  };
+  mod.apply(ctx, {});
+  const def = registered.find((d) => d.name === "graph_help");
+  assert.ok(def, "私有副本必须同样注册 graph_help");
+  return (args: any) => def.execute(args ?? {}, { agent: undefined, signal: new AbortController().signal });
+}
 
 /** i18n.js 是工厂作用域片段（无 import/export）⇒ 在独立 vm 上下文里求值取 zh/en（同 g-481/g-489 口径）。 */
 function readDicts(): [Record<string, string>, Record<string, string>] {
@@ -498,6 +519,11 @@ test("g-493 C1（负向对照·内存变异）：点题章节缺失 / 定义被�
 
 // ================================================================ D. graph_help(topic)
 
+/** g-495 att-005：usage **按需面资产**全文（`topic=usage` 的权威来源）。
+ *  在 D1 之前读一次，供「真实资产全文比对」与后续 en 对偶使用；**不从 help 派生**。 */
+const usageAssetZhFull = readFileSync(usageZhPromptPath, "utf8");
+const usageAssetEnFull = readFileSync(usageEnPromptPath, "utf8");
+
 test("g-493 D1（g-495 改判）：graph_help 省略 topic 返回渲染后全文；usage / graph_engineering / 模块名各自取到切片；未知名不伪造", () => {
   const raw = readFileSync(helpZhPromptPath, "utf8");
   const full = String(runHelp({}).help ?? "");
@@ -509,8 +535,31 @@ test("g-493 D1（g-495 改判）：graph_help 省略 topic 返回渲染后全文
 
   const usage = runHelp({ topic: "usage" });
   assert.equal(usage.found, true, "topic=usage 必须命中");
-  assert.ok(usage.help.length > 0 && usage.help.length < full.length, "usage 必须是切片而不是全文");
-  assert.equal(usage.help, full.slice(0, full.indexOf("\n## ")).trimEnd(), "usage = 文首到第一个二级标题");
+  // g-495 att-005 返工（负责人 2026-10-15 真实 review 授权）：旧断言把 usage 钉成
+  // `full.slice(0, full.indexOf("\n## "))` —— 那是**自指公式**（拿 help 切片去比 help 切片），
+  // 于是「usage 只返回 help 首句 10 字符」这种死链照样判绿。现改为**真实 usage 资产全文比对**
+  // + 若干**独立语义锚点**（锚点不由本文件的比对公式派生 ⇒ 返回 10 字符 / 只截到 1220 字必红）。
+  assert.equal(usage.help, usageAssetZhFull.trimEnd(), "topic=usage 必须逐字返回 prompts/usage.zh.md 全文");
+  assert.ok(usage.help.length > 3000, `usage 切片必须是完整使用说明（实得 ${usage.help.length} 字符；旧死链只有 10 字符）`);
+  assert.ok(usage.help.includes("## 工具细则"), "usage 必须含「工具细则」章节标题（不得只截到首个二级标题之前）");
+  assert.ok(usage.help.includes("graph_start_attempt"), "usage 必须含工具签名条目（graph_start_attempt）");
+  assert.ok(usage.help.includes("baseline_commit"), "usage 必须含字段口径锚点 baseline_commit");
+  assert.ok(usage.help.includes("machine_report"), "usage 必须含证据分层锚点 machine_report");
+  assert.ok(usage.help.includes("证据分层"), "usage 必须保留证据分层措辞（machine_report 证据分层）");
+  // 与 help 的关系：usage 是**按需面资产**，不是 help 资产的任何切片 —— 两条路径彼此独立。
+  assert.ok(!raw.includes("## 工具细则"), "help.zh.md 不得含工具细则章节（细则只在 usage 按需面）");
+  assert.ok(usage.help.length > full.length, "usage 按需面必须比默认 help 更长（否则渐进式披露退化）");
+  // 同义词 / 大小写覆盖（负责人 2026-10-15 实测面）：usage / 使用说明 / USAGE 都必须取到同一份全文。
+  for (const alias of ["usage", "USAGE", "Usage", "使用说明"]) {
+    const r = runHelp({ topic: alias });
+    assert.equal(r.found, true, `topic「${alias}」必须命中 usage`);
+    assert.equal(r.help, usage.help, `topic「${alias}」必须与 topic=usage 返回同一份 usage 全文`);
+  }
+  // en 侧对偶：真实实现（经 `_helpTopicText` 的追加面绑定）在 en usage 资产上必须返回 en 全文。
+  const enUsage = _helpTopicText("", "usage", [usageAssetEnFull]);
+  assert.equal(enUsage, usageAssetEnFull.trimEnd(), "en usage 面必须逐字返回 prompts/usage.en.md 全文");
+  assert.ok(enUsage!.includes("## Tool details"), "en usage 全文必须含 Tool details 章节（en 对偶锚点）");
+  assert.ok(enUsage!.includes("machine_report"), "en usage 全文必须含字段口径锚点 machine_report");
 
   const ge = runHelp({ topic: "graph_engineering" });
   assert.equal(ge.found, true, "topic=graph_engineering 必须命中");
@@ -520,13 +569,11 @@ test("g-493 D1（g-495 改判）：graph_help 省略 topic 返回渲染后全文
   assert.equal(ge.help, runHelp({ topic: "图工程" }).help, "zh 别名与英文主题名必须取到同一段");
   // g-495 返工（裁决·出路 1）：点题段**已从 help 迁到按需面 usage** ⇒ 命中的切片必须来自 usage，
   // 且与 usage 资产里的该章节逐字相等（跨资产查找的**正**证据；负向对照见 D4）。
-  const usageAssetZh = readFileSync(join(repoRoot, "prompts/usage.zh.md"), "utf8");
-  assert.ok(usageAssetZh.includes(ge.help), "topic=graph_engineering 的切片必须逐字取自 usage.zh.md 的该章节");
+  assert.ok(usageAssetZhFull.includes(ge.help), "topic=graph_engineering 的切片必须逐字取自 usage.zh.md 的该章节");
   assert.ok(!raw.includes(GRAPH_ENGINEERING_DEFINITION), "help.zh.md 仍不得含点题定义（载体只在 usage）");
   // en 侧同一路径：language 由配置解析（本夹具为 zh），故 en 不走 `execute()`，而是直接验证
   // **en usage 资产**承载了同名章节（跨资产查找对 en 面同样成立；英译对偶，不要求含 zh 逐字串）。
-  const usageAssetEn = readFileSync(join(repoRoot, "prompts/usage.en.md"), "utf8");
-  const enSection = usageAssetEn.split(/\n(?=## )/).find((s) => s.startsWith("## ") && /dsh-graph/.test(s.split("\n")[0]!) && /Graph Engineering/i.test(s.split("\n")[0]!));
+  const enSection = usageAssetEnFull.split(/\n(?=## )/).find((s) => s.startsWith("## ") && /dsh-graph/.test(s.split("\n")[0]!) && /Graph Engineering/i.test(s.split("\n")[0]!));
   assert.ok(enSection, "usage.en.md 必须含「为什么叫 dsh-graph…」章节（en 查找面）");
   assert.ok(/Graph Engineering/.test(enSection!), "en 章节必须点题 Graph Engineering");
   assert.ok(/mcp\.so/.test(enSection!), "en 章节必须标注来源 mcp.so");
@@ -583,20 +630,31 @@ test("g-493 D2（g-495 返工项 B 负向对照·经**真实实现**）：把「
     assert.equal(_helpTopicText(raw, name, []), null, `真实实现：工具名「${name}」必须不命中（返回 null）`);
   }
   // ② 反向对照：**真实实现**能对「确有该主题」的输入给出非 null —— 证明判据不是恒 null 的恒真式。
-  assert.notEqual(_helpTopicText(raw, "usage", []), null, "真实实现：usage 必须命中（否则上面的 null 是恒真）");
+  //    g-495 att-005：`usage` 主题的权威面是**按需资产**，必须经追加面显式绑定（不再从 help 派生）。
+  assert.notEqual(_helpTopicText(raw, "usage", [usageAssetZhFull]), null, "真实实现：绑定 usage 按需面后必须命中（否则上面的 null 是恒真）");
+  assert.equal(_helpTopicText(raw, "usage", []), null, "真实实现：不绑定 usage 按需面时 usage 主题必须不命中（help 面不承载细则）");
   // ③ 把旧分支的行为**真的做出来**：旧实现对 `- <工具名>(` 行返回该行。这里用真实实现无法制造
-  //    「工具名命中」，故改判到**等价或更强**的载体 —— 用真实实现证明「资产里加回工具条目行」
-  //    对真实查找**确实产生可观察的输入变化**（同一条输入在真实函数上的裁决由 raw → withLegacyRow 翻转）。
-  //    `usage` 切片 = 文首到首个二级标题，故条目行必须插在**文首区**（追加到文末落不进该切片）。
-  const withLegacyRow = `- graph_create_goal(title[, version]) 建目标\n${raw}`;
-  assert.notEqual(withLegacyRow, raw, "负向对照必须真实改变输入");
-  // 真实实现上：把工具条目行插进**首个二级标题之前**（即 usage 切片区）⇒ `usage` 切片必须随之变化，
-  // 由真实函数给出裁决（若判据恒真，这里不会翻转）。
-  const mutatedUsage = _helpTopicText(withLegacyRow, "usage", []);
-  const realUsage = _helpTopicText(raw, "usage", []);
-  assert.notEqual(mutatedUsage, realUsage, "真实实现：资产变异后 usage 切片必须变化（判据可被证伪）");
-  assert.ok(mutatedUsage!.includes("graph_create_goal(title[, version]) 建目标"), "真实实现：变异内容必须进入真实切片");
-  assert.ok(!realUsage!.includes("graph_create_goal(title[, version])"), "基线对照：未变异切片不得含该条目行");
+  //    「工具名命中」，故改判到**等价或更强**的载体 —— 用真实实现证明「真实 usage 资产里的内容变化」
+  //    经真实查找函数**确实产生可观察的裁决变化**（若判据恒真，这里不会翻转）。
+  const MUTANT_ROW = "- graph_ZZZ_mutant_probe(fake) 变异探针条目";
+  assert.ok(!usageAssetZhFull.includes("graph_ZZZ_mutant_probe"), "变异探针串不得原本就存在于真实资产（否则负向对照退化）");
+  const withLegacyRow = `${usageAssetZhFull}\n${MUTANT_ROW}\n`;
+  assert.notEqual(withLegacyRow, usageAssetZhFull, "负向对照必须真实改变输入");
+  // 真实实现上：给真实 usage 面追加条目行 ⇒ 真实返回的 usage 切片必须随之变化，由真实函数给出裁决。
+  const mutatedUsage = _helpTopicText("", "usage", [withLegacyRow]);
+  const realUsage = _helpTopicText("", "usage", [usageAssetZhFull]);
+  assert.notEqual(mutatedUsage, realUsage, "真实实现：usage 面变异后返回切片必须变化（判据可被证伪）");
+  assert.ok(mutatedUsage!.includes(MUTANT_ROW), "真实实现：变异内容必须进入真实返回切片");
+  assert.ok(!realUsage!.includes(MUTANT_ROW), "基线对照：未变异返回值不得含该变异条目行");
+  // ③′ **空壳变异必红（经真实实现）**：这是 att-005 死链的**最小复现** —— 旧实现只返回 help 首句
+  //     那样的 10 字符内容时，下面的「含工具细则」判据必须判红（而不是被自指公式放行）。
+  const SHELL = "共 5 个功能模块：";
+  assert.equal(SHELL.length, 10, "空壳复现串必须恰为 10 字符（对齐负责人实测的 help 首句）");
+  assert.ok(!SHELL.includes("## 工具细则"), "空壳不含工具细则（负向前置）");
+  const shellHit = _helpTopicText("", "usage", [SHELL]);
+  assert.equal(shellHit, SHELL, "空壳面会被真实实现原样返回（故须由下方内容锚点判据兜住）");
+  assert.ok(!shellHit!.includes("## 工具细则"), "真实实现：空壳返回不得含工具细则 ⇒ D1 的内容锚点必红（死链回归可被捕获）");
+  assert.ok(!shellHit!.includes("machine_report"), "真实实现：空壳返回不得含 machine_report ⇒ D1 的证据分层锚点必红");
   // ④ 无论资产怎么变，**工具名 topic 在真实实现上恒不命中** —— 这正是 D1 负向断言的判别力来源。
   assert.equal(_helpTopicText(withLegacyRow, "graph_create_goal", []), null, "真实实现：加回工具条目行也不得让工具名 topic 命中");
 });
@@ -705,57 +763,131 @@ test("g-493 D5（g-495 返工项 C）：help/usage 两面都有同形点题章�
   assert.equal(_helpTopicText(helpWithTopic, "graph_engineering", [usageZh]), HELP_TOPIC, "help 面复活该章节后真实实现必须返回 help 版本（优先级翻转可观察）");
 });
 
+// ================================================================ D7. usage 分支的面绑定语义（att-005）
+
+test("g-493 D7（g-495 att-005）：usage 主题的**面绑定**明确 —— 权威面是 usage 追加面，绝不回落 help 切片", () => {
+  // att-005 修的死链根因：`usage` 分支曾取 **help 正文**「文首到首个 `## `」⇒ 返回 help 首句
+  // （实得 10 字符），与「usage 该返回完整使用说明」的承诺脱节。修法把该分支**只绑定 usage 追加面**。
+  // 本用例把新语义的**每个可观察侧面**钉成断言（含与 graph_engineering 的语义**独立性**）。
+  const HELP_FACE = "共 5 个功能模块：\n\n## 功能模块\n| 模块 | 作用 | 状态 |\n";
+  const USAGE_FACE = "usage 前言\n## 工具细则（描述里已裁剪，按需查这里）\n\n**graph_start_attempt** —— 字段口径。\n";
+  // (i) 只认 usage 追加面：传了 usage 面就返回 **usage 全文**（含 `## ` 之后的内容）。
+  assert.equal(_helpTopicText(HELP_FACE, "usage", [USAGE_FACE]), USAGE_FACE.trimEnd(), "usage 必须逐字返回 usage 追加面全文");
+  assert.ok(_helpTopicText(HELP_FACE, "usage", [USAGE_FACE])!.includes("## 工具细则"), "usage 返回必须含 `## 工具细则`（不得只截到首个二级标题之前）");
+  assert.ok(!_helpTopicText(HELP_FACE, "usage", [USAGE_FACE])!.includes("功能模块"), "usage 返回必须**不含** help 面内容（面绑定互不串味）");
+  // (ii) 语义独立性（**这是与 graph_engineering 的关键差别**）：help 面**再丰富也影响不到** usage ——
+  //      即便 help 面自带完整 usage 形态的正文，usage 仍只认 usage 追加面。
+  const richHelp = `${HELP_FACE}\n## 工具细则\nhelp 面自带的假细则\n`;
+  assert.equal(_helpTopicText(richHelp, "usage", [USAGE_FACE]), USAGE_FACE.trimEnd(), "help 面内容不得影响 usage 结果（help 面不是 usage 的来源）");
+  // (iii) 追加面缺失/为空 ⇒ **不命中**（而不是回落 help 切片 —— 回落会把死链放回来）。
+  for (const [label, faces] of [["[]", []], ["[\"\"]", [""]], ["[null]", [null]]] as Array<[string, any[]]>) {
+    assert.equal(_helpTopicText(HELP_FACE, "usage", faces), null, `追加面为 ${label} 时 usage 必须不命中（不得回落 help 切片）`);
+  }
+  // (iv) 与 graph_engineering 的对照：同一组输入上两个 topic 走**不同**的面。
+  //      graph_engineering 在 help 面命中时返回 help 版本（help 优先），而 usage 永远不看 help 面。
+  const GE = "## 为什么叫 dsh-graph：图工程\nHELP 版本";
+  const helpWithGe = `${HELP_FACE}\n${GE}\n`;
+  assert.equal(_helpTopicText(helpWithGe, "graph_engineering", [USAGE_FACE]), GE, "graph_engineering 仍须 help 优先（既有语义不受本次修复影响）");
+  assert.equal(_helpTopicText(helpWithGe, "usage", [USAGE_FACE]), USAGE_FACE.trimEnd(), "同一输入上 usage 仍只取 usage 面（两 topic 语义相互独立）");
+  // (v) 大小写 / 别名归一后走**同一分支**：usage / USAGE / Usage / 使用说明 结果必须一致。
+  for (const alias of ["usage", "USAGE", "Usage", "使用说明"]) {
+    assert.equal(_helpTopicText(HELP_FACE, alias, [USAGE_FACE]), USAGE_FACE.trimEnd(), `别名「${alias}」必须与 usage 走同一分支并返回同一全文`);
+  }
+  // (vi) 真实资产上的端到端复核：真实 execute() 的返回必须等于真实 usage 资产全文
+  //      （并**不得**等于 help 首句那种切片）—— 死链的直接判据。
+  const real = runHelp({ topic: "usage" });
+  assert.equal(real.help, usageAssetZhFull.trimEnd(), "真实 execute 必须返回真实 usage 资产全文");
+  const rawHelp = readFileSync(helpZhPromptPath, "utf8");
+  const helpFirstSection = (rawHelp.split("\n## ")[0] ?? "").trimEnd();
+  assert.notEqual(helpFirstSection.length, real.help.length, "usage 返回**不得**退化为 help 首句切片（死链形态）");
+  assert.ok(real.help.length > helpFirstSection.length * 10, `usage 全文必须远大于 help 首句（${real.help.length} vs ${helpFirstSection.length}）`);
+});
+
 // ================================================================ D6. fail-open 消除（g-495 返工项 A）
 
-test("g-493 D6（g-495 返工项 A）：usage 资产不可读 ⇒ **真实 execute() 必须抛错**，不得静默伪装成「主题不存在」", () => {
+test("g-493 D6（g-495 返工项 A）：usage 资产不可读 ⇒ **真实 execute() 必须抛错**，不得静默伪装成「主题不存在」", async () => {
   // 问题（主管实测 index.js:3457-3459）：`try { usageRaw = localizedPrompt("usage", …) } catch { usageRaw = "" }`
   // 把「资产**不可读**」与「该面**不存在**」折叠成同一结果 ⇒ `topic=graph_engineering` 静默返回
   // `found:false`，掩盖真实故障。修法（选项 (a)，最小实现）：**不 catch**，让 `requirePromptAsset`
   // 的异常直接上抛，故障显性可观察。
-  // 本用例在**真实运行时路径**上验证：对**真实资产文件**做变异（临时移开 → 真跑 → 还原）。
-  const usageAsset = join(repoRoot, "dist/prompts/usage.zh.md");
-  assert.ok(existsSync(usageAsset), "真实运行时的 usage 资产必须存在（否则本用例无从变异）");
-  const originalBytes = readFileSync(usageAsset);
-  const parkedPath = `${usageAsset}.__g495_mutation_park__`;
-  assert.ok(!existsSync(parkedPath), "变异暂存路径必须干净（上次残留即判红，避免误删他人文件）");
+  // 本用例在**真实运行时路径**上验证：在 `tmp/` 下的**私有可写包副本**里删掉 usage 资产，
+  // 再**真跑**该副本的真实 `apply()` + `graph_help.execute()` —— 断言它抛错。
+  // g-495 att-005 改判（负责人 2026-10-15 授权）：**不再** rename 运行中的 `dist/prompts/` 资产 ——
+  // 该目录在真实部署下是**只读**（EROFS），rename 会失败/污染运行包。私有副本既真实（同一份
+  // index.js + prompts + core 编译产物，逐字节复制）又可写，且与运行树零耦合。
   // 源码层钉住：**不得**再出现把 usage 读取失败吞成空串的 catch（人为回退 ⇒ 必红）。
   const engineSrc = readFileSync(engineSrcPath, "utf8");
   assert.ok(
     !/try \{\s*usageRaw = localizedPrompt\("usage"/.test(engineSrc),
-    "引擎不得再 catch usage 读取失败（fail-open 回退必须判红）",
+    "引擎不得再 catch usage 读取失败（fail-open 回退必红）",
   );
   assert.ok(
     /const usageRaw = localizedPrompt\("usage", language\);/.test(engineSrc),
     "引擎必须以**裸调用**读取 usage 资产（异常上抛）",
   );
-  const usageEnAsset = join(repoRoot, "dist/prompts/usage.en.md");
-  assert.ok(existsSync(usageEnAsset), "en usage 资产同样必须存在（zh/en 双向对称钉住）");
-  // 前置基线：资产在手时真实 execute() 必须命中（否则下面的「抛错」判据无从对照）。
-  assert.equal(runHelp({ topic: "graph_engineering" }).found, true, "基线：资产可读时真实 execute 必须命中");
-  let threw: unknown = null;
-  let observed: any = null;
+  const distDir = join(repoRoot, "dist");
+  for (const rel of ["index.js", "prompts/usage.zh.md", "prompts/usage.en.md"]) {
+    assert.ok(existsSync(join(distDir, rel)), `运行树必须含 ${rel}（私有副本逐字节复制的来源）`);
+  }
+  const tmpRoot = join(repoRoot, "tmp");
+  mkdirSync(tmpRoot, { recursive: true });
+  const pkgRoot = mkdtempSync(join(tmpRoot, "g495-d6-"));
   try {
-    renameSync(usageAsset, parkedPath);
-    assert.ok(!existsSync(usageAsset), "变异必须真实生效（usage 资产已移开）");
+    // 逐字节复制私有包（index.js + prompts/ + core/ + lib/），使副本可**真实 apply()**。
+    for (const rel of ["index.js", "package.json"]) {
+      const from = join(distDir, rel);
+      if (existsSync(from)) copyFileSync(from, join(pkgRoot, rel));
+    }
+    for (const rel of ["prompts", "core", "lib"]) {
+      const from = join(distDir, rel);
+      if (existsSync(from)) cpSync(from, join(pkgRoot, rel), { recursive: true });
+    }
+    // 副本位于仓库内 `tmp/`（gitignored，与 worktree 同一约定）⇒ `node_modules` 以**软链**接回
+    // 主树依赖（不复制、不安装，也**不**在副本里跑任何包管理器）。
+    const linkTarget = existsSync(join(repoRoot, "node_modules")) ? join(repoRoot, "node_modules") : null;
+    if (linkTarget) symlinkSync(linkTarget, join(pkgRoot, "node_modules"), "dir");
+    const copyEntry = join(pkgRoot, "index.js");
+    const copyUsage = join(pkgRoot, "prompts/usage.zh.md");
+    assert.ok(existsSync(copyUsage), "私有副本必须含 usage.zh.md（否则本用例无从变异）");
+    assert.deepEqual(readFileSync(copyUsage), readFileSync(join(distDir, "prompts/usage.zh.md")), "副本 usage 必须与运行树逐字节相同");
+    // 前置基线：副本资产在手时，副本的真实 execute() 必须命中（否则下面的「抛错」无从对照）。
+    const copyRun = await loadCopyHelp(copyEntry);
+    assert.equal(copyRun({ topic: "graph_engineering" }).found, true, "基线：私有副本资产可读时真实 execute 必须命中");
+    assert.equal(copyRun({ topic: "usage" }).found, true, "基线：私有副本上 topic=usage 必须命中");
+    // **变异**：只在私有副本里删掉 usage 资产（运行树一字未动）。
+    rmSync(copyUsage);
+    assert.ok(!existsSync(copyUsage), "变异必须真实生效（副本 usage 资产已删除）");
+    let threw: unknown = null;
+    let observed: any = null;
     try {
-      // **真实运行时路径**：走 `graph_help.execute()`（apply 注册后的真实 run 函数）。
-      observed = runHelp({ topic: "graph_engineering" });
+      // **真实运行时路径**：副本的 `graph_help.execute()`（apply 注册后的真实 run 函数）。
+      observed = copyRun({ topic: "usage" });
     } catch (err) {
       threw = err;
     }
+    // 核心裁决：资产不可读时**必须抛错**，而**不是**返回 `found:false` 的静默路径。
+    assert.ok(threw !== null, "usage 资产不可读时真实 execute() 必须抛错（故障可观察），而不是静默返回 found:false");
+    assert.equal(observed, null, "不得在抛错之外还产出结果对象（否则仍是 fail-open 的另一形态）");
+    const message = String((threw as Error)?.message ?? "");
+    assert.ok(/usage\.zh\.md/.test(message), `抛错必须点名不可读的资产（实得：${message}）`);
+    assert.ok(/missing or unreadable/.test(message), `抛错必须是资产不可读口径（实得：${message}）`);
+    // graph_engineering 走同一条读取路径 ⇒ 同样必须抛错，而不是静默 found:false。
+    let geThrew: unknown = null;
+    try { copyRun({ topic: "graph_engineering" }); } catch (err) { geThrew = err; }
+    assert.ok(geThrew !== null, "usage 资产不可读时 topic=graph_engineering 同样必须抛错（不得静默 found:false）");
+    assert.ok(/usage\.zh\.md/.test(String((geThrew as Error)?.message ?? "")), "graph_engineering 抛错也必须点名 usage 资产");
   } finally {
-    if (existsSync(parkedPath)) renameSync(parkedPath, usageAsset);
+    rmSync(pkgRoot, { recursive: true, force: true });
   }
-  assert.ok(!existsSync(parkedPath), "变异必须已还原（暂存文件不得残留）");
-  assert.deepEqual(readFileSync(usageAsset), originalBytes, "还原后 usage 资产必须逐字节等于原文件");
-  // 核心裁决：资产不可读时**必须抛错**，而**不是**返回 `found:false` 的静默路径。
-  assert.ok(threw !== null, "usage 资产不可读时真实 execute() 必须抛错（故障可观察），而不是静默返回 found:false");
-  assert.equal(observed, null, "不得在抛错之外还产出结果对象（否则仍是 fail-open 的另一形态）");
-  const message = String((threw as Error)?.message ?? "");
-  assert.ok(/usage\.zh\.md/.test(message), `抛错必须点名不可读的资产（实得：${message}）`);
-  assert.ok(/missing or unreadable/.test(message), `抛错必须是资产不可读口径（实得：${message}）`);
-  // 对照：同名主题在资产完好时必须仍命中 ⇒ 「抛错」不是恒真（同一真实入口、同一 topic）。
-  assert.equal(runHelp({ topic: "graph_engineering" }).found, true, "还原后真实 execute 必须恢复命中（判据可被证伪）");
+  // 变异**绝不可**触碰运行树：prompts 里的 usage 资产必须逐字节完好（本用例零写运行包）。
+  assert.deepEqual(
+    readFileSync(join(distDir, "prompts/usage.zh.md")),
+    readFileSync(join(repoRoot, "prompts/usage.zh.md")),
+    "运行树 usage 资产必须逐字节完好（D6 只在私有副本里变异）",
+  );
+  // 对照：同名主题在（未变异的）运行树上必须仍命中 ⇒ 「抛错」不是恒真（同一真实入口、同一 topic）。
+  assert.equal(runHelp({ topic: "graph_engineering" }).found, true, "运行树真实 execute 必须命中（判据可被证伪）");
+  assert.equal(runHelp({ topic: "usage" }).found, true, "运行树 topic=usage 必须命中（死链回归判据）");
   // 未知名主题在**资产完好**时仍走 `found:false` 的正常路径 —— 证明 fail-open 消除后
   // 「主题确实不存在」这一合法语义没有被误伤（两者**现在可区分**）。
   assert.equal(runHelp({ topic: "graph_not_anything" }).found, false, "主题确实不存在时仍须走 found:false（合法语义未被误伤）");

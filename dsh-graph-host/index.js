@@ -956,7 +956,7 @@ function fillPhrase(text, vars) {
 
 /** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
  *  主题口径（与 prompts/*.{zh,en}.md 的章节标题同源，不做第二份目录）：
- *   · `usage` / `使用说明`          ⇒ 从文首到第一个二级标题（整份使用说明）；
+ *   · `usage` / `使用说明`          ⇒ **整份 usage 资产全文**（含 `## 工具细则`，见下）；
  *   · `graph_engineering` / `图工程` ⇒ 「为什么叫 dsh-graph…」章节（**跨资产**查找，见下）；
  *   · 任一**功能模块名**            ⇒ 该模块那一行（`| <名> | … |` 表格行）。
  *  g-495：工具名主题**已删除**（负责人 2026-10-13 选 (c)：schema 注入已提供足够信息，
@@ -968,7 +968,19 @@ function fillPhrase(text, vars) {
  *  **跨资产**查找：先在 help 正文里找该章节，找不到再到 usage 正文里找。两条路径共用同一
  *  章节判定（标题含 `dsh-graph` 且含「图工程 / Graph Engineering」），不另立第二套口径。
  *  章节名按 `## ` 切分 ⇒ 资产改标题时必须同步本函数（守卫 core/tests/g493-help-topic.test.ts 钉住）。
- *  `extraTexts` 为可选的**追加查找面**（缺省 `[]` 时行为与单资产版逐字一致）。 */
+ *  `extraTexts` 为可选的**追加查找面**（缺省 `[]` 时行为与单资产版逐字一致）。
+ *
+ *  g-495 att-005 修（负责人 2026-10-15 真实 review 授权）：`usage` 主题原实现取 **help 正文**
+ *  「文首到第一个 `## `」，而 help 资产首行只有一句 `共 5 个功能模块：` ⇒ `graph_help(topic="usage")`
+ *  虽 `found:true` 却只返回 10 字符，**承诺的工具细则永远读不到**（死链）。usage 的真实面在
+ *  **按需资产 `usage.*.md`**（含 `## 工具细则` / 签名 / 证据分层）—— 故该分支改为取
+ *  **usage 资产全文**：`extraTexts[0]` 即调用方传入的 usage 正文（显式参数绑定，调用方唯一）。
+ *  语义要点：① 只认 `extraTexts[0]`，**不**在多个追加面里挑一个 —— 避免「挑到哪个面」成为隐式行为；
+ *  ② 追加面缺失/为空 ⇒ 返回 null（`found:false`，与「该面不存在」同口径，**不**回落 help 切片——
+ *  回落等于把死链重新放回来）；③ 资产**不可读**由调用方 `localizedPrompt` **抛错**表达，
+ *  本函数不 catch（fail-open 消除见 `graph_help` 的 run 与 D6）。
+ *  ④ 与 `graph_engineering` 的「help 优先、usage 兜底」**语义独立**：本分支根本不看 help 面，
+ *  故 help 首句戳不影响 usage 结果。 */
 
 /** g-495 返工项 B/C：点题章节标题判定 —— **唯一真源**，被 `helpTopicText` 的跨资产查找与
  *  测试钩子 `_isGraphEngineeringSectionTitle` 共用（不另立第二套口径）。标题须同时含
@@ -984,9 +996,12 @@ function helpTopicText(text, topic, extraTexts = []) {
   const usageAlias = ["usage", "使用说明", "getting started", "使用指引"];
   const graphAlias = ["graph_engineering", "graph-engineering", "图工程", "graph engineering"];
   if (usageAlias.includes(key)) {
-    if (!src) return null;
-    const firstSection = src.indexOf("\n## ");
-    return (firstSection < 0 ? src : src.slice(0, firstSection)).trimEnd();
+    // g-495 att-005：usage 主题 = **usage 资产全文**（含 `## 工具细则`），不再取 help 首句。
+    // 追加面 `extraTexts[0]` 是 usage 正文的唯一来源（调用方显式绑定）；缺失/空 ⇒ null。
+    const usageFace = Array.isArray(extraTexts) ? extraTexts[0] : "";
+    if (typeof usageFace !== "string" || !usageFace) return null;
+    // 返回**全文**（含各二级标题），只去尾部空白的差异 —— 不得只截到首个 `## ` 之前。
+    return usageFace.trimEnd();
   }
   if (graphAlias.includes(key)) {
     // 跨资产：help 正文优先，其次各追加面（usage）。命中即返回，未命中一律 null。
@@ -3761,7 +3776,7 @@ export function apply(ctx, config) {
       // 本工具仍是**只读**：开关状态只影响渲染文本，不写配置、不改注册面（51 个工具照常注册）。
       def: {
         name: "graph_help",
-        description: "输出 dsh-graph 功能模块清单（各模块作用 + 当前开关状态）与 supervisor 接管（claim）指引（graph_handoff/graph_claim_supervisor 换会话步骤）；可选 topic 查询单个主题（usage / graph_engineering / 某个模块名）。",
+        description: "输出 dsh-graph 功能模块清单（各模块作用 + 当前开关状态）与 supervisor 接管（claim）指引（graph_handoff/graph_claim_supervisor 换会话步骤）；可选 topic 查询单个主题（usage / graph_engineering / 某个模块名）。topic=usage 返回完整使用说明（含工具细则、签名、证据分层），不只是文首一句。",
         parameters: params({ topic: str }, []),
       },
       run: (a, ex) => {
@@ -3777,7 +3792,9 @@ export function apply(ctx, config) {
         // 主题抽取在**渲染前**的资产上做：模块行靠 `{moduleId}` 稳定标记定位，
         // 渲染后该标记已被替换成「开启/关闭」而无法定位 ⇒ 顺序不可颠倒。
         // g-495 返工（裁决·出路 1）：点题段已迁到按需面 `usage.*.md` ⇒ 把 usage 正文作为
-        // **追加查找面**传入（help 正文优先）。
+        // **追加查找面**传入。两处 topic 的内存各自独立（见上）：
+        //  · `graph_engineering`：help 正文优先、usage 兜底（`helpTopicText` 的 faces 顺序）；
+        //  · `usage`：**只用** usage 追加面全文（att-005 修死链；不看 help 首句）。
         // g-495 返工项 A（**消除 fail-open**）：这里**不得** catch。`localizedPrompt` 在资产缺失/
         // 不可读时抛错（见 `requirePromptAsset`），若在此吞掉就等价于把「资产不可读」折叠成
         // 「该面不存在」⇒ `topic=graph_engineering` 会静默返回 `found:false`，把真实故障伪装成
