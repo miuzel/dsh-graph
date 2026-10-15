@@ -22,3 +22,11 @@
 - [x] TypeScript 类型检查：`tsc --noEmit` 通过（0 error）
 - [x] 客户端语法检查：`node --check dist/lib/client.js` 通过
 - [x] 跨宿主版本兼容性：DSH `0.2.1-alpha.2` / `0.2.1-alpha.3` 验证通过
+
+## 3. 产物与指纹
+- [x] 候选包文件名：`dsh-graph-0.21.0.tgz`（81 个文件，解包大小 4.6 MB）
+- [x] 文件体积：1,537,852 字节
+- [x] SHA-256：`534801d1a6190bdc05ef1b2ae206a48cf236b26fb0b31f640d69ca838f69410e`
+- [x] SHA-1：`8b72e3a736ed83d42823545747b27e57945c5fbe`
+- [x] 隔离性核验：`dist/` 目录干净（无 `.tgz` 残留）
+

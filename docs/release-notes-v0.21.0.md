@@ -18,6 +18,11 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 ### 验证与产物
 
+- **发布产物**：
+  - 文件名：`dsh-graph-0.21.0.tgz`
+  - 大小：1,537,852 字节（包内文件 81 项）
+  - SHA-256：`534801d1a6190bdc05ef1b2ae206a48cf236b26fb0b31f640d69ca838f69410e`
+  - SHA-1：`8b72e3a736ed83d42823545747b27e57945c5fbe`
 - **平台真机门禁**：
   - Linux / WSL2: 2598/2598 单元与集成测试全绿，真实多会话 A/B 开发 Benchmark 满分验证；
   - 原生 Windows: 详见 [`docs/platform-gate.md`](platform-gate.md)；
