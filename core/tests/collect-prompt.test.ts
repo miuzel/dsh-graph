@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { init, createGoal, findGoalFile, loadGoal, formatCollectPrompt, getCardMeta, fillCard, bindCardChild, readCorePromptAsset } from "../ops.ts";
+import { init, createGoal, findGoalFile, loadGoal, formatCollectPrompt, getCardMeta, fillCard, bindCardChild, readCorePromptAsset, fillPromptTemplate } from "../ops.ts";
 import { readEvents } from "../events.ts";
 
 function setup() {
@@ -151,6 +151,12 @@ test("getCardMeta 返回正确的卡片元数据", () => {
   assert.equal(meta.title, "测试卡片标题", "应返回正确的卡片标题");
   assert.equal(meta.kind, "image", "应返回正确的卡片类型");
   assert.equal(meta.goalTitle, "测试目标", "应返回正确的目标标题");
+});
+
+test("fillPromptTemplate 缺失必需变量显性失败，显式空值与用户花括号原样可用", () => {
+  assert.throws(() => fillPromptTemplate("{{required}}", {}), /缺少必需变量：required/);
+  assert.equal(fillPromptTemplate("{{required}}/{{optional}}", { required: "", optional: "" }), "/");
+  assert.equal(fillPromptTemplate("{{required}}", { required: "用户字面 {{nested}}" }), "用户字面 {{nested}}");
 });
 
 test("formatCollectPrompt 处理不存在的卡片", () => {

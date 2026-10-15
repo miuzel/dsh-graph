@@ -68,10 +68,27 @@ const CLIENT_BUNDLE_DIST = join(DIST, "lib", "client.js");
 const MD_MIN_LINES = 1;
 /** g-496 att-007：宿主专属层的 GUI **注入载荷**天然短（如回退理由只有一行模板）。
  *  原先一刀切的 100 字节是为公共层帮助文档写的，改为**按层分级**：
- *  公共层仍 100；宿主层 20 —— 仍能拦住「清空/截断成空文件」，
+ *  公共层仍 100；宿主层默认也回到 100 —— 仍能拦住「清空/截断成空文件」，
  *  且「禁用 token 0 命中」判据对两层一视同仁（本判据的保护目标不变）。 */
 const MD_MIN_BYTES = 100;
-const MD_MIN_BYTES_HOST = 20;
+/** g-496 att-012（终局复核 BLOCK 收口）：短载荷豁免**只**发给当前真实存在的 GUI 基名，
+ *  **不**按「宿主层」这把过于宽泛的尺子发放 —— 否则公共层之外的任何未来宿主资产
+ *  （错误文案、帮助片段、任意新模板）都会自动获得 20 字节下限，等于把 100→20 泛化到未来。
+ *  这 9 类即 `dsh-graph-host/prompts/gui-*.md` 的全集；新增宿主资产默认 100 字节。 */
+const SHORT_GUI_ASSET_BASES = new Set([
+  "gui-accept-review-request",
+  "gui-backward-reason",
+  "gui-batch-accept-review-request",
+  "gui-criteria-feedback-executor",
+  "gui-criteria-feedback-supervisor",
+  "gui-define-polish-request",
+  "gui-deliver-notice",
+  "gui-help-takeover-example",
+  "gui-reexecute",
+]);
+const MD_MIN_BYTES_SHORT_GUI = 20;
+/** 该资产名是否属于「既有 9 类短 GUI 模板」（按基名判定，语言后缀不计）。 */
+const isShortGuiAsset = (n: string) => SHORT_GUI_ASSET_BASES.has(n.replace(/\.(zh|en)\.md$/, ""));
 const MARKER_LINE_CAP = 2;
 const SERVER_I18N_MIN_PER_SIDE = 40;
 /** 客户端 i18n 字面量分辨率下限（实测源码 3962 / dist 10485）。 */
@@ -455,21 +472,24 @@ function markdownAssets(): { label: string; text: string; maxMarkerLines: number
   const isGuide = (n: string) => n === "supervisor-guide.zh.md" || n === "supervisor-guide.en.md";
   // supervisor-guide 两语言仍享「本项目示例」标记行豁免（口径不变，仅位置变了）。
   const cap = (n: string) => (isGuide(n) ? MARKER_LINE_CAP : 0);
-  for (const [label, promptsDir, minBytes] of [
-    ["源", PUBLIC_PROMPTS, MD_MIN_BYTES],
-    ["源", HOST_PROMPTS, MD_MIN_BYTES_HOST],
+  // g-496 att-012：字节下限**只按资产身份**判定（既有 9 类短 GUI 模板 → 20，其余 → 100），
+  // 不按所在层 —— 宿主层不再是「一律宽松」的通行证。
+  const floor = (n: string) => (isShortGuiAsset(n) ? MD_MIN_BYTES_SHORT_GUI : MD_MIN_BYTES);
+  for (const [label, promptsDir] of [
+    ["源", PUBLIC_PROMPTS],
+    ["源", HOST_PROMPTS],
   ] as const) {
     for (const name of readdirSync(promptsDir).filter((n) => n.endsWith(".md")).sort()) {
-      out.push({ label: `${label}/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: cap(name), minBytes });
+      out.push({ label: `${label}/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: cap(name), minBytes: floor(name) });
     }
   }
-  // dist 侧的**最低**下限：取公共层阈值（宿主层资产在源侧已按其自身阈值单独核过）。
+  // dist 侧与源侧同口径：同一资产名在任何一侧都享同一阈值（复制不改变身份）。
   for (const name of readdirSync(join(DIST, "prompts")).filter((n) => n.endsWith(".md")).sort()) {
     out.push({
       label: `dist/prompts/${name}`,
       text: readFileSync(join(DIST, "prompts", name), "utf8"),
       maxMarkerLines: cap(name),
-      minBytes: isGuide(name) ? MD_MIN_BYTES : MD_MIN_BYTES_HOST,
+      minBytes: floor(name),
     });
   }
   return out;
@@ -641,6 +661,32 @@ test("g-444 逐资产粒度下限：清空/截断任一预期资产即判红（�
   // 字典侧：清空取值必须判红。
   const empty = scanServerI18n("fixture", { zh: {}, en: {} });
   assert.equal(empty.length, 2, `清空字典必须逐语言判红（实得 ${empty.length}）`);
+});
+
+test("g-444 att-012：短 GUI 豁免恰为既有 9 类，宿主层不再是「一律宽松」通行证", () => {
+  // ① 豁免集合 ≡ 宿主层实际存在的全部基名（既不漏发、也不虚发；新增宿主资产自动回到 100）。
+  const hostBases = [...new Set(
+    readdirSync(HOST_PROMPTS).filter((n) => n.endsWith(".md")).map((n) => n.replace(/\.(zh|en)\.md$/, "")),
+  )].sort();
+  assert.deepEqual(hostBases, [...SHORT_GUI_ASSET_BASES].sort(),
+    "短 GUI 豁免集合必须恰等于宿主层现有资产基名（既不多发也不漏发）");
+  // ② 阈值真正按身份而非按层：9 类得 20，其余一律 100（含公共层与任何未来宿主资产）。
+  for (const name of hostBases) {
+    assert.equal(markdownAssets().find((a) => a.label === `源/${name}.zh.md`)?.minBytes, MD_MIN_BYTES_SHORT_GUI,
+      `${name} 属既有短 GUI 模板 ⇒ 20 字节下限`);
+  }
+  assert.equal(markdownAssets().find((a) => a.label === "源/discipline.zh.md")?.minBytes, MD_MIN_BYTES, "公共层仍 100");
+  // ③ 负向对照：一个**不在** 9 类里的未来 host 资产名必须拿不到短豁免，且按其真实长度会被 100 判红。
+  assert.equal(isShortGuiAsset("gui-future-widget.zh.md"), false, "未来宿主资产不得自动获得短豁免");
+  assert.equal(isShortGuiAsset("error-msg.zh.md"), false, "任意短宿主资产名不得自动获得短豁免");
+  const futureAsset = "短文案。\n"; // 真实存在的短 host 资产若走到这里，必须被判红（而非靠 20 蒙混）
+  assert.equal(
+    scanText("fixture", futureAsset, { minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES }).length, 1,
+    "非豁免资产即使很短也必须按 100 字节判红",
+  );
+  // ④ 既有 9 类的短豁免**未被削弱**：反例证明 20 仍拦得住清空/截断。
+  assert.equal(scanText("fixture", "", { minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES_SHORT_GUI }).length, 1, "短豁免仍拦空文件");
+  assert.equal(scanText("fixture", "x\n", { minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES_SHORT_GUI }).length, 1, "短豁免仍拦截断");
 });
 
 // ---------------------------------------------------------------------------

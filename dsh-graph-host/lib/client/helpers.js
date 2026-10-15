@@ -1040,9 +1040,10 @@
      *    中的 `{...}` **不再被二次替换**（非递归：单遍扫描，替换文本不参与后续匹配）；
      *  - 不做 HTML/正则转义、不 eval、不 new Function：返回值只是字符串，交给 session.prompt。 */
     function interpolateGuiPrompt(template, vars) {
-      return String(template).replace(/\{([A-Za-z0-9_]+)\}/g, (whole, key) => {
+      return String(template).replace(/\{\{?([A-Za-z0-9_]+)\}?\}/g, (whole, key) => {
         const v = vars ? vars[key] : undefined;
-        return v === undefined || v === null ? whole : String(v);
+        if (v === undefined || v === null) throw new Error(`GUI prompt template missing required variable: ${key}`);
+        return String(v);
       });
     }
 

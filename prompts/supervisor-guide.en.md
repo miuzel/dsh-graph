@@ -233,7 +233,7 @@ but this is unrelated to whether a card exists—no card does not mean the proce
 
 **Session reuse policy**: cross-goal reuse remains at the supervisor's discretion (lenient), but before reuse first **fork a new subagent + compact the context**—bind the card to a clean new subagent (inheriting the compacted context),
 while the original agent remains in its original turn and can continue.
-**When reusing, the subagent name must be changed** (set a new label when forking; DSH has no rename API);
+**When reusing, use a new label; if the host cannot rename agents, fork with the specified new label**;
 **mark the real-time agent bound to the original card as “reused”** (the child_id is bound to multiple goals → the old binding displays
 “reused→new goal”), and proactively record an `attempt.reused` event (child_id, reused_by).
 

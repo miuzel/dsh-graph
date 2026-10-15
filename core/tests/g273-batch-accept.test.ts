@@ -704,9 +704,10 @@ test("g-273: batchAcceptSupervisorMessage — list + total（模板骨架由资�
   assert.ok(msg3.includes("g-{count}"), "用户输入必须原样保留，不得被二次插值");
   // 且此时「总数」仍是真实的 1（不因注入文本而错算）。
   assert.ok(msg3.includes("共 1 个"), "注入形态不得影响变量取值");
-  // 缺失变量：保留占位符原文（不静默变空串）。
-  assert.ok(batchAcceptSupervisorMessage(["g-a"], "A{missing}B").includes("{missing}"),
-    "未提供的占位符必须原样保留，不得静默清空");
+  // 缺失变量：g-496 att-012 起**显性抛错并点名**，不再原样保留占位符、更不静默清空。
+  // （旧口径「保留 `{missing}` 原文」会把未替换的模板字面量发给主管会话 —— 属静默缺斤少两。）
+  assert.throws(() => batchAcceptSupervisorMessage(["g-a"], "A{missing}B"), /missing/,
+    "未提供的占位符必须显性抛错并点名，不得原样保留或静默清空");
 });
 
 // ===== 7. 弹窗行为模拟（vm + stateful React mock） =====

@@ -140,6 +140,18 @@ const packagedNames = (dir: string) =>
  *  且**新增**「归属必须与源根实际所在层一致」的正向校验（原实现无法发现归属标错）。
  *  注意：`helpAssetOwnership` 接受**基名**（不含 `.<lang>.md`）。 */
 const baseOfAssetName = (name: string) => name.replace(/\.(zh|en)\.md$/, "");
+// 仅当前 9 类 GUI 模板允许短载荷；固定基线摘要独立于资产读取，截断/缺段/错变量均判红。
+const SHORT_GUI_BASELINES: Record<string, Record<string, string>> = {
+  "gui-accept-review-request": { zh: "5f119fbf43375e73b0f40f4131f0be912d001646281209c03525b8246e0fecec", en: "ee62878627ed519433a8490ac327c6cfad55965a52fb868cc8bd5014e85f03b3" },
+  "gui-backward-reason": { zh: "1c924c50aec1c1d21c4ff327386f86760cb6fb35e939f081a02992adc9460392", en: "1c65b5901afa72574611079623d48d2a504e422276d185a67c371b5801e50cbd" },
+  "gui-batch-accept-review-request": { zh: "f7292763fef918c581b70e9a8926f309d38ebf33abd1765de9abbe5172890602", en: "58eec339b5b3db70a40536e99d72e75e585772fe8fb0c7f043d55e7c840e132b" },
+  "gui-criteria-feedback-executor": { zh: "baf85d40a5ad398884b7770d8e9ec2d6b6036dbe151f3e04774fec0e618ef056", en: "aa9a26b04eb0664495cb49cc6932310e49f132a941c73aa4999faf210febf886" },
+  "gui-criteria-feedback-supervisor": { zh: "f2b2b2adb0a732c46379a354173ad680bef305394ef576aecc1fb91068e3e60b", en: "96cdb12e0e792597e20fd0e034713e0280ef7212507cf3a3f3552fcadf42b45c" },
+  "gui-define-polish-request": { zh: "9b859302c6fc9ea07fed31c3fd3562eaaf313110cd46618f09e4bf23ed02ce30", en: "f9e8640fdf47a8a5ded3a3336dc21c5361f91c4eaac6688006b88165e909ff3b" },
+  "gui-deliver-notice": { zh: "9b5ff562b63fe369b475d9d672d34e07a6b4be68a1e894e7a09a1f30e500d223", en: "b410203964d85098eddbbcf1c79b853f1afde80d462e4d95990ccbe05fcd9900" },
+  "gui-help-takeover-example": { zh: "d64a41f3ae844937ae246c1e3d82adc83de5334a35cd4b2243077643bed732fe", en: "29997434a39f6d326114375eff4a6fa43ddb1489e2d84a84c3bbe6fa7cb85c2b" },
+  "gui-reexecute": { zh: "016fa00702af15b47329251ddb2c9505ae8dfdfa3a3b3301ab59356af92e3b00", en: "0ebbe0834f6ae8b4f7cc40c57872d9583c789bd420b2ec11b5f47aa80fc3ecbe" },
+};
 const promptLayerRoot = (name: string) =>
   helpAssetOwnership(baseOfAssetName(name)) === "host"
     ? hostPromptSrcDir
@@ -182,14 +194,17 @@ test("g-481 A1：白名单 ≡ 注册表投影的随包资产（源 ↔ 包 ↔ 
     assert.equal(sha256(bodyOf(res)), sha256(distBuf), `${name} 响应必须与随包产物逐字节一致`);
     // 「提示词模板」页签要有真内容可显示（不是占位/空文件；注入式提示词本就不必带 `#` 标题）。
     const text = distBuf.toString("utf8");
-    // g-496 att-007：宿主专属层的 **GUI 注入载荷**天然短（如回退理由只有一行模板），
-    // 原先一刀切的 ≥100 字符是为公共层帮助文档写的。改为**按归属分级**：
-    // 公共层仍 ≥100；宿主层要求「非空且 ≥20 字符」—— 仍能拦住占位/空文件，
-    // 且下方「不得残留未完成标记」「内容不得与其他资产重复」两条判据对两层一视同仁。
-    const isHostAsset = helpAssetOwnership(baseOfAssetName(name)) === "host";
-    const floor = isHostAsset ? 20 : 100;
+    // g-496 att-012（终局复核 BLOCK 收口）：短载荷下限**只**发给 `SHORT_GUI_BASELINES`
+    // 登记的既有 9 类 GUI 模板 —— **不**按 host 归属发放。归属是「哪一层维护」，
+    // 与「载荷可以多短」无关；按归属发就是 100→20 泛化到未来所有宿主资产。
+    // 公共层资产与未来新增的任何 host 资产一律维持 ≥100。
+    const base = baseOfAssetName(name);
+    const language = name.match(/\.(zh|en)\.md$/)?.[1] ?? "zh";
+    const shortBaseline = SHORT_GUI_BASELINES[base]?.[language];
+    const floor = shortBaseline ? 20 : 100;
     assert.ok(text.trim().length >= floor,
-      `${name} 必须是实质内容（归属 ${isHostAsset ? "host" : "public"} ⇒ ≥${floor} 字符，实得 ${text.trim().length}）`);
+      `${name} 必须是实质内容（${shortBaseline ? "既有短 GUI 模板" : "非短 GUI 豁免资产"} ⇒ ≥${floor} 字符，实得 ${text.trim().length}）`);
+    if (shortBaseline) assert.equal(sha256(distBuf), shortBaseline, `${name} 短 GUI 模板必须保持独立语义/变量基线快照`);
     assert.doesNotMatch(text, /TODO|FIXME|待补/, `${name} 不得残留未完成标记`);
     assert.ok(!digests.has(sha256(distBuf)), `${name} 内容与其他资产重复（疑似复制粘贴占位）`);
     digests.add(sha256(distBuf));
@@ -226,6 +241,44 @@ test("g-481 A1：白名单 ≡ 注册表投影的随包资产（源 ↔ 包 ↔ 
   assert.ok(HELP_PROMPT_ASSETS.includes("supervisor-guide.en.md"), "supervisor-guide.en 必须可达（g-496）");
   assert.ok(distNames.includes("supervisor-guide.zh.md"), "合并后 supervisor-guide 应位于 prompts/");
   assert.ok(!existsSync(join(distRoot, "supervisor-guide.zh.md")), "supervisor-guide 不得再位于包根");
+});
+
+test("g-481 A1b（att-012）：短 GUI 保护恰为既有 9 类，且截断/空壳/错变量各自判红", () => {
+  // ① 豁免集合 ≡ 宿主层实际资产基名（不多发、不漏发）。
+  const hostBases = [...new Set(
+    packagedNames(hostPromptSrcDir).map((n) => baseOfAssetName(n)),
+  )].sort();
+  assert.deepEqual(Object.keys(SHORT_GUI_BASELINES).sort(), hostBases,
+    "短 GUI 基线表必须恰等于宿主层现有资产基名");
+  assert.equal(hostBases.length, 9, `短 GUI 模板恰为 9 类（实得 ${hostBases.length}）`);
+  // ② 每类 zh/en 都有**独立**基线（防止两语言共用同一摘要掩盖单侧截断）。
+  for (const base of hostBases) {
+    assert.ok(SHORT_GUI_BASELINES[base].zh, `${base} 必须有 zh 基线`);
+    assert.ok(SHORT_GUI_BASELINES[base].en, `${base} 必须有 en 基线`);
+    assert.notEqual(SHORT_GUI_BASELINES[base].zh, SHORT_GUI_BASELINES[base].en,
+      `${base} 的 zh/en 基线不得相同（否则单侧被另一侧掩盖）`);
+  }
+  const all = Object.values(SHORT_GUI_BASELINES).flatMap((v) => [v.zh, v.en]);
+  assert.equal(new Set(all).size, all.length, "9 类 × 2 语言的基线摘要必须两两不同（防复制粘贴空壳）");
+  // ③ 基线摘要真实生效：改动任一字节即与摘要不符 ⇒ 判红。
+  const probe = "gui-backward-reason.zh.md";
+  const real = readFileSync(join(hostPromptSrcDir, probe));
+  assert.equal(sha256(real), SHORT_GUI_BASELINES["gui-backward-reason"].zh, "真实资产必须命中基线");
+  const truncated = Buffer.from(real.toString("utf8").slice(0, 5), "utf8");
+  assert.notEqual(sha256(truncated), SHORT_GUI_BASELINES["gui-backward-reason"].zh, "截断后必须与基线不符（判红）");
+  // ④ 20 字节下限对 9 类仍拦得住空文件与近空壳。
+  assert.ok(truncated.toString("utf8").trim().length < 20, "截断样本应低于 20 字节下限（证明下限非空转）");
+  for (const base of hostBases) {
+    for (const lang of ["zh", "en"]) {
+      const text = readFileSync(join(hostPromptSrcDir, `${base}.${lang}.md`), "utf8");
+      assert.ok(text.trim().length >= 20, `${base}.${lang} 必须 ≥20 字符`);
+      assert.ok(text.trim().length >= 20, `${base}.${lang} 非空壳`);
+    }
+  }
+  // ⑤ 非豁免资产名不得获得短下限（防 100→20 泛化到未来 host 资产）。
+  for (const future of ["gui-future-widget", "error-msg", "help-snippet"]) {
+    assert.equal(SHORT_GUI_BASELINES[future], undefined, `${future} 不得预先获得短豁免`);
+  }
 });
 
 test("g-481 A2：未知名 / 穿越 / 非 md / 大小写变体一律拒绝，GET/HEAD 之外 405，白名单不覆盖未注册根名", async () => {

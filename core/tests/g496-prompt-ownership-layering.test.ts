@@ -404,3 +404,71 @@ test("g-496 att-009 F③：attempt-instructions 短语表齐备 —— 资产 ma
   assert.ok(/attemptInstructionsPhrases\("en"\)/.test(hostSrc),
     "英文派发路径必须经 attemptInstructionsPhrases(\"en\") 读取英文资产");
 });
+
+test("g-496 收集预览复用公共收集资产且提交的仅是用户材料", () => {
+  const drawer = readFileSync(join(repoRoot, "dsh-graph-host/lib/client/card-drawer.js"), "utf8");
+  const i18n = readFileSync(join(repoRoot, "dsh-graph-host/lib/client/i18n.js"), "utf8");
+  assert.match(drawer, /loadGuiPromptAsset\(\"collect-task\"\)/, "抽屉预览必须加载公共 collect-task 模板");
+  assert.match(drawer, /interpolateGuiPrompt\(collectTemplate/, "预览必须通过当前模板插入变量");
+  assert.match(drawer, /prompt:\s*editableText/, "网络提交只传可编辑用户材料，host canonical prompt 仍强制追加");
+  assert.doesNotMatch(drawer, /prompt\.collect\.(?:security|forbidden|backfill|attachments)/, "固定收集正文不得留字典 key 副本");
+  assert.doesNotMatch(i18n, /prompt\.collect\.(?:security|forbidden|backfill|attachments)/, "i18n 不得持有固定收集正文副本");
+  // g-496 att-012：**第三副本**收口 —— 旧「可编辑正文」三键（collectContext/collectScope/collectHint）
+  // 是把 `collect-task.md` 正文抄进字典的第三份副本，必须整键删除；抽屉也不得再拼接它们。
+  for (const key of ["drawer.collectContext", "drawer.collectScope", "drawer.collectHint",
+    "drawer.canonicalAttRoot", "drawer.goalInfoLabel", "drawer.cardInfoLabel", "drawer.backfillReq"]) {
+    assert.ok(!i18n.includes(`'${key}'`), `i18n 必须整键删除固定正文副本：${key}`);
+  }
+  // UI 标签键**必须保留**（界面文案，非提示词正文）。
+  for (const key of ["drawer.collectTitle", "drawer.collectInfoTarget", "drawer.collectConstraints", "drawer.startCollect"]) {
+    assert.ok(i18n.includes(`'${key}'`), `i18n 必须保留 UI 标签键：${key}`);
+  }
+  assert.doesNotMatch(drawer, /editablePart/, "抽屉不得再拼「可编辑正文」（editablePart 整块移除）");
+  assert.doesNotMatch(drawer, /autoPrompt/, "抽屉不得再有 autoPrompt 拼接路径（预览与发送同源）");
+  assert.doesNotMatch(drawer, /promptText \|\| editablePart/, "不得回退到客户端自拼正文");
+  assert.match(drawer, /未替换占位符/, "预览渲染后必须自检未替换占位符（装配点漏传变量当场暴露）");
+});
+
+test("g-496 att-012：预览与发送同源 —— 同一份 collect-task 资产、同一组变量、渲染结果逐字节一致", () => {
+  // 真源 = 公共层资产；两侧都从它渲染，故断言「同源同变量 ⇒ 同结果」而不是两段各自手抄的正文。
+  const src = readFileSync(join(publicPrompts, "collect-task.zh.md"), "utf8");
+  const vars = {
+    attRoot: "/repo/.dsh-graph/attachments",
+    dataRoot: "/repo/.dsh-graph",
+    goalId: "g-1",
+    goalTitle: "示例目标",
+    cardId: "card-1",
+    cardTitle: "示例卡片",
+  };
+  // 复刻客户端 `interpolateGuiPrompt`（宿主 GUI 方言：`{{?key}?}`、键字符集 `[A-Za-z0-9_]+`、
+  // **缺变量抛错**）。注意键字符集**不含**连字符 ⇒ 值里的 `{g-1}` 这类文本不会被二次扫描。
+  const GUI_RE = /\{\{?([A-Za-z0-9_]+)\}?\}/g;
+  const guiRender = (t: string, v: Record<string, string>) =>
+    t.replace(GUI_RE, (whole, k) => {
+      const val = v[k];
+      if (val === undefined || val === null) throw new Error(`GUI prompt template missing required variable: ${k}`);
+      return String(val);
+    });
+  // 复刻 core `fillPromptTemplate`（公共方言：`{{name}}`，同样缺键即抛）—— 两侧吃的是**同一份** md 正文。
+  const CORE_RE = /\{\{([A-Za-z0-9_.-]+)\}\}/g;
+  const coreRender = (t: string, v: Record<string, string>) =>
+    t.replace(CORE_RE, (whole, k) => {
+      const val = v[k];
+      if (val === undefined) throw new Error(`提示词模板缺少必需变量：${k}`);
+      return val;
+    });
+  const guiOut = guiRender(src, vars);
+  const coreOut = coreRender(src, vars);
+  // 两种方言作用在**同一份**资产上：去掉花括号差异后正文必须一致（证明不存在第二份正文）。
+  const strip = (s: string) => s.replace(/[{}]/g, "");
+  assert.equal(strip(guiOut), strip(coreOut), "GUI 预览与 core 渲染必须产出同一份正文（仅方言括号不同）");
+  // 预览里不得残留任何未替换占位符（否则会原样发给用户）。
+  assert.deepEqual(guiOut.match(GUI_RE) ?? [], [], "GUI 预览不得残留未替换占位符");
+  assert.deepEqual(coreOut.match(CORE_RE) ?? [], [], "core 渲染不得残留未替换占位符");
+  // 「收集范围」句只在模板里出现一次 ⇒ 预览不会与 UI 标签重复（旧 editablePart 会二次拼这句）。
+  const scopeZh = src.match(/\*\*收集范围\*\*/g) ?? [];
+  assert.equal(scopeZh.length, 1, `「收集范围」必须在模板中恰出现 1 次（实得 ${scopeZh.length}）`);
+  assert.equal((guiOut.match(/\*\*收集范围\*\*/g) ?? []).length, 1, "预览中「收集范围」不得重复");
+  // 变量真的被替换（非空转）：卡片标题必须出现在两侧产物中。
+  assert.ok(guiOut.includes("示例卡片") && coreOut.includes("示例卡片"), "cardTitle 必须被真实回填");
+});

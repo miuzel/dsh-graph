@@ -929,15 +929,20 @@ export function readCorePromptAsset(name: string, language?: string | null): str
  *
  *  边界（与 host 侧 `fillExecutorDisciplineTemplate` 同口径，不引入通用插值框架）：
  *  - 只认 `{{name}}` 双花括号形态，**不递归**替换（回填文本里的 `{{…}}` 原样保留，不二次展开）；
- *  - 未提供的键替换为空串（可选片段留空即「不出现」）；
+ *  - 资产引用的每个键都必须提供；缺失键显式报错。可选片段由调用方显式传入空串；
  *  - 单行占位符被多行文本替换是预期行为（行数由调用方通过等价空行维持对称，
  *    见 core/tests/prompt-i18n-parity.test.ts 的四重相等）。
  *
  *  「固定正文在资产、变量/结构字段与装配在代码」的边界即由本函数承载：资产只写死措辞，
  *  目标 id / 路径 / 标题 / digest / 代码片段 / 验收项一律由此处插值注入。 */
 export function fillPromptTemplate(text: string, vars: Record<string, string>): string {
-  return text.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (whole, name: string) =>
-    Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : "");
+  const rendered = text.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (whole, name: string) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) {
+      throw new GraphError(`提示词模板缺少必需变量：${name}`);
+    }
+    return String(vars[name]);
+  });
+  return rendered;
 }
 
 // ===== g-191：受控子代理模式枚举与策略定义 =====

@@ -937,21 +937,28 @@ function attemptInstructionsPhrases(language = "zh") {
   const phrases = {};
   const re = /^<!--\s*dsh-graph:phrase:([A-Za-z0-9_.-]+)\s*-->\s*$/gm;
   const marks = [...raw.matchAll(re)];
+  if (marks.length === 0) throw new Error(`attempt-instructions.${lang}.md 缺少必需 phrase marker`);
   for (let i = 0; i < marks.length; i++) {
     const key = marks[i][1];
+    if (Object.prototype.hasOwnProperty.call(phrases, key)) throw new Error(`attempt-instructions.${lang}.md phrase marker 重复：${key}`);
     const start = marks[i].index + marks[i][0].length;
     const end = i + 1 < marks.length ? marks[i + 1].index : raw.length;
-    phrases[key] = raw.slice(start, end).replace(/^\n+/, "").replace(/\n+$/, "");
+    const phrase = raw.slice(start, end).replace(/^\n+/, "").replace(/\n+$/, "");
+    if (!phrase.trim()) throw new Error(`attempt-instructions.${lang}.md 必需 phrase 为空：${key}`);
+    phrases[key] = phrase;
   }
   _attemptInstructionPhrases[lang] = phrases;
   return phrases;
 }
 const _attemptInstructionPhrases = {};
 
-/** g-496：phrase 片段里的 `{{name}}` 回填（只认双花括号、不递归展开、未提供键替换为空串）。 */
+/** g-496：phrase 片段里的 `{{name}}` 回填（只认双花括号、不递归展开；缺键显性失败）。 */
 function fillPhrase(text, vars) {
-  return String(text ?? "").replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (whole, name) =>
-    Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : "");
+  if (typeof text !== "string" || !text.trim()) throw new Error("必需 attempt phrase 缺失或为空");
+  return text.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (whole, name) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) throw new Error(`attempt phrase 缺少必需变量：${name}`);
+    return String(vars[name]);
+  });
 }
 
 /** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
