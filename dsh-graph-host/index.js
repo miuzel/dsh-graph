@@ -2182,6 +2182,14 @@ export function apply(ctx, config) {
         graphSettingsScope = { get: () => readGraphSettingsFromForms(svc) };
         sctx.effect(() => () => { graphSettingsScope = null; });
         try { registerGraphSkills(); } catch { /* 静默 */ }
+        // 监听设置文档热更新（如在线切换语言/配置），实时重新注册对应语言的 skills
+        if (typeof sctx.on === "function") {
+          try {
+            sctx.on("settings/document-updated", () => {
+              try { registerGraphSkills(); } catch { /* 静默 */ }
+            });
+          } catch { /* 事件监听失败静默 */ }
+        }
         // 迁移失败不阻断（读取侧已有同源只读兜底），故不 await、只兜住异常。
         if (legacyGraphSettings) void persistLegacyGraphSettings(svc).catch(() => {});
         return;
