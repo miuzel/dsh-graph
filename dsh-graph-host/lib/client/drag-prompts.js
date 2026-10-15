@@ -15,9 +15,10 @@
           setNote(null);
           let delivered = false;
           try {
-            // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-            const res = await session.prompt(
-              [{ type: "text", text: `【${goalId} 回退理由】${reason.trim()}` }], "queue");
+            // g-496：模板正文取自宿主只读资产（**先取模板再投递**）。读取失败**不得**静默发送空串，
+            // 也不得丢失用户已输入的理由 —— 直接落到下方既有「未确认送达」分支（复制兜底 + 可重试提示）。
+            const text = await renderGuiPrompt("gui-backward-reason", { goalId, reason: reason.trim() });
+            const res = await session.prompt([{ type: "text", text }], "queue");
             // g-397：消费回执，直接沿用 g-386 在 session-hooks.js 建立的**同一裁决口径**（那里的 accepted）：
             // 只认正向回执 ok === true 才算已送达；ok:false（delivery-unavailable / 激活上限等**非抛错**失败）
             // 与空回执（undefined / null / 非对象 / 无 ok 字段，老宿主未返回）一律按「未确认」处理。
@@ -127,6 +128,22 @@
         }
         setLoading(true);
         try {
+          // g-496：**先取模板、再迁移状态**。重新执行模板正文现在来自宿主只读资产；若先做 force
+          // transition 再取模板，取模板失败时目标已被拖进 in_progress 却发不出「重新执行」指令
+          // ⇒ 状态与指令不一致（用户看到「已迁移」但子代理从未收到重跑请求）。
+          // 因此把读取提到**任何**状态变更之前：读不到就**不迁移**，明确报错并可重试（零副作用）。
+          // 仅「有子代理」这条分支需要该模板；无子代理分支不预读（不为其引入无谓失败面）。
+          let reExecText = "";
+          if (hasChild && oldSession?.prompt) {
+            try {
+              reExecText = await renderGuiPrompt("gui-reexecute", { goalId });
+            } catch (e) {
+              console.warn("[dsh-graph-host] re-execute: prompt asset load failed:", e);
+              setNote(dgT("gui.promptAssetLoadFail"));
+              setLoading(false);
+              return;
+            }
+          }
           // Step 1: force transition 到 in_progress（人工拖动视为授权）
           setNote(dgT("inProgress.migrating"));
           const tr = await fetch(graphUrl("/api/dsh-graph/transition"), {
@@ -145,11 +162,7 @@
             // 有子代理 → 排队发"重新执行"消息，不派新子代理
             setNote(dgT("inProgress.dispatchingReExec"));
             try {
-              // i18n-keep(category-b)：发往子代理会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-              const res = await oldSession.prompt(
-                [{ type: "text", text: `【重新执行】用户从看板拖放触发重新执行目标 ${goalId}。请从头开始执行目标描述和质量判据中的任务。` }],
-                "queue",
-              );
+              const res = await oldSession.prompt([{ type: "text", text: reExecText }], "queue");
               if (res?.ok) {
                 setNote(dgT("inProgress.reExecSent"));
                 showToast(dgT("inProgress.reExecSent"));
@@ -249,20 +262,29 @@
       const { goalId, goalTitle, supervisorSession, onConfirm, onCancel } = props;
       // g-181：overlay backdrop 误关保护（内容起点后释放到 backdrop 的合成 click 吞掉）
       const backdropGuard = useBackdropClose(onCancel);
-      // i18n-keep(category-b)：复制到剪贴板并粘贴进主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
-      const promptText = `【交付通知】目标「${goalTitle ?? goalId}」（${goalId}）即将标记为已交付。请进行最终复核：代码合并、文档更新等交付工作。`;
+      // g-496：模板正文取自宿主只读资产（**先取模板再复制/跳转**）。读取失败**不得**静默、也不得
+      // 阻断交付本身（本按钮只是「预复制通知 + 跳转主管会话」的便利路径，交付由 onConfirm 决定）
+      // ⇒ 失败时明确提示「未复制」，仍照常跳转会话，让用户可手动说明。
       const jumpToSupervisor = async () => {
         try {
-          const copied = await copyText(promptText);
+          let copied = false;
+          try {
+            const promptText = await renderGuiPrompt("gui-deliver-notice", {
+              goalId, title: goalTitle ?? goalId,
+            });
+            copied = await copyText(promptText);
+          } catch (e) {
+            console.warn("[dsh-graph-host] deliver notice: prompt asset load failed:", e);
+            copied = false;
+          }
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
           if (rt && supervisorSession) {
             // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
             openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
             activateChatTab();
           }
-          if (copied) {
-            showToast(dgT("exec.precopied"));
-          }
+          // 复制失败也必须给出可见结论（不再静默成功路径）。
+          showToast(dgT(copied ? "exec.precopied" : "gui.promptAssetLoadFail"));
         } catch { /* 静默 */ }
       };
       return dgOverlay({ style: S.overlay, ...backdropGuard },

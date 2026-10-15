@@ -870,6 +870,81 @@ export function readSupervisorStatusAt(rootOrEvents: string | GraphEvent[]): num
   return latest;
 }
 
+// ===== g-496：core 层提示词正文资产读取（唯一事实源 = .md，代码不留第二副本） =====
+//
+// 背景：提示词正文（模式策略片段、报文骨架）此前以模板字面量硬编码在 `core/ops.ts` 里 ——
+// 同一段正文一旦在文档/资产里再出现一次，就形成「代码一份、文档一份」的双源，手工同步必然漂移。
+// 负责人 2026-10-14 批准：正文迁到提示词资产 `*.{zh,en}.md`，由 core **运行时现读**。
+//
+// g-496（负责人 2026-10-14 跨宿主资产所有权裁定）：公共提示词（`subagent-mode`、
+// `attempt-report-skeleton` 等跨宿主语义资产）只有**一份受版本控制的源码副本**，位于**仓库根
+// `prompts/`**（公共层）。`core` 属公共层 ⇒ **只依赖公共层**，**绝不读取宿主插件目录**
+// （`dsh-graph-host/**`）。此前 core 走 `../dsh-graph-host/prompts/` 是**所有权倒置**：公共内核
+// 反向依赖某个宿主适配器，未来 Claude / pi-ai / Codex 插件无法复用。
+//
+// 两项**明确静态定位**（不做 cwd 探测、不搜目录、不新增依赖、不在构建期生成）：
+//   · 源形态：本模块位于 `<repo>/core/` ⇒ 资产在 `<repo>/prompts/`；
+//   · 发布形态：本模块位于 `<root>/dist/core/` ⇒ 资产在 `<root>/dist/prompts/`。
+// 两形态**都是 `../prompts/`** —— 构建把公共层与宿主专属资产合并拷进 `dist/prompts/`，
+// 故相对定位在两形态下同形自洽（`dist/` 被整体复制到任意名字的目录后仍成立）。
+//
+// 关键约束（brief 明令）：**发布形态资产缺失时必须明确失败，绝不回读仓库源**掩盖漏包；
+// 因此这里按形态**取单一目录**、不做「失败即换目录」的回落。缺资产 ⇒ 抛错。
+//
+// 读取失败一律 fail-closed（抛 GraphError，绝不静默降级为空串或内置文本）—— 与 host 侧
+// `requirePromptAsset` 同口径，保证「资产没随包发布」不会被伪装成「正文为空」。
+
+/** 资产目录：**公共提示词层**（唯一静态定位，两形态同形）。
+ *
+ *  · 源形态（`<repo>/core/ops.ts`）      ⇒ `<repo>/prompts/`；
+ *  · 发布形态（`<root>/dist/core/ops.js`）⇒ `<root>/dist/prompts/`。
+ *
+ *  两形态同为 `../prompts/`：构建把公共层 `prompts/` 与宿主专属 `dsh-graph-host/prompts/`
+ *  **合并**拷进 `dist/prompts/`。故本函数不依赖父目录恰好叫 `dist`，`dist/` 整体复制到
+ *  任意名字的目录后仍自洽。
+ *
+ *  **所有权铁律**：core 属公共层，**只读公共层** `../prompts/` —— 绝不再定位、也绝不回退到
+ *  `dsh-graph-host/prompts/`（那是宿主适配器目录）。跨宿主复用要求 core 不依赖任何宿主插件。 */
+export function resolvePromptAssetDirUrl(): URL {
+  return new URL("../prompts/", import.meta.url);
+}
+
+/** 读取一份 core 侧提示词资产正文（`<name>.<lang>.md`）；缺资产/不可读 ⇒ fail-closed 抛错。
+ *
+ *  language 只认字面量 "en"，其余（含 undefined/null/未知值）一律回落 zh —— 与
+ *  `subagentModePrompt` / host `normalizePromptLanguage` 的既有口径一致，不另立第二套语言状态。 */
+export function readCorePromptAsset(name: string, language?: string | null): string {
+  const lang = language === "en" ? "en" : "zh";
+  const file = new URL(`${name}.${lang}.md`, resolvePromptAssetDirUrl());
+  try {
+    const text = readFileSync(file, "utf8");
+    if (!text.trim()) throw new Error("empty");
+    return text;
+  } catch {
+    throw new GraphError(`dsh-graph prompt asset missing or unreadable: ${name}.${lang}.md`);
+  }
+}
+
+/** g-496：把资产里的 `{{name}}` 占位符回填为调用方提供的**已装配片段**。
+ *
+ *  边界（与 host 侧 `fillExecutorDisciplineTemplate` 同口径，不引入通用插值框架）：
+ *  - 只认 `{{name}}` 双花括号形态，**不递归**替换（回填文本里的 `{{…}}` 原样保留，不二次展开）；
+ *  - 资产引用的每个键都必须提供；缺失键显式报错。可选片段由调用方显式传入空串；
+ *  - 单行占位符被多行文本替换是预期行为（行数由调用方通过等价空行维持对称，
+ *    见 core/tests/prompt-i18n-parity.test.ts 的四重相等）。
+ *
+ *  「固定正文在资产、变量/结构字段与装配在代码」的边界即由本函数承载：资产只写死措辞，
+ *  目标 id / 路径 / 标题 / digest / 代码片段 / 验收项一律由此处插值注入。 */
+export function fillPromptTemplate(text: string, vars: Record<string, string>): string {
+  const rendered = text.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (whole, name: string) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) {
+      throw new GraphError(`提示词模板缺少必需变量：${name}`);
+    }
+    return String(vars[name]);
+  });
+  return rendered;
+}
+
 // ===== g-191：受控子代理模式枚举与策略定义 =====
 export const SUBAGENT_MODES = ["standard", "minimal"] as const;
 export type SubagentMode = typeof SUBAGENT_MODES[number];
@@ -1028,15 +1103,21 @@ export interface DispatchCapabilityDiagnosis {
 /** 必需工具（`role.requiredTools`，含 shell 槽位）在当前能力下的缺失诊断。
  *
  *  判据：仅当**探针明确判定为不可用**时才算缺失——无探针（`available` 缺省）返回 `ok=true`，
- *  保持 legacy 行为不被误阻断；唯一例外是探针在场但候选全不可用（`probe-missing`）⇒ 点名缺 shell。 */
+ *  保持 legacy 行为不被误阻断；唯一例外是探针在场但候选全不可用（`probe-missing`）⇒ 点名缺 shell。
+ *
+ *  g-480：必需清单取自 `moduleAwareRoleProfile(role, switches)` —— 模块关闭时该模块的受管工具名
+ *  **不再算必需**（角色随模块自适应，不因我们自己裁掉的工具而拒绝派发）。`switches` 缺省/全开时
+ *  与改造前逐字节一致；**宿主真缺工具**（探针对该名返回 false）的 fail-closed 语义原样保留。
+ */
 export function diagnoseDispatchCapability(
   role: SubagentRole,
   mode?: SubagentMode | null,
   cap?: ToolCapabilityContext,
+  switches?: ModuleSwitches | null,
 ): DispatchCapabilityDiagnosis {
   const shell = resolveShellTool(cap);
   const normalizedMode: SubagentMode = mode ? normalizeSubagentMode(mode) ?? DEFAULT_SUBAGENT_MODE : DEFAULT_SUBAGENT_MODE;
-  const profile = getRoleProfile(role);
+  const profile = moduleAwareRoleProfile(role, switches);
   const missing: string[] = [];
   for (const raw of profile.requiredTools) {
     if (raw === SHELL_TOOL_SLOT) {
@@ -1272,12 +1353,71 @@ export function getRoleProfile(role: SubagentRole): RoleProfile {
   return ROLE_PROFILES[role] ?? ROLE_PROFILES.executor;
 }
 
+/** g-480（负责人裁决）：**模块关闭 ⇒ 角色档案自适应**（唯一真源；宿主只消费，不另抄一份映射）。
+ *
+ *  背景：关闭 `attachments` 时，collector 的 `requiredTools` 里仍有 `graph_store_attachment`，
+ *  于是「工具面已裁、能力自检却点名缺工具」⇒ 旧语义只能**拒绝派发** collector（fail-closed）。
+ *  裁决改为：角色**随模块自适应** —— 模块关 ⇒ 该模块的受管工具名从该角色档案里同步消去，
+ *  档案面（persona 文本）也不再提及它 ⇒ 角色照常可派发、且不会去调用不存在的工具。
+ *
+ *  收口（**必须**在任何「能力自检 / 工具过滤 / persona 渲染」处统一走本函数）：
+ *   · 工具面：`requiredTools` 与 `allowedTools.{standard,minimal}` 去掉受管工具名；
+ *   · 文本面：`description` / `disciplineTitle` / `disciplineLines` / `bashPermissionNote` 复用
+ *     `stripModuleToolMentions` **按行**剔除 —— 无可剔时该方法返回**同一字符串** ⇒ 未配置/全开
+ *     路径逐字节不变（且此时直接返回原对象，连拷贝都不发生）。
+ *
+ *  与「宿主真缺工具」严格区分：后者（g-473 的 `probeAvailable(cap, name) === false`）是**宿主能力**
+ *  缺失 ⇒ 仍然 fail-closed 拒绝派发；本函数只改变「该模块的工具是否算必需/可用」，不吞任何探针结论。
+ */
+export function moduleAwareRoleProfile(
+  role: SubagentRole,
+  switches?: ModuleSwitches | null,
+): RoleProfile {
+  const base = getRoleProfile(role);
+  const disabled = switches?.disabledTools ?? [];
+  if (!disabled.length) return base; // 全开 / 未配置 / 读失败（resolveModuleSwitches(null)）⇒ 原对象
+  const keep = (list?: readonly string[]): readonly string[] | undefined =>
+    (list === undefined ? undefined : list.filter((n) => !disabled.includes(n)));
+  return {
+    ...base,
+    description: stripModuleToolMentions(base.description, disabled),
+    disciplineTitle: stripModuleToolMentions(base.disciplineTitle, disabled),
+    disciplineLines: base.disciplineLines.map((line) => stripModuleToolMentions(line, disabled)),
+    bashPermissionNote:
+      base.bashPermissionNote === undefined ? undefined : stripModuleToolMentions(base.bashPermissionNote, disabled),
+    requiredTools: keep(base.requiredTools) ?? [],
+    allowedTools: { standard: keep(base.allowedTools.standard), minimal: keep(base.allowedTools.minimal) ?? [] },
+  };
+}
+
+/** g-480：某模块关闭时**档案会随之自适应**的角色清单（按 `SUBAGENT_ROLES` 顺序）。
+ *
+ *  由**真实档案 diff** 推出（不是第二份映射副本）⇒ 谁往某角色档案里加了受管工具名，本清单自动跟随；
+ *  `schema_hints.modules.per_module[*].roles` 据此如实登记「谁的档案面会被裁」（空 = 只影响工具面）。
+ */
+export function rolesAdaptedByModule(module: HarnessModuleId): SubagentRole[] {
+  if (!(HARNESS_MODULE_IDS as readonly string[]).includes(module)) return [];
+  if ((MODULE_TOOL_NAMES[module] ?? []).length === 0) return []; // 空工具集（automation_prompts）⇒ 无档案受影响
+  const switches = resolveModuleSwitches({ modules: { [module]: false } });
+  const shape = (p: RoleProfile) => JSON.stringify([
+    p.requiredTools,
+    p.allowedTools.standard ?? null,
+    p.allowedTools.minimal,
+    p.description,
+    p.disciplineTitle,
+    p.disciplineLines,
+    p.bashPermissionNote ?? null,
+  ]);
+  return SUBAGENT_ROLES.filter((role) => shape(ROLE_PROFILES[role]) !== shape(moduleAwareRoleProfile(role, switches)));
+}
+
 export function toolFilterForRole(
   role: SubagentRole,
   mode?: SubagentMode | null,
   cap?: ToolCapabilityContext,
+  switches?: ModuleSwitches | null,
 ): { allow?: readonly string[] } | undefined {
-  const profile = getRoleProfile(role);
+  const profile = moduleAwareRoleProfile(role, switches);
   const normalizedMode = mode ? normalizeSubagentMode(mode) : "standard";
   if (normalizedMode === "minimal") {
     return { allow: expandRoleToolList(profile.allowedTools.minimal, cap) };
@@ -1317,20 +1457,29 @@ export function normalizeSubagentMode(mode: unknown): SubagentMode | null {
 
 /** 模式策略提示词片段（仅影响执行策略/提示参数，不越过凭据/provider边界，不接受命令注入）
  *
- *  g-390：本常量是**中文真源**，保持逐字不变（既有断言与 zh 渲染产物按其锁定）。
- *  英文对照见 SUBAGENT_MODE_PROMPTS_EN；两条来源必须同义、逐 mode 对称。 */
+ *  g-496：正文真源 = 公共层 `prompts/subagent-mode.{zh,en}.md`（**唯一事实源**，
+ *  代码不再持有第二副本）。本常量仍是**导出的可变表**、键集合仍恰为 SUBAGENT_MODES、
+ *  `standard` 仍为空串（standard 不注入模式段）—— 既有 API 与断言口径不变。
+ *
+ *  `minimal` 是**普通数据属性**（可写、可枚举、可配置），初值在**模块加载时**从资产读入
+ *  （`readCorePromptAsset`，缺资产 fail-closed 抛错）。刻意**不用 getter**：getter 是访问器
+ *  属性，无 setter 时严格模式（ESM/`tsc` 产物）下写入即抛
+ *  `TypeError: Cannot set property minimal of #<Object> which has only a getter`，
+ *  会破坏「测试可写入该表做变异对照 / 调用方可覆盖」的既有可变 API。
+ *  模式表原本就是**加载期常量正文**，故此处也不需要额外的运行期现读；亦不引入 setter
+ *  或 override 状态。 */
 export const SUBAGENT_MODE_PROMPTS: Record<SubagentMode, string> = {
   standard: "",
-  minimal: `【极简模式执行策略】仅提供受控 6 项基础工具（${SHELL_TOOL_TOKEN}、edit、read、write、graph_report_status、graph_transition），保持紧凑输出，不展开冗余高级调用。`,
+  minimal: readCorePromptAsset("subagent-mode", "zh").replace(/\n+$/, ""),
 };
 
 /** g-390：SUBAGENT_MODE_PROMPTS 的英文对照（与 zh 版**同义**，逐 mode 一一对应）。
  *
  *  约束：en 值必须零汉字——英文派发正文出现内置汉字即本次修复的目标缺陷。
- *  与 zh 版一致，standard 为空串（standard 不注入模式段）。 */
+ *  与 zh 版一致，standard 为空串（standard 不注入模式段）；同样用普通数据属性。 */
 export const SUBAGENT_MODE_PROMPTS_EN: Record<SubagentMode, string> = {
   standard: "",
-  minimal: `[Minimal mode execution strategy] Only the controlled 6 base tools are provided (${SHELL_TOOL_TOKEN}, edit, read, write, graph_report_status, graph_transition); keep the output compact and do not expand redundant advanced calls.`,
+  minimal: readCorePromptAsset("subagent-mode", "en").replace(/\n+$/, ""),
 };
 
 /** g-390：按提示词语言取模式策略片段。
@@ -1410,6 +1559,127 @@ export type ReviewListRawValue =
   | Record<string, unknown>
   | unknown[];
 
+// ===== g-480：harness 模块可选开关（workspace 级单层；未配置 = 全开）=====
+// 范围（负责人钦定，本期固定）：`project.yaml` 的 `modules` 段，**不**做 profile 默认 + workspace 覆盖两层。
+// 五个模块、默认全开；**未配置时与改造前行为逐字节一致**（提示词段 diff=0、工具面 51 个不变）。
+export const HARNESS_MODULE_IDS = ["tags", "memory", "shared_cards", "automation_prompts", "attachments"] as const;
+export type HarnessModuleId = (typeof HARNESS_MODULE_IDS)[number];
+
+/**
+ * 模块 → 受管 `graph_*` 工具名（**唯一映射表**，全仓只此一份；宿主不得另抄一份字面量）。
+ *
+ * - `automation_prompts` 是**纯提示词面**模块（六键自动化指导段），没有受管工具 ⇒ 空数组。
+ * - `shared_cards` 只受管**共享池专属**的五个工具；**不含** `graph_add_card` —— 目标自有卡片是组装
+ *   目标的部件（`scope:"goal"`），与共享池是两个不同能力，本期开关不越界禁用后者。
+ * - 映射表的**正确性由测试从注册真源校验**（`dsh-graph-host/index.js` 里真实的 `graph_*` 注册清单）：
+ *   表里出现未注册的名字、或某个受管工具同时归两个模块，都判红。
+ */
+export const MODULE_TOOL_NAMES: Record<HarnessModuleId, readonly string[]> = {
+  tags: ["graph_set_goal_tags"],
+  memory: ["graph_memory_add", "graph_memory_replace", "graph_memory_remove", "graph_memory_recall"],
+  shared_cards: [
+    "graph_list_shared_cards",
+    "graph_attach_shared_card",
+    "graph_detach_shared_card",
+    "graph_convert_card_to_shared",
+    "graph_convert_card_to_owned",
+  ],
+  automation_prompts: [],
+  attachments: ["graph_store_attachment", "graph_delete_attachment"],
+};
+
+/** 模块开关的判定原因（闭集，供机读）。未配置/畸形都**不抛错**。 */
+export type ModuleSwitchReason = "explicit_on" | "explicit_off" | "default_on" | "invalid_value";
+
+export interface ModuleSwitchDecision {
+  module: HarnessModuleId;
+  /** 生效值：`true` = 该模块可用。 */
+  on: boolean;
+  /** 是否有**显式**合法布尔配置（含从旧键迁移来的值）。 */
+  configured: boolean;
+  reason: ModuleSwitchReason;
+}
+
+export interface ModuleSwitches {
+  switches: Record<HarnessModuleId, ModuleSwitchDecision>;
+  /** 被关闭的模块 id（按 HARNESS_MODULE_IDS 顺序）。 */
+  disabled: HarnessModuleId[];
+  /** 被关闭模块名下的工具名（按 HARNESS_MODULE_IDS 顺序，已去重）。 */
+  disabledTools: string[];
+}
+
+/** 受管工具名：不传模块 ⇒ 全部受管工具名（按模块顺序、去重）。 */
+export function moduleToolNames(module?: HarnessModuleId): string[] {
+  if (module !== undefined) {
+    if (!(HARNESS_MODULE_IDS as readonly string[]).includes(module)) return [];
+    return [...MODULE_TOOL_NAMES[module]];
+  }
+  const out: string[] = [];
+  for (const id of HARNESS_MODULE_IDS) for (const n of MODULE_TOOL_NAMES[id]) if (!out.includes(n)) out.push(n);
+  return out;
+}
+
+/**
+ * 纯函数：由项目配置计算五个模块的生效开关。
+ *
+ * 不变量（fail-safe、绝不抛错）：
+ * - 只有**真布尔** `true`/`false` 算显式配置；`null`/缺失 ⇒ 未配置 ⇒ **默认开启**（与改造前一致）；
+ * - 其它任何取值（字符串 `"true"`、数字、映射……）⇒ `invalid_value`，且**按默认开启**处理 ——
+ *   绝不从畸形值里猜出「关闭」（也就不会因手写 YAML 的手滑把整块能力静默关掉）；
+ * - 关闭值只用于**隐藏能力**，从不删除任何数据（判据 5）。
+ */
+export function resolveModuleSwitches(config: unknown): ModuleSwitches {
+  const modules = (config && typeof config === "object" ? (config as any).modules : null) ?? null;
+  const switches = {} as Record<HarnessModuleId, ModuleSwitchDecision>;
+  const disabled: HarnessModuleId[] = [];
+  const disabledTools: string[] = [];
+  for (const id of HARNESS_MODULE_IDS) {
+    const raw = modules && typeof modules === "object" ? (modules as any)[id] : undefined;
+    let on = true;
+    let configured = false;
+    let reason: ModuleSwitchReason = "default_on";
+    if (raw === true) { on = true; configured = true; reason = "explicit_on"; }
+    else if (raw === false) { on = false; configured = true; reason = "explicit_off"; }
+    else if (raw !== undefined && raw !== null) { on = true; configured = false; reason = "invalid_value"; }
+    switches[id] = { module: id, on, configured, reason };
+    if (!on) {
+      disabled.push(id);
+      for (const n of MODULE_TOOL_NAMES[id]) if (!disabledTools.includes(n)) disabledTools.push(n);
+    }
+  }
+  return { switches, disabled, disabledTools };
+}
+
+/** 便捷入口：直接取「被关闭模块名下的工具名」（关闭名单即 restrict 的 deny 名单来源）。 */
+export function disabledModuleTools(config: unknown): string[] {
+  return resolveModuleSwitches(config).disabledTools;
+}
+
+/** 便捷入口：单模块是否生效（默认开启）。 */
+export function isModuleEnabled(config: unknown, module: HarnessModuleId): boolean {
+  return resolveModuleSwitches(config).switches[module]?.on !== false;
+}
+
+/**
+ * 纯函数：把**被关闭模块**的工具名从一段提示词文本里抹掉（按行删除），用于保证
+ * 「模块关闭后，我们注册的 systemPrompt section 不再引用该模块的工具名」（判据 3）。
+ *
+ * - 关闭名单为空 / 文本为空 ⇒ **原样返回同一字符串**（未配置全开路径 diff=0 的结构性保证）；
+ * - 删除整行而不是替换词：避免把句子削成残句（「用 记录」）；
+ * - 只作用于**提示词投影**，绝不改动任何落盘数据（判据 5：关闭 = 隐藏，不删数据）。
+ */
+export function stripModuleToolMentions(text: string, disabledTools: readonly string[]): string {
+  if (!text || !disabledTools || disabledTools.length === 0) return text;
+  const lines = text.split("\n");
+  let dropped = 0;
+  const kept = lines.filter((line) => {
+    const hit = disabledTools.some((n) => n && line.includes(n));
+    if (hit) dropped += 1;
+    return !hit;
+  });
+  return dropped === 0 ? text : kept.join("\n");
+}
+
 export interface ProjectConfig {
   executor: { provider: string | null; model: string | null; mode: SubagentMode | null; reasoning_effort?: string | null };
   defaults: {
@@ -1422,6 +1692,16 @@ export interface ProjectConfig {
     agent_teams: boolean | null;
   };
   prompt_overrides: { subagent: PromptOverride };
+  /**
+   * g-480：harness 模块可选开关（workspace 级单层）。未配置/缺失 = `null` = **开启**（与改造前逐字节一致）。
+   * 读侧只暴露五个键的真值；旧键 `memory.tools_enabled` 的迁移痕迹见 `modules_legacy_keys`。
+   */
+  modules: Record<HarnessModuleId, boolean | null>;
+  /**
+   * g-480 **仅读侧元信息**（非配置项，写侧 schema 明确拒绝）：哪些模块的生效值来自**已弃用**的旧键。
+   * 用于「明确弃用 + 旧值迁移」的可追溯性；一旦写侧写入 `modules.<id>`，对应旧键即被删除。
+   */
+  modules_legacy_keys?: Partial<Record<HarnessModuleId, string>>;
   /**
    * g-311/g-435：顶层 review 配置——policy 未配置/空/非三值一律为 null；三项列表支持未配置(null)与显式列表。
    * `config_malformed` / `invalid_fields` 是**仅读侧元信息**（非配置项，写侧 schema 明确拒绝），
@@ -1741,6 +2021,8 @@ export function readProjectConfig(root: string): ProjectConfig {
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
       supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null },
       prompt_overrides: { subagent: { state: "default", value: null } },
+      // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
+      modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
       review: {
         policy: null,
         regions: null,
@@ -1875,6 +2157,16 @@ export function readProjectConfig(root: string): ProjectConfig {
 
   const auto: Record<string, string | null> = {};
   for (const k of AUTOMATION_KEYS) auto[k] = scal(["supervisor", "automation", k]);
+  // g-480：模块开关读取（真布尔或 null；fail-safe 见 boolScalar 注释）。旧键迁移见下方 memory 分支。
+  const moduleValues = Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, boolScalar(["modules", k])])) as Record<HarnessModuleId, boolean | null>;
+  const moduleLegacyKeys: Partial<Record<HarnessModuleId, string>> = {};
+  if (moduleValues.memory === null) {
+    const legacy = boolScalar(["memory", "tools_enabled"]);
+    if (legacy !== null) {
+      moduleValues.memory = legacy;
+      moduleLegacyKeys.memory = "memory.tools_enabled";
+    }
+  }
   const lanesRaw = scal(["defaults", "pk", "lanes"]);
   const subagent = readPromptOverrideConfig(lines, "subagent").value ?? { state: "default", value: null };
   const modeRaw = scal(["executor", "mode"]);
@@ -1894,6 +2186,11 @@ export function readProjectConfig(root: string): ProjectConfig {
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
     },
     supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]) },
+    // g-480：五个模块开关（真布尔或 null=未配置）；旧键 `memory.tools_enabled` 只作为 **memory 模块
+    // 的读侧默认**保留一次，并在 `modules.memory` 落盘时被删除（见 writeProjectConfig）⇒ 同一时刻
+    // 只有一个生效真源，且旧值不会被静默丢弃（判据 5）。
+    modules: moduleValues,
+    ...(Object.keys(moduleLegacyKeys).length > 0 ? { modules_legacy_keys: moduleLegacyKeys } : {}),
     prompt_overrides: { subagent },
     review: {
       policy: policyResult.value,
@@ -1913,29 +2210,30 @@ export function readProjectConfig(root: string): ProjectConfig {
     },
   };
 }
+/**
+ * g-480：记忆工具开关——**真源已扶正到 `modules.memory`**。
+ *
+ * 改造前这里是「裸 YAML 键 `memory.tools_enabled`」的直读，与 `modules.memory` 并存即两套真源。
+ * 现在的口径：
+ * - 读：`readProjectConfig(root).modules.memory`（未配置 ⇒ `true`）；`modules.memory` 未配置而旧键
+ *   存在时，`readProjectConfig` 已把旧值作为该模块的**读侧默认**折进来（一次性兼容，见
+ *   `modules_legacy_keys`）；
+ * - 写：`setMemoryToolsEnabled` 改写 `modules.memory`（走 schema + `project.config_set` 事件），
+ *   并删除旧键 ⇒ 迁移后**只剩一套真源**，旧键不再被任何写路径产生。
+ */
 export function isMemoryToolsEnabled(root: string): boolean {
-  const file = join(root, "project.yaml");
-  if (!existsSync(file)) return true;
   try {
-    const lines = readFileSync(file, "utf8").split("\n");
-    const val = readScalarByPath(lines, ["memory", "tools_enabled"]);
-    if (val === "false") return false;
-  } catch {}
-  return true;
+    const cfg = readProjectConfig(root);
+    return resolveModuleSwitches(cfg).switches.memory.on;
+  } catch {
+    // 配置不可读：fail-safe 按「开启」（与改造前 readScalarByPath 异常路径一致的默认）
+    return true;
+  }
 }
 
+/** g-480：写入 `modules.memory`（旧键 `memory.tools_enabled` 在同一次原子写里被删除 = 迁移）。 */
 export function setMemoryToolsEnabled(root: string, enabled: boolean, actor = "human:gui"): void {
-  const file = join(root, "project.yaml");
-  let content = existsSync(file) ? readFileSync(file, "utf8") : "";
-  // 简易 YAML 写入 memory.tools_enabled
-  if (!content.includes("memory:")) {
-    content += `\nmemory:\n  tools_enabled: ${enabled}\n`;
-  } else if (/tools_enabled:\s*(true|false)/.test(content)) {
-    content = content.replace(/tools_enabled:\s*(true|false)/, `tools_enabled: ${enabled}`);
-  } else {
-    content = content.replace(/memory:/, `memory:\n  tools_enabled: ${enabled}`);
-  }
-  writeFileSync(file, content, "utf8");
+  writeProjectConfig(root, { modules: { memory: enabled === true } }, actor);
 }
 
 export interface FormatStandingMemoryOptions {
@@ -2176,6 +2474,24 @@ function validateConfigPatch(patch: any): void {
       needStr(o.value, `prompt_overrides.${key}.value`, { nullable: true });
     }
   }
+  // g-480：模块开关二次校验——只允许五个已知模块，取值只允许真布尔或 null（拒绝 "true"/1 等隐式形态）；
+  // 未知键在此**显式点名**（schema 的 additionalProperties:false 也会拒，这里是第二道且文案更可读）。
+  if ("modules" in patch) {
+    needObj(patch.modules, "modules");
+    const m = patch.modules ?? {};
+    for (const k of Object.keys(m)) {
+      if (!(HARNESS_MODULE_IDS as readonly string[]).includes(k)) {
+        throw new GraphError(`modules.${k} 不是已知模块（只允许 ${HARNESS_MODULE_IDS.join("/")}）`);
+      }
+    }
+    for (const id of HARNESS_MODULE_IDS) {
+      if (!(id in m)) continue;
+      const v = m[id];
+      if (v !== undefined && v !== null && typeof v !== "boolean") {
+        throw new GraphError(`modules.${id} 只允许 true/false 或 null（未配置=开启）`);
+      }
+    }
+  }
   // g-311/g-435：顶层 review 配置二次校验（schema 已校验基本结构，此处做业务规则与非法路径拒绝）。
   if ("review" in patch) {
     needObj(patch.review, "review");
@@ -2231,6 +2547,30 @@ function validateConfigPatch(patch: any): void {
  *  整读 → schema 校验 → 行编辑 → 原子写（tmp + rename）；校验失败抛 GraphError 不落盘。
  *  仅当确有值变化时记 project.config_set 事件（幂等/防噪音）。
  *  g-207：新增 schema 校验入口，拒绝未知字段与隐式 coercion。 */
+/**
+ * g-480：删除**已弃用**的旧键 `memory.tools_enabled`（旧值已被 `readProjectConfig` 折进 `modules.memory`）。
+ * 与 `modules.memory` 的写入同处一次原子写 ⇒ 迁移后 project.yaml 里**只剩一套真源**。
+ *
+ * 只处理行级可编辑的块映射形态（`memory:` 头 + 缩进 2 的 `tools_enabled:` 子行）；inline/flow-style
+ * （`memory: {tools_enabled: false}`）行级不可编辑，此时**不动 YAML**：但 `modules.memory` 一旦存在即胜出，
+ * 旧值不再参与任何判定，因此不构成第二真源。子块删空后连头行一并清掉（不留 `memory:` 空壳），
+ * 头行带注释时保留头行。
+ *
+ * @returns 是否真的删掉了 `tools_enabled` 行。
+ */
+function deleteLegacyMemoryToolsKey(lines: string[]): boolean {
+  const head = findKeyLine(lines, "memory", 0, 0, lines.length);
+  if (head < 0) return false;
+  const after = lines[head].slice(lineIndent(lines[head]) + "memory".length + 1);
+  if (splitValueComment(after).value.trim() !== "") return false; // 非块映射头 ⇒ 行级不可编辑
+  const childIdx = findKeyLine(lines, "tools_enabled", 2, head + 1, blockChildrenEnd(lines, head, 0));
+  if (childIdx < 0) return false;
+  lines.splice(childIdx, 1);
+  const rest = lines.slice(head + 1, blockChildrenEnd(lines, head, 0)).some((l) => l.trim() !== "");
+  if (!rest && !lines[head].includes("#")) lines.splice(head, 1);
+  return true;
+}
+
 export function writeProjectConfig(root: string, patch: any, actor: string): void {
   // g-207：schema 严格校验（拒绝未知字段、类型不匹配、隐式 coercion）
   const schemaResult = validateSchema(patch, settingsPostSchema);
@@ -2301,6 +2641,17 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
     if ("contract_paths" in patch.review) setList("contract_paths", patch.review.contract_paths);
     if ("non_product_prefixes" in patch.review) setList("non_product_prefixes", patch.review.non_product_prefixes);
   }
+  // g-480：模块开关落盘——true/false 写布尔字面量；null/undefined 清空该叶子（回到未配置=开启）。
+  // 写入 `modules.memory` 的**同一次原子写**里删除已弃用旧键 `memory.tools_enabled`（旧值迁移，
+  // 不留两套真源）。写其它模块不触碰旧键（那时旧键仍是 memory 的读侧默认，尚未被取代）。
+  if (patch.modules) {
+    for (const id of HARNESS_MODULE_IDS) {
+      if (!(id in patch.modules)) continue;
+      const v = patch.modules[id];
+      setScalar(["modules", id], v === true ? "true" : v === false ? "false" : "");
+      if (id === "memory") deleteLegacyMemoryToolsKey(lines);
+    }
+  }
 
   const updated = lines.join("\n");
   if (updated === original) {
@@ -2310,7 +2661,14 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
   writeFileSync(`${file}.tmp`, updated, "utf8");
   replaceFileAtomic(`${file}.tmp`, file);
   const changed: string[] = [];
-  for (const k of Object.keys(patch ?? {})) changed.push(k);
+  for (const k of Object.keys(patch ?? {})) {
+    // g-480：模块开关逐项登记（`modules.memory` 而非笼统的 `modules`），使「谁被改了」在事件流里可判。
+    if (k === "modules" && patch.modules && typeof patch.modules === "object") {
+      for (const id of HARNESS_MODULE_IDS) if (id in patch.modules) changed.push(`modules.${id}`);
+      continue;
+    }
+    changed.push(k);
+  }
   appendEvent(root, {
     actor,
     event: "project.config_set",
@@ -4197,7 +4555,12 @@ export function validate(root: string): string[] {
   return problems;
 }
 
-/** 从事件流重建状态并与 frontmatter 比对；返回 drift 列表。 */
+/**
+ * 从事件流重建状态并与 frontmatter 比对；返回 drift 列表。
+ * g-487：并**幂等**回填「评审报告正文已给出合规结论行、而 `reviews/<id>.md` 快照仍是
+ * UNVERIFIED」的历史误记（追加 `review.conclusion_reconciled` 事件后刷新快照；报告正文逐字节不变）。
+ * 该回填是「显式回填入口」，只读预演用 `reconcileReviewConclusions(root, { apply: false })`。
+ */
 export function rebuild(root: string): string[] {
   const events = readEvents(root);
   const replayed = replayStatuses(events);
@@ -4236,6 +4599,17 @@ export function rebuild(root: string): string[] {
       const doc: GoalDoc = { meta: lane.meta, body };
       writeFileSync(vfile, serializeDoc(doc), "utf8");
     }
+  }
+
+  // g-487：评审结论误记回填（幂等）——正文已给出合规结论行、`reviews/<id>.md` 快照却仍是
+  // UNVERIFIED 的历史记录，按正文重算后修正（先记 review.conclusion_reconciled 留痕，再刷快照；
+  // 报告正文逐字节不变）。这是本目标的**显式回填入口**；只读预演见 `reconcileReviewConclusions(apply:false)`。
+  for (const item of reconcileReviewConclusions(root, { actor: "system:graph_rebuild", apply: true })) {
+    if (!item.changed) continue;
+    drift.push(
+      `${item.goal}/${item.review_id}: 评审结论误记回填 机器面 ${item.event_conclusion} → ${item.reparsed}` +
+      `（已记 review.conclusion_reconciled；报告正文未改）`,
+    );
   }
 
   invalidateGeneration(root);
@@ -6290,97 +6664,25 @@ export function formatCollectPrompt(
   // g-183 返工 #6/#8：canonical attachments 根必须经 symlink 拒绝、且只读不创建目录（避免泄漏外部路径/改变树）
   const attRoot = attachmentsCanonicalPath(root);
 
-  if (language === "en") {
-    const sections = [
-      "## Collection task context",
-      "",
-      "**Working directory**: the assigned worktree/current working directory.",
-      `**Canonical attachment root**: \`${attRoot}\``,
-      `**Data root (.dsh-graph)**: \`${resolve(root)}\``,
-      "",
-      "**Goal information**:",
-      `- id: \`${goalId}\``,
-      `- title: ${goalTitle}`,
-      "",
-      "**Card information**:",
-      `- id: \`${cardId}\``,
-      `- title: ${cardTitle}`,
-      "",
-      "**Collection scope**:",
-      `Collect detailed context related to card \"${cardTitle}\" for this card.`,
-      "",
-      "**Fill requirements**:",
-      "1. Put the full body in `text`; write a concise key-point `summary` (about 100 characters).",
-      "2. Store discovered attachments with `graph_store_attachment` under the canonical attachment root.",
-      "3. Reference attachments with `@att/<relative-name>` in the card body or goal.md.",
-      "4. Fill the result with exactly:",
-      "```",
-      `graph_fill_card(goal=\"${goalId}\", card=\"${cardId}\", text=<full body>, summary=<short summary>)`,
-      "```",
-      "",
-      "**Strict boundaries**:",
-      `1. Modify only the bound card \`${cardId}\`; do not modify other goals or cards.`,
-      "2. Do not call graph_review_card; the supervisor reviews the result.",
-      "3. Run graph tools in the assigned worktree/current working directory.",
-      "4. Use card lifecycle only; do not create a fake attempt or call graph_report_status.",
-    ];
-    if (userPrompt && userPrompt.trim()) sections.push("", "**User addendum**:", userPrompt.trim());
-    return sections.join("\n");
-  }
+  // g-496：固定正文（收集范围 / 回填要求 / 附件安全 / 禁区、及英文对偶）唯一真源 =
+  // `prompts/collect-task.{zh,en}.md`。代码只负责**变量与装配**：目标/卡片元数据、canonical
+  // 附件根与数据根、以及用户附加要求；采集范围按被收集卡片的**标题**插值。
+  // 语言选择沿用既有口径（只认字面量 "en"），不另立第二套语言状态。
+  const template = readCorePromptAsset("collect-task", language);
+  const body = fillPromptTemplate(template, {
+    attRoot,
+    dataRoot: resolve(root),
+    goalId,
+    goalTitle,
+    cardId,
+    cardTitle,
+  }).replace(/\n+$/, "");
 
-  // 构建结构化提示词
-  const sections = [
-    `## 收集任务上下文`,
-    ``,
-    `**工作目录**：当前分配的 worktree/当前工作目录。`,
-    `**canonical 附件根（绝对路径，非 worktree 相对路径）**：\`${attRoot}\``,
-    `**数据根（.dsh-graph，绝对路径）**：\`${resolve(root)}\``,
-    ``,
-    `**目标信息**：`,
-    `- id: \`${goalId}\``,
-    `- 标题: ${goalTitle}`,
-    ``,
-    `**卡片信息**：`,
-    `- id: \`${cardId}\``,
-    `- 标题: ${cardTitle}`,
-    ``,
-    `**收集范围**：`,
-    `请收集与卡片「${cardTitle}」相关的详细上下文信息，用于填充该卡片。`,
-    ``,
-    `**回填要求**：`,
-    `1. 把正文全文写进 \`text\` 参数；\`summary\` 写一句话要点式摘要（≤100 字左右），不要长文。`,
-    `2. 若收集到文件附件（md/txt 文本、图片、csv/Excel、二进制等），调用 \`graph_store_attachment\` 把内容写入上面的 canonical 附件根：`,
-    `   - 文本：\`graph_store_attachment(name="docs/report.md", content=<UTF-8 文本>)\``,
-    `   - 二进制/图片/Excel：\`graph_store_attachment(name="chart.png", base64=<base64>)\`（或原始字节上传）。`,
-    `   - 返回的稳定引用名为相对路径（可含安全子目录，如 \`docs/report.md\`）。`,
-    `3. 回调正文或 goal.md 时，用 \`@att/<相对引用名>\` 引用附件（如 \`@att/docs/report.md\`）；引用会在卡片正文、goal.md、后续 attempt 注入与 GUI 查看时保留/解析。`,
-    `4. 完成后调用以下精确命令回填结果：`,
-    `\`\`\``,
-    `graph_fill_card(goal="${goalId}", card="${cardId}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`,
-    `\`\`\``,
-    ``,
-    `**附件安全与边界（严格遵守）**：`,
-    `1. 附件只能写入上述 canonical 附件根及其安全子目录；拒绝绝对路径、\`.\`/\`..\` 穿越、反斜杠、NUL。`,
-    `2. 不得写入或引用 \`.dsh-graph\` 之外的文件；不要用相对 \`.dsh-graph/attachments\`（worktree 内不可达）。`,
-    `3. 若从互联网抓取：仅允许 http/https，设置超时与大小上限，禁止 \`file://\`、\`localhost\`、内网地址（SSRF）；抓取结果经 \`graph_store_attachment\` 安全落盘，不得直接写文件系统。`,
-    ``,
-    `**禁区（严格遵守）**：`,
-    `1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 \`${cardId}\``,
-    `2. 不得自行调用 \`graph_review_card\`——完成后由 supervisor 复核`,
-    `3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行`,
-    `4. 进度协作依托卡片生命周期（empty → collecting → filled → reviewed），不创建虚假 attempt，绝不调用 graph_report_status`,
-  ];
-
-  // 如果有用户提供的附加要求，追加在末尾
-  if (userPrompt && userPrompt.trim()) {
-    sections.push(
-      ``,
-      `**用户附加要求**：`,
-      userPrompt.trim(),
-    );
-  }
-
-  return sections.join("\n");
+  // 用户提供的附加要求仍由代码追加（变量面，不进资产）。
+  const addendum = userPrompt && userPrompt.trim()
+    ? (language === "en" ? "\n\n**User addendum**:\n" : "\n\n**用户附加要求**：\n") + userPrompt.trim()
+    : "";
+  return body + addendum;
 }
 
 /** 获取卡片元数据（供 GUI 收集 prompt 使用） */
@@ -6532,67 +6834,46 @@ export const ATTEMPT_REPORT_SKELETON_END = "<!-- dsh-graph:report-skeleton:end -
 const promptLangIsEn = (language: unknown): boolean =>
   typeof language === "string" && language.trim().toLowerCase().startsWith("en");
 
-/** executor 报文骨架（8 项逐项必填；缺失即视为交付不完整）+ reviewer 报文骨架（6 项）。 */
-export const ATTEMPT_REPORT_SKELETON = [
-  "## 交回报文骨架（尾注·逐项必填：缺项即视为交付不完整）",
-  "",
-  "本报文是完成摘要（results.md）的主要素材：**越规范，摘要越可信**。请逐项作答，标题逐字使用（便于机读）。",
-  "",
-  "### A. executor 报文（8 项逐项必填）",
-  "1. **交付位置**：worktree / 分支 / commit / 基线（一行）。",
-  "2. **改了什么**：按能力分组的文件 + 模块清单，每个文件一句「加了什么」。",
-  "3. **怎么改的**：关键设计 / 数据流 / 为什么这样做（含被否方案与否决理由）。",
-  "4. **影响面**：谁受影响（运行环境 / 其他目标 / 发布含义 / 兼容性 / 配置迁移）。",
-  "5. **测过什么 / 没测什么**：命令 + 单行证据（含**负向对照**与**基线对照**）；未验证项及原因。",
-  "6. **值得注意的点**：风险 / 残余 / 已知缺陷 / 后续依赖（每条一句）。",
-  "7. **与判据的对应**：每条判据 → 达成与否 + 证据指向。",
-  "8. **需主管裁决事项**：逐条列出（附默认建议）。",
-  "",
-  "### B. reviewer 报文（6 项逐项必填）",
-  "1. **总判**：PASS / BLOCK / UNVERIFIED（附一句话理由）。",
-  "2. **逐项结论与单行证据**：判据逐条 → 结论 + 证据。",
-  "3. **BLOCK 最小返工清单**：可直接执行的返工项（逐条）。",
-  "4. **非阻塞注记**：可带着走但需留痕的问题。",
-  "5. **残余风险**：修完后仍存在的风险。",
-  "6. **未验证项**：未覆盖的路径与原因。",
-  "",
-  "### C. 报文长度预算（软上限；超限不算交付失败，但必须自报）",
-  `- 报文本体软上限 ${ATTEMPT_REPORT_SOFT_MAX_BYTES / 1024} KiB（落盘仍为 64 KiB、读取 1 MiB：**历史留档完整，只省喂给 LLM 的那一份**）；`,
-  "- 分预算：**改了什么 ≤1.5 KiB**；**怎么改的 ≤1 KiB**；**影响面 / 测过什么没测什么 / 值得注意的点 / 与判据的对应 各 ≤0.5 KiB**；其余每项一行；",
-  "- 超出软上限时，在报文**末尾**自报一行：`已超预算：<实际字节>/4 KiB`（**不删证据、不省略未验证项、不砍判据对应**）；",
-  "- 送 LLM 摘要的输入有硬上限：每 attempt 8 KiB（头 4 KiB + 尾 2 KiB + 中段省略标记）、单次总预算 256 KiB ⇒ 写得紧凑才不丢信息；被省略的字节数会由写入器标注在摘要里。",
-].join("\n");
+/* ---- 评审结论行契约（g-487）：骨架 / 提示词与解析实现共用的**单一真源** ------------
+ * 事故：报文骨架曾把结论行登记为 `1. **总判**：PASS / BLOCK / UNVERIFIED（附一句话理由）`
+ * （有序列表前缀 + 三值**枚举**），而 `parseReviewConclusion` 只认同行、行首 `-`/`*`/`**` 的
+ * **单值**形态 ⇒ 评审者照抄骨架，结论被记成 UNVERIFIED（本批 5 处历史误记的直接触发面）。
+ * 因此：可接受形态只在此处登记，示例由解析实现的守卫测试直接喂给 `parseReviewConclusion`
+ * 断言可解析 —— 骨架再也不可能给出解析器拒绝的形式。
+ * （定义位置在骨架之前：模块加载期即以模板字面量插值，`const` 存在 TDZ，不能后置。）
+ * ---------------------------------------------------------------------------------- */
+
+/** 结论行**标签**（同义，大小写不敏感）：中文「总判」/「结论」、英文 `Verdict`。 */
+export const REVIEW_CONCLUSION_LABELS = ["总判", "结论", "Verdict"] as const;
+
+/** 登记进骨架 / 提示词的标准结论行（zh / en）；守卫断言二者都能被解析为 PASS。 */
+export const REVIEW_CONCLUSION_EXAMPLE_ZH = "- **总判**：PASS";
+export const REVIEW_CONCLUSION_EXAMPLE_EN = "- **Verdict**: PASS";
+
+/** executor 报文骨架（8 项逐项必填；缺失即视为交付不完整）+ reviewer 报文骨架（6 项）。
+ *
+ *  g-496：**正文真源 = 公共层 `prompts/attempt-report-skeleton.{zh,en}.md`**（唯一事实源，
+ *  代码不再持有第二副本）。逻辑侧只保留「预算常量 / 结论示例 / begin-end 机器标记 / 占位符插值」——
+ *  资产里以 `{{conclusion_example}}` 与 `{{soft_max_kib}}` 两处占位符引用它们，读取时由本模块替换，
+ *  保证「预算与结论示例仍由逻辑提供」而正文不留第二份。
+ *
+ *  占位符替换是**纯字符串**替换（非模板求值）：资产文本不可执行，也不引入新依赖。
+ *  缺资产 ⇒ `readCorePromptAsset` fail-closed 抛错（绝不回落内置正文掩盖漏包）。 */
+const fillSkeletonPlaceholders = (body: string, conclusionExample: string): string =>
+  body
+    .split("{{conclusion_example}}").join(conclusionExample)
+    .split("{{soft_max_kib}}").join(String(ATTEMPT_REPORT_SOFT_MAX_BYTES / 1024));
+
+export const ATTEMPT_REPORT_SKELETON = fillSkeletonPlaceholders(
+  readCorePromptAsset("attempt-report-skeleton", "zh").replace(/\n+$/, ""),
+  REVIEW_CONCLUSION_EXAMPLE_ZH,
+);
 
 /** 英文同源骨架（en 文案零 CJK；条目与中文一一对应）。 */
-export const ATTEMPT_REPORT_SKELETON_EN = [
-  "## Hand-back report skeleton (tail note - every item required; a missing item means the delivery is incomplete)",
-  "",
-  "This report is the main material for the completion summary (results.md): the more disciplined it is, the more trustworthy the summary. Answer item by item and keep the headings verbatim so they stay machine-readable.",
-  "",
-  "### A. executor report (8 required items)",
-  "1. **Delivery location**: worktree / branch / commit / baseline (one line).",
-  "2. **What changed**: files and modules grouped by capability, one sentence per file on what it adds.",
-  "3. **How it was changed**: key design, data flow, why this way (including rejected options and why they were rejected).",
-  "4. **Impact surface**: who is affected (runtime environment, other goals, release meaning, compatibility, config migration).",
-  "5. **Tested / not tested**: command plus a single-line evidence summary (including **negative controls** and **baseline comparison**); unverified items and why.",
-  "6. **Worth noting**: risks, leftovers, known defects, follow-up dependencies (one sentence each).",
-  "7. **Criteria mapping**: each criterion to met or not met plus where the evidence is.",
-  "8. **Decisions needed from the supervisor**: listed one by one, each with a default recommendation.",
-  "",
-  "### B. reviewer report (6 required items)",
-  "1. **Overall verdict**: PASS / BLOCK / UNVERIFIED (with a one-line reason).",
-  "2. **Per-item conclusion and single-line evidence**: each criterion to its conclusion plus evidence.",
-  "3. **BLOCK minimal rework list**: directly actionable rework items, one by one.",
-  "4. **Non-blocking notes**: issues that can ship but must be recorded.",
-  "5. **Residual risks**: what still remains after the fix.",
-  "6. **Unverified items**: paths not covered and why.",
-  "",
-  "### C. Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)",
-  `- Soft cap for the report body: ${ATTEMPT_REPORT_SOFT_MAX_BYTES / 1024} KiB (storage stays at 64 KiB and reads at 1 MiB: the archive stays complete and only the copy fed to the LLM is trimmed);`,
-  "- Per-section budget: **what changed <= 1.5 KiB**; **how it changed <= 1 KiB**; **impact surface / tested-not-tested / worth noting / criteria mapping <= 0.5 KiB each**; every other item stays one line;",
-  "- When you exceed the soft cap, add one self-report line at the **end** of the report: `over budget: <actual bytes>/4 KiB` (never delete evidence, never drop unverified items, never trim the criteria mapping);",
-  "- The input sent to the LLM summary is hard-capped: 8 KiB per attempt (head 4 KiB + tail 2 KiB + a middle omission marker) and 256 KiB in total, so writing compactly is what keeps information from being dropped; the writer records the omitted byte count inside the summary.",
-].join("\n");
+export const ATTEMPT_REPORT_SKELETON_EN = fillSkeletonPlaceholders(
+  readCorePromptAsset("attempt-report-skeleton", "en").replace(/\n+$/, ""),
+  REVIEW_CONCLUSION_EXAMPLE_EN,
+);
 
 /**
  * 尾注块（含 begin/end 标记）。
@@ -6752,151 +7033,73 @@ function renderGoalResultsDigestText(
   return lines.join("\n");
 }
 
-/** 生成专用「完成摘要撰写员」子代理的提示词（g-374 F2：负责人确认重新摘要可由 LLM 产出）。 */
+/** g-496：`results.md` 规范章节标题的**机器契约常量**（跨 deterministic / llm / manual 三来源
+ *  一致，与界面语言无关）。摘要子代理的正文结构取自此处，**两语言资产共用一个真源** ——
+ *  这样英文资产里不需要出现中文契约字面量（en 零 CJK），而标题本身仍只有一份定义。 */
+const SUMMARY_STRUCTURE_CONTRACT: Array<{ heading: string; zh: string; en: string }> = [
+  { heading: "## 结论", zh: "一段话说清改动概要 + 影响与约束 + 值得注意 + 交付状态；", en: "one-paragraph change summary, impact/constraints, what is noteworthy, delivery state." },
+  { heading: "## 改动与影响", zh: "分小节写 改动面 / 影响面与硬约束 / 值得注意 / 涉及文件与命令；", en: "subsections: change surface, impact and hard constraints, noteworthy items, files and commands touched." },
+  { heading: "## 判据达成", zh: "逐条逐字引用判据原文与其已有标记，绝不自行判定是否达成；", en: "quote each criterion verbatim with its existing mark; never decide verification yourself." },
+  { heading: "## 证据引用", zh: "attempt、commit/baseline、结果文件、验证命令；", en: "attempts, commits/baselines, result files, verification commands." },
+  { heading: "## 关键决策", zh: "评论与最近指令里的决策与评审反馈；", en: "decisions and review feedback from comments/directives." },
+  { heading: "## 时间线", zh: "可选，只列关键事件。", en: "optional, key events only." },
+];
+
+/** 把结构契约渲染成资产里的 `{{structureLines}}` 片段（按语言取描述，标题恒为中文契约字面量）。 */
+function summaryStructureLines(language: "zh" | "en"): string {
+  return SUMMARY_STRUCTURE_CONTRACT
+    .map((s) => (language === "en" ? `- \`${s.heading}\` - ${s.en}` : `- \`${s.heading}\`：${s.zh}`))
+    .join("\n");
+}
+
+/** 生成专用「完成摘要撰写员」子代理的提示词（g-374 F2：负责人确认重新摘要可由 LLM 产出）。
+ *
+ *  g-496：全部固定正文（事实摘要纪律、正文结构、落盘/写入规则、输入预算、不可编造/不可自行
+ *  判定等约束）唯一真源 = `prompts/summary-task.{zh,en}.md`；代码只负责**变量与装配**
+ *  —— `{{goalId}}` / `{{goalRel}}` / `{{digest}}`（材料包由历史确定性生成）与
+ *  `{{structureLines}}`（机器契约章节标题，见 `SUMMARY_STRUCTURE_CONTRACT`）。 */
 export function formatSummaryPrompt(opts: {
   goalId: string;
   goalRel: string;
   digest?: string | null;
   language?: "zh" | "en";
 }): string {
-  if (opts.language === "en") return [
-    "You are the dedicated completion-summary writer Agent. Your only output is the normalized summary body for the given goal, written to disk through the summary writer tool - do not modify code, criteria, status, or versions.",
-    "",
-    `Goal ID: ${opts.goalId}`,
-    `Workspace-relative goal.md path: ${opts.goalRel}`,
-    "",
-    "## Material digest (generated deterministically from the goal's own history; facts only)",
-    String(opts.digest ?? "").trim() || "(no digest provided)",
-    "",
-    "## What the summary must answer (this is the point)",
-    "Ground the summary in the goal's *details*, not in fields already visible on the board card:",
-    "- what changes this goal actually involves (per attempt brief / commit / delivered file),",
-    "- what impact and hard constraints it carries (verbatim from the goal description),",
-    "- what deserves attention (review verdicts, known risks, rework constraints, unverified items).",
-    "Never restate card fields (title / status / version / attempt counts) as the substance.",
-    "",
-    "## Required body structure (markdown, body only; the tool adds the machine header)",
-    "- `## 结论` - one-paragraph change summary, impact/constraints, what is noteworthy, delivery state.",
-    "- `## 改动与影响` - subsections: change surface, impact and hard constraints, noteworthy items, files and commands touched.",
-    "- `## 判据达成` - quote each criterion verbatim with its existing mark; never decide verification yourself.",
-    "- `## 证据引用` - attempts, commits/baselines, result files, verification commands.",
-    "- `## 关键决策` - decisions and review feedback from comments/directives.",
-    "- `## 时间线` - optional, key events only.",
-    "The section headings above are **always the canonical Chinese literals** shown here: they are a machine format contract of `results.md` (identical across deterministic / llm / manual sources and independent of UI language). Do not translate or reword them; write the body text in the goal's language.",
-    "",
-    "## How to write it to disk (mandatory)",
-    `Call \`graph_refresh_results\` with { goal: "${opts.goalId}", content: "<the full body>", actor: "agent:summarizer" }.`,
-    "The writer archives the previous version, sanitizes the machine header, truncates oversized bodies, and fires the audit event - never write results.md directly with write/edit.",
-    "Read goal.md (and results-att-*.md when you need the full delivered text) before writing; add facts only.",
-    "",
-    "## Input budget (F7)",
-    "- Per-attempt report bodies are hard-capped at 8 KiB (head 4 KiB + tail 2 KiB + a middle omission marker carrying the omitted byte count) and one summary input is capped at 256 KiB.",
-    "- If the digest carries an omission marker or the \"budget-limited mode\" banner, state that plainly in the summary (how many bytes were omitted, or that only the header and key points were available) instead of silently ignoring it.",
-    "",
-    "## Constraints",
-    "- Facts only: quote criteria, file paths, commits and commands; anything unproven goes in as \"unverified / to confirm\".",
-    "- Keep the main body under ~4000 characters; follow the goal's language (zh/en); no charts, no cross-goal aggregation.",
-    "- Do not create attempts, do not call graph_transition / graph_create_goal; you are not a supervisor.",
-    "",
-    `Finish with a single report line: [summary:${opts.goalId}] file=... archive=...`,
-  ].join("\n");
-  const lines = [
-    `你是固定的「完成摘要撰写员」子代理。你的唯一产出是指定目标的规范化完成摘要正文，并通过摘要写入工具落盘；不得修改代码、判据、状态或版本。`,
-    ``,
-    `目标 ID：${opts.goalId}`,
-    `goal.md 工作区相对路径：${opts.goalRel}`,
-    ``,
-    `## 材料包（由目标历史**确定性**生成，只含事实，不经过任何模型）`,
-    String(opts.digest ?? "").trim() || "（未提供材料包）",
-    ``,
-    `## 摘要必须回答什么（本次反馈的重点）`,
-    `摘要必须结合**目标详情**来写，而不是复述卡片上已经能看到的内容：`,
-    `- 这个目标**具体涉及哪些改动**（按 attempt 的 brief / commit / 交付文件说清）；`,
-    `- 有什么**影响与硬约束**（逐字引用目标描述里的约束/红线/非目标/兼容性语句）；`,
-    `- 什么**值得注意**（复核结论、已知风险、返工约束、未验证项）。`,
-    `严禁把卡片字段（标题 / 状态 / 版本 / attempt 计数）当摘要主体。`,
-    ``,
-    `## 正文结构（markdown，只写正文；机器头与归档由写入器负责）`,
-    `- \`## 结论\`：一段话说清改动概要 + 影响与约束 + 值得注意 + 交付状态；`,
-    `- \`## 改动与影响\`：分小节写 改动面 / 影响面与硬约束 / 值得注意 / 涉及文件与命令；`,
-    `- \`## 判据达成\`：逐条逐字引用判据原文与其已有标记，绝不自行判定是否达成；`,
-    `- \`## 证据引用\`：attempt、commit/baseline、结果文件、验证命令；`,
-    `- \`## 关键决策\`：评论与最近指令里的决策与评审反馈；`,
-    `- \`## 时间线\`：可选，只列关键事件。`,
-    ``,
-    `以上章节标题**恒为中文规范字面量**（\`results.md\` 的格式契约：deterministic / llm / manual 三来源一致，与界面语言无关）；不得翻译或改写标题本身，正文语言与目标 locale 一致。`,
-    ``,
-    `## 落盘方式（强制）`,
-    `正文写好后**必须**调用 \`graph_refresh_results\`：{ goal: "${opts.goalId}", content: "<完整正文>", actor: "agent:summarizer" }。`,
-    `写入器会负责旧版归档、机器头净化、超长截断与审计事件；**不得**用 write/edit 直接写 results.md。`,
-    `写之前先用 read 读取 goal.md（需要交付全文时再读 results-att-*.md），只做事实补充。`,
-    ``,
-    `## 输入预算（F7）`,
-    `- 每个 attempt 的报文本体硬上限 8 KiB（头 4 KiB + 尾 2 KiB + 中段省略标记，标记内含被省略的字节数）；单次摘要总输入预算 256 KiB。`,
-    `- 材料包若出现省略标记或「预算受限模式」标注，摘要里必须如实写明（省略了多少字节 / 本次只有机器头与要点），不得装作没看见。`,
-    ``,
-    `## 约束`,
-    `- 只写有据可查的事实（判据原文、文件路径、commit、命令）；没有证据的写成「未验证 / 待确认」；`,
-    `- 主干建议 ≤ 4000 字，语言与目标 locale 一致（zh/en），不画图表、不做跨目标汇总；`,
-    `- 不创建 attempt，不调用 graph_transition / graph_create_goal——你不是主管。`,
-    ``,
-    `结束时给出一行回报：【${opts.goalId} 完成摘要】file=… archive=…`,
-  ];
-  return lines.join("\n");
+  const lang: "zh" | "en" = opts.language === "en" ? "en" : "zh";
+  const template = readCorePromptAsset("summary-task", lang).replace(/\n+$/, "");
+  return fillPromptTemplate(template, {
+    goalId: opts.goalId,
+    goalRel: opts.goalRel,
+    digest: String(opts.digest ?? "").trim() || (lang === "en" ? "(no digest provided)" : "（未提供材料包）"),
+    structureLines: summaryStructureLines(lang),
+  });
 }
 
-/** 生成只读产品经理 (PM) 润色与定义提示词（g-242、g-309） */
+/** 生成只读产品经理 (PM) 润色与定义提示词（g-242、g-309）。
+ *
+ *  g-496：固定的只读润色正文（架构选型阈值、回报格式规则、只读约束）唯一真源 =
+ *  `prompts/pm-task.{zh,en}.md`；代码只装配 `{{goalId}}` / `{{goalRel}}` / `{{guidance}}`
+ *  与 `{{reportTitle}}` —— 回报标题是**机器契约**（由 {@link parsePmReportGoalId} 解析），
+ *  故其字面量由 {@link pmReportTitle} 单点生成，不写死在任一语言资产里。 */
 export function formatPmPrompt(opts: {
   goalId: string;
   goalRel: string;
   guidance?: string | null;
   language?: "zh" | "en";
 }): string {
-  if (opts.language === "en") return [
-    "You are a dedicated product manager Agent. Return only goal-definition or polishing advice to the supervisor; do not call graph_* tools, modify the goal, or change lifecycle semantics.",
-    "",
-    `Goal ID: ${opts.goalId}`,
-    `Workspace-relative goal.md path: ${opts.goalRel}`,
-    `Human guidance: ${String(opts.guidance ?? "").trim() || "(none)"}`,
-    "",
-    "Read the goal.md with read first. Give concise, actionable advice on value, context, scope, verifiable criteria, boundaries, error paths, risks, and human verification. Preserve intent and do not write files.",
-    "",
-    "## Architecture selection bias",
-    "- Before recommending a heavy third-party black-box library, estimate the full-lifecycle cost: glue/adapter layer size, dual source of truth and state sync, event/render loops, unused layer removal, upgrade and replacement, and debugging plus Agent rework.",
-    "- Threshold: estimated glue layer LOC / estimated in-house business-logic LOC (tier each integration surface S<=50 / M<=200 / L>200). A ratio >=0.5 raises a warning; >=1.0 defaults to a lightweight white-box in-house build - keeping the library requires owner confirmation.",
-    "- When glue work approaches or exceeds the in-house business logic, prefer the white-box in-house path, and record the estimate and decision in goal.md.",
-    "",
-    "## Report format requirement",
-    `Your report MUST start with a title line in the exact format: 【${opts.goalId} 润色建议】`,
-    "This allows the supervisor to automatically identify which goal this report belongs to.",
-    "",
-    "## Read-only constraints",
-    "- Only read-only analysis is available; do not use management, code-editing, or command-execution tools.",
-    "- Return analysis and suggestions only; do not modify project data.",
-  ].join("\n");
-  const lines = [
-    `你是固定的产品经理 Agent。请只向主管 Agent 返回"目标定义/润色建议"，不要调用任何 graph_* 工具，不要修改目标、不改变状态、版本或执行语义。`,
-    ``,
-    `目标 ID：${opts.goalId}`,
-    `goal.md 工作区相对路径：${opts.goalRel}`,
-    `人工指导意见：${String(opts.guidance ?? "").trim() || "（无）"}`,
-    ``,
-    `请先用 read 工具读取上述 goal.md，再围绕目标价值、背景、范围、可验证判据、边界/错误路径、风险和人工核验给出简洁、可执行的润色建议；保留原意，不直接替换或写入目标。`,
-    ``,
-    `## 架构选型倾向`,
-    `- 推荐引入重型第三方黑盒库前，先估全生命周期成本：胶水/适配层规模、双真相与状态同步、事件与渲染回环、无用图层剔除、升级与替换、排错与 Agent 返工；`,
-    `- 阈值：胶水层预估 LOC ÷ 自研业务逻辑预估 LOC（集成面逐项打档 S≤50 / M≤200 / L>200）。比值 ≥0.5 触发预警；≥1.0 默认推荐自研白盒轻量实现，要继续用库须负责人确认；`,
-    `- 胶水层工作量接近或超过自研业务逻辑时，优先推荐自研白盒，并把估算与决策记入 goal.md。`,
-    ``,
-    `## 回报格式要求`,
-    `⚠️ 你的回报必须以标题行开头，格式严格为：【${opts.goalId} 润色建议】`,
-    `这是主管自动识别目标的关键标识，缺少此格式将导致建议无法正确关联到目标。`,
-    ``,
-    `## 只读约束与纪律`,
-    `- 物理工具拦截：不提供任何管理写工具、代码修改工具与命令执行工具，仅提供只读分析能力；`,
-    `- 保留原意：仅输出分析与建议，不擅自修改任何项目数据。`,
-  ];
-  return lines.join("\n");
+  const lang: "zh" | "en" = opts.language === "en" ? "en" : "zh";
+  const template = readCorePromptAsset("pm-task", lang).replace(/\n+$/, "");
+  return fillPromptTemplate(template, {
+    goalId: opts.goalId,
+    goalRel: opts.goalRel,
+    guidance: String(opts.guidance ?? "").trim() || (lang === "en" ? "(none)" : "（无）"),
+    reportTitle: pmReportTitle(opts.goalId),
+  });
+}
+
+/** g-309：PM 回报的**机器契约标题**（唯一生成点，解析侧 {@link parsePmReportGoalId} 与之配对）。
+ *  g-496：标题是格式契约而非可翻译正文，故由代码生成 —— 两语言资产都不持有它（en 资产零 CJK）。 */
+export function pmReportTitle(goalId: string): string {
+  return `【${goalId} 润色建议】`;
 }
 
 /**
@@ -6956,95 +7159,64 @@ export function formatReviewPrompt(opts: {
   const shellTool = opts.shellTool?.trim() || resolveShellTool().name || "shell";
   // 判据原文（criteriaItems）通常已带 `1. ` 序号：注入时剥掉，避免出现「1. 1. 判据…」这种失真编号。
   const stripOrdinal = (s: string) => String(s).replace(/^\s*\d+\s*[.、)]\s*/, "");
-  if (opts.language === "en") {
-    const lines = [
-      `You are a professional code and goal review Agent. Perform a read-only review of goal ${opts.goalId}, execution attempt ${opts.attemptId}.`,
-      "",
-      `Goal ID: ${opts.goalId}`,
-      `Attempt: ${opts.attemptId}`,
-      `Scoped goal definition file (read it ONLY to re-check the goal definition / criteria; the material boundary below applies): ${opts.goalRel}`,
-    ];
-    if (opts.goalTitle?.trim()) lines.push(`Goal title: ${opts.goalTitle.trim()}`);
-    if (candidate) lines.push(`Candidate commit under review: ${candidate}`);
-    if (baseline) lines.push(`Baseline commit: ${baseline}`);
-    if (workspace) lines.push(`Review workspace (existing attempt worktree, do not create a new one): ${workspace}`);
-    if (description) lines.push("", "**Goal definition (verbatim; includes the owner's constraints)**:", description);
-    if (opts.criteria?.length) lines.push("", "**Acceptance criteria (verbatim)**:", ...opts.criteria.map((item, i) => `${i + 1}. ${stripOrdinal(item)}`));
-    if (paths.length) lines.push("", `**Review scope (${paths.length} changed path(s) between baseline and candidate)**:`, ...paths.map((p) => `- ${p}`));
-    if (opts.guidance?.trim()) lines.push("", `**Review guidance**: ${opts.guidance.trim()}`);
-    lines.push(
-      "",
-      "## Review material boundary",
-      "- This prompt is the complete review material: goal definition, acceptance criteria, candidate/baseline commits and review scope.",
-      "- Do not treat the author's conversation, attempt prompt, result files, self-reported PASS, goal comments or rework narrative as review inputs; they are not injected here.",
-      "- The **comments / latest directive / rework handoff / evidence ledger** sections of goal.md, and any author text, are NOT review material: never judge the candidate by them. If you read them while locating the definition, declare it under Unverified items.",
-      "- If `git rev-parse HEAD` in the review workspace differs from the candidate commit above, any test evidence you gather there MUST be marked UNVERIFIED.",
-    );
-    lines.push(
-      "",
-      "## Report skeleton (all items required)",
-      "- **Verdict**: PASS / BLOCK / UNVERIFIED — exactly one, on its own line.",
-      "- **Per-criterion conclusion and one-line evidence**: criterion → conclusion + evidence (command / file:line / commit).",
-      "- **Minimal rework list when BLOCK**: directly executable items, one per line.",
-      "- **Residual risk**: what remains risky after the fix.",
-      "- **Unverified items**: paths not covered, and why.",
-    );
-    lines.push("", "## Review discipline and permissions", "- Read-only review: use read, glob, grep, and read-only tests only; do not edit or write code.", "- Do not call graph_* management write tools.", "- Return PASS or FAIL with concrete evidence; the supervisor/owner performs the final verdict.", `- ${shellTool}, when available, is limited to local read-only tests and static checks.`);
-    return lines.join("\n");
-  }
-  const lines = [
-    `你是专业的代码与目标复核 Agent（Reviewer）。请对目标 ${opts.goalId} 的执行 attempt ${opts.attemptId} 进行只读审查。`,
-    ``,
-    `目标 ID：${opts.goalId}`,
-    `执行 Attempt：${opts.attemptId}`,
-    `目标定义文件（**仅供**按需复核目标定义与判据原文；下方材料边界同样适用）：${opts.goalRel}`,
-  ];
-  if (opts.goalTitle && opts.goalTitle.trim()) lines.push(`目标标题：${opts.goalTitle.trim()}`);
-  if (candidate) lines.push(`被审查的候选 commit：${candidate}`);
-  if (baseline) lines.push(`基线 commit：${baseline}`);
-  if (workspace) lines.push(`评审工作区（复用既有 attempt 工作树，不要新建评审树）：${workspace}`);
-  if (description) {
-    lines.push(``, `**目标定义（原文，含负责人约束）**：`, description);
-  }
-  if (opts.criteria && opts.criteria.length > 0) {
-    lines.push(``, `**验收判据（原文）**：`);
-    for (let i = 0; i < opts.criteria.length; i++) {
-      lines.push(`${i + 1}. ${stripOrdinal(opts.criteria[i])}`);
-    }
-  }
-  if (paths.length > 0) {
-    lines.push(``, `**审查范围（基线→候选共 ${paths.length} 个变更路径）**：`);
-    for (const p of paths) lines.push(`- ${p}`);
-  }
-  if (opts.guidance && opts.guidance.trim()) {
-    lines.push(``, `**复核指导**：${opts.guidance.trim()}`);
-  }
-  lines.push(
-    ``,
-    `## 评审材料边界`,
-    `- 本提示词即完整评审材料：目标定义、验收判据原文、候选/基线 commit、审查范围；`,
-    `- 不得把作者的对话、作者 attempt prompt、作者结果文件、作者自报 PASS、目标评论或返工叙事当作评审输入——它们**不在**注入范围内；`,
-    `- \`goal.md\` 中的**评论 / 最近指令 / 返工 handoff / 证据台账**与作者文本**均不属审查材料**，不得据以评判候选；若为定位定义而读到，必须在「未验证项」中声明；`,
-    `- 若评审工作区中 \`git rev-parse HEAD\` 不等于上方候选 commit，则在该工作区取得的测试证据**必须**标记为「未验证」。`,
-  );
-  lines.push(
-    ``,
-    `## 报告骨架（逐项必填）`,
-    `- **总判**：PASS / BLOCK / UNVERIFIED（三选一，必须单独一行给出）；`,
-    `- **逐项结论与单行证据**：每条判据 → 结论 + 证据（命令 / 文件:行 / commit）；`,
-    `- **BLOCK 最小返工清单**：可直接执行的返工项（逐条）；`,
-    `- **残余风险**：修完后仍存在的风险；`,
-    `- **未验证项**：未覆盖的路径与原因。`,
-  );
-  lines.push(
-    ``,
-    `## 审查纪律与工具权限`,
-    `- 纯只读审查：仅使用 read、glob、grep 审查代码与变更，不暴露且不调用 edit/write 修改代码；`,
-    `- 绝不调用管理写工具：不暴露任何 graph_* 管理写工具（如 graph_create_goal, graph_start_attempt, graph_transition, graph_resolve_accept 等）；`,
-    `- 裁决归属主管/人工 Gate：仅输出审查报告与建议（PASS / FAIL 及具体证据），最终 verdict 裁决由主管/负责人通过 graph_resolve_accept 执行，reviewer 绝不自行通过；`,
-    `- ${shellTool} 权限说明：如保留 ${shellTool}，仅用于运行只读测试（如单元测试 node --test、静态检查、git diff 等），其实际具备当前工作区的本地运行权限；白名单裁剪非强安全沙箱，安全边界遵循单用户 owner-trusted 模型。`,
-  );
-  return lines.join("\n");
+  const lang: "zh" | "en" = opts.language === "en" ? "en" : "zh";
+  const isEn = lang === "en";
+
+  // ---- 变量与装配（留在代码）：目标/attempt 身份、候选与基线 SHA、评审工作区、目标定义原文、
+  //      判据原文（剥序号）、审查范围、复核指导。**材料隔离不受影响**：注入的仍是同一批字段，
+  //      作者的 attempt prompt / 结果文件 / 自报 PASS / 评论 / 返工叙事一律不注入。
+  // 每个可选块自带**前导空行**（`\n\n` 前缀），使资产里的占位符独占一行时：有值时等价于原
+  // 「空行 + 块」，无值时被替换为空串、不残留空行 —— 与搬迁前逐字节同形。
+  /** 组装「标签行 + 正文」块：有值时前置换行分隔；无值返回空串。 */
+  const block = (text: string | null): string => (text ? "\n\n" + text : "");
+  const titleLine = opts.goalTitle?.trim() ? (isEn ? `Goal title: ${opts.goalTitle.trim()}` : `目标标题：${opts.goalTitle.trim()}`) : null;
+  const candidateLine = candidate ? (isEn ? `Candidate commit under review: ${candidate}` : `被审查的候选 commit：${candidate}`) : null;
+  const baselineLine = baseline ? (isEn ? `Baseline commit: ${baseline}` : `基线 commit：${baseline}`) : null;
+  const workspaceLine = workspace
+    ? (isEn
+      ? `Review workspace (existing attempt worktree, do not create a new one): ${workspace}`
+      : `评审工作区（复用既有 attempt 工作树，不要新建评审树）：${workspace}`)
+    : null;
+  const descriptionBlock = description
+    ? block(isEn ? `**Goal definition (verbatim; includes the owner's constraints)**:\n${description}` : `**目标定义（原文，含负责人约束）**：\n${description}`)
+    : "";
+  const criteriaBlock = opts.criteria && opts.criteria.length > 0
+    ? block(
+      (isEn ? "**Acceptance criteria (verbatim)**:\n" : "**验收判据（原文）**：\n") +
+      opts.criteria.map((item, i) => `${i + 1}. ${stripOrdinal(item)}`).join("\n"),
+    )
+    : "";
+  const scopeBlock = paths.length > 0
+    ? block(
+      (isEn
+        ? `**Review scope (${paths.length} changed path(s) between baseline and candidate)**:\n`
+        : `**审查范围（基线→候选共 ${paths.length} 个变更路径）**：\n`) +
+      paths.map((p) => `- ${p}`).join("\n"),
+    )
+    : "";
+  const guidanceBlock = opts.guidance?.trim()
+    ? block(isEn ? `**Review guidance**: ${opts.guidance.trim()}` : `**复核指导**：${opts.guidance.trim()}`)
+    : "";
+
+  // ---- 固定正文（材料边界 / 报告骨架 / 只读审查纪律与工具权限）= 资产唯一真源。
+  //  `{{conclusionExamples}}` 取自 REVIEW_CONCLUSION_EXAMPLE_*（与 parseReviewConclusion 同源，
+  //  机器契约常量由代码注入，不写死在资产里）；`{{shellTool}}` 为平台解析结果。
+  const template = readCorePromptAsset("review-task", lang).replace(/\n+$/, "");
+  return fillPromptTemplate(template, {
+    goalId: opts.goalId,
+    attemptId: opts.attemptId,
+    goalRel: opts.goalRel,
+    goalTitleLine: titleLine ? "\n" + titleLine : "",
+    candidateLine: candidateLine ? "\n" + candidateLine : "",
+    baselineLine: baselineLine ? "\n" + baselineLine : "",
+    workspaceLine: workspaceLine ? "\n" + workspaceLine : "",
+    descriptionBlock,
+    criteriaBlock,
+    scopeBlock,
+    guidanceBlock,
+    conclusionExamples: isEn ? REVIEW_CONCLUSION_EXAMPLE_EN : REVIEW_CONCLUSION_EXAMPLE_ZH,
+    shellTool,
+  });
 }
 
 /* ============================================================================
@@ -7096,6 +7268,9 @@ export const REVIEW_EVENT_NAMES = [
   "review.reused",
   "review.completed",
   "review.failed",
+  // g-487：误记回填（幂等）——把「正文已给出合规结论行、快照却仍是 UNVERIFIED」的历史记录
+  // 按正文重算后修正，并为修正本身留痕（结论字段的每次变更都可从事件流追溯）。
+  "review.conclusion_reconciled",
   REVIEW_INDEPENDENT_MISSING_EVENT,
 ] as const;
 export type ReviewEventName = (typeof REVIEW_EVENT_NAMES)[number];
@@ -7112,6 +7287,7 @@ export const REVIEW_RECORD_EVENT_NAMES = [
   "review.reused",
   "review.completed",
   "review.failed",
+  "review.conclusion_reconciled",
 ] as const;
 
 /** 写入侧 fail-closed：事件名必须落在闭集内（新增事件名逃逸常量即抛错）。 */
@@ -7319,15 +7495,65 @@ export function bindReviewChild(
   });
 }
 
-/** 结论解析：只认**显式总判行**。识别不到 ⇒ UNVERIFIED（绝不把沉默当 PASS）。 */
+/* 结论行的可接受形态（登记处：上方 `REVIEW_CONCLUSION_LABELS` / `REVIEW_CONCLUSION_EXAMPLE_*`）。 */
+
+/** 行首**结构前缀**（标题 / 引用 / 无序列表 / 有序列表）：只剥离结构标记，不承载语义。 */
+const REVIEW_LINE_PREFIX_RE = /^(?:#{1,6}\s*|>\s*|[-*+]\s+|\d+[.)]\s+)+/;
+const REVIEW_LABEL_ALT = REVIEW_CONCLUSION_LABELS.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+/** 同行形态：`[前缀] [**]标签[**] [:：] [**]值`；值后可跟随正文（但不得是三值枚举）。 */
+const REVIEW_CONCLUSION_SAME_LINE_RE = new RegExp(
+  `^(?:\\*\\*)?\\s*(?:${REVIEW_LABEL_ALT})\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(PASS|BLOCK|UNVERIFIED)\\b([\\s\\S]*)$`,
+  "i",
+);
+/** 值后紧跟 `/` 或 `|` 再接另一个裁决词 ⇒ 这是**选项枚举**（骨架/模板原样照抄），不是裁决。 */
+const REVIEW_CONCLUSION_ENUM_TAIL_RE = /^\s*(?:\*\*)?\s*[/|]\s*(?:\*\*)?\s*(?:PASS|BLOCK|UNVERIFIED)\b/i;
+/** 标签独占一行（可带冒号但不带值）⇒ 值在**其后首个非空行**。 */
+const REVIEW_CONCLUSION_LABEL_ONLY_RE = new RegExp(
+  `^(?:\\*\\*)?\\s*(?:${REVIEW_LABEL_ALT})\\s*(?:\\*\\*)?\\s*[:：]?\\s*$`,
+  "i",
+);
+/** 跨行形态的值行：只含裁决词 + 可选加粗/标点（夹带其它文字即不成形，绝不把段落正文当裁决）。 */
+const REVIEW_CONCLUSION_VALUE_ONLY_RE =
+  /^(?:\*\*)?\s*(PASS|BLOCK|UNVERIFIED)\s*(?:\*\*)?\s*[。.；;，,、！!？?~～—–-]*$/i;
+
+/** 扫描全部结论行并取其裁决（形态登记处同上）。 */
+function scanReviewConclusions(raw: string): ReviewConclusion[] {
+  const lines = raw.split(/\r?\n/);
+  const found: ReviewConclusion[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(REVIEW_LINE_PREFIX_RE, "").trim();
+    if (!line) continue;
+    const same = line.match(REVIEW_CONCLUSION_SAME_LINE_RE);
+    if (same) {
+      // 枚举行只是「选项列表」，不构成裁决（否则骨架里的三值枚举会被读成 PASS）。
+      if (!REVIEW_CONCLUSION_ENUM_TAIL_RE.test(same[2])) found.push(same[1].toUpperCase() as ReviewConclusion);
+      continue;
+    }
+    if (!REVIEW_CONCLUSION_LABEL_ONLY_RE.test(line)) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const next = lines[j].trim();
+      if (!next) continue; // 跳过空行：取其后**首个非空行**
+      const v = next.match(REVIEW_CONCLUSION_VALUE_ONLY_RE);
+      if (v) found.push(v[1].toUpperCase() as ReviewConclusion);
+      break; // 首个非空行不是「只含裁决词」⇒ 该标签不成形（不猜）
+    }
+  }
+  return found;
+}
+
+/**
+ * 结论解析：只认**显式结论行**（可接受形态与骨架/提示词登记处**同源**：`REVIEW_CONCLUSION_LABELS`
+ * 与 `REVIEW_CONCLUSION_EXAMPLE_ZH` 由守卫测试直接喂给本函数断言可解析）。
+ * **fail-closed**：识别不到、值不在闭集、跨行值行夹带正文、或结论行**互相矛盾**（如同时出现
+ * PASS 与 BLOCK）⇒ 一律 UNVERIFIED —— 绝不把沉默当 PASS，也绝不把 BLOCK 升格为 PASS。
+ */
 export function parseReviewConclusion(text: unknown): ReviewConclusion {
   const raw = typeof text === "string" ? text : "";
   if (!raw.trim()) return "UNVERIFIED";
-  const re = /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?\s*(?:总判|结论|Verdict)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(PASS|BLOCK|UNVERIFIED)\b/i;
-  const m = raw.match(re);
-  if (!m) return "UNVERIFIED";
-  const v = m[1].toUpperCase();
-  return (REVIEW_CONCLUSIONS as readonly string[]).includes(v) ? (v as ReviewConclusion) : "UNVERIFIED";
+  const found = scanReviewConclusions(raw);
+  if (found.length === 0) return "UNVERIFIED";
+  const distinct = [...new Set(found)];
+  return distinct.length === 1 ? distinct[0] : "UNVERIFIED";
 }
 
 /** `stopReason` 是否代表「正常结束」。异常终止（error/aborted/diagnostic/缺失）一律不得 PASS。 */
@@ -7596,6 +7822,12 @@ export function reviewRecordViews(root: string, goalId: string): ReviewRecordVie
       cur.conclusion = "UNVERIFIED";
       cur.stop_reason = d.stop_reason == null ? null : String(d.stop_reason);
       cur.failure_reason = d.reason == null ? null : String(d.reason);
+    } else if (ev.event === "review.conclusion_reconciled") {
+      // g-487：误记回填（留痕）。只修正**结论**，不改动记录生命周期状态；非 completed 记录不受影响。
+      const to = (REVIEW_CONCLUSIONS as readonly string[]).includes(String(d.to))
+        ? String(d.to) as ReviewConclusion
+        : "UNVERIFIED";
+      if (cur.status === "completed") cur.conclusion = to;
     } else if (ev.event === "review.reused") {
       // F1：复用旧记录 = 一次**新的评审请求** ⇒ 该记录重新成为「当前候选」的承载者。
       // 语义裁决①（重新置为当前）：投影 current_candidate_sha / stale 随之下落，与工具返回值同源一致。
@@ -7922,6 +8154,172 @@ export function markIndependentReviewMissing(
     } catch { /* 忽略 */ }
     return false;
   }
+}
+
+/** 单条评审记录的「结论误记回填」对账项（只读模式报告 / apply 模式回填结果**同形**）。 */
+export interface ReviewConclusionReconcileItem {
+  goal: string;
+  review_id: string;
+  status: ReviewRecordStatus;
+  /** 事件流里的结论 = **机器面实际取值**（`reviewRecordViews` / `independentOk` 的来源）；failed / 闭集外一律 UNVERIFIED。 */
+  event_conclusion: ReviewConclusion;
+  /** `reviews/<review_id>.md` frontmatter 快照的现值（缺失 / 非闭集 ⇒ null）；**仅供审计**，不是判定依据。 */
+  snapshot: ReviewConclusion | null;
+  /** 按**报告正文**重算的结论（与 `settleReview` 同一解析真源 `parseReviewConclusion`）。 */
+  reparsed: ReviewConclusion;
+  /** apply 时是否真的回填；只读模式下表示「将会回填」。 */
+  changed: boolean;
+  /** 处置说明（未回填的原因 / 已回填动作），供审计与 drift 文案。 */
+  note: string;
+}
+
+/**
+ * 评审结论**误记回填/重算**（g-487 判据 3）：把「报告正文已给出合规结论行、而事件流里的
+ * 结论却是 UNVERIFIED」的历史误记**幂等**修正 —— 回填后 `reviewRecordViews` 与
+ * `independentOk` 立即取到正确裁决（这是机器面真正读到的值；只改 `reviews/*.md` 的
+ * frontmatter 快照**不改变**机器面裁决，故判据与写入都以事件流为准）。
+ *
+ * - `apply=false`（默认）：**只读重算**——零文件写入、零事件写入，返回逐条对账（可直接当「只读重算命令」用）。
+ * - `apply=true`：对**确需修正**的记录先追加 `review.conclusion_reconciled`（事件先行、留痕），
+ *   再刷新 frontmatter 快照；**报告正文逐字节原样回写**（`body_bytes` 一并入事件便于对账），绝不改写/删除。
+ *
+ * 方向约束与 fail-closed：只做「机器面为 UNVERIFIED → 正文重算出**确定**裁决」这一个方向；
+ * `failed`（异常终止 / 空输出）记录一律不参与；反向不一致（机器面已记 PASS/BLOCK 而正文重算不同，
+ * 或已记确定裁决而快照不同）**只报告不改写**，绝不用解析结果反向覆盖既有裁决，也绝不留第二真源。
+ * 重复调用幂等（第二次起 `changed=false`）。
+ */
+export function reconcileReviewConclusions(
+  root: string,
+  opts: { goalId?: string; actor?: string; apply?: boolean } = {},
+): ReviewConclusionReconcileItem[] {
+  const goalFilter = opts.goalId == null ? null : String(opts.goalId).trim() || null;
+  const actor = String(opts.actor ?? "").trim() || "system:reconcile-review-conclusions";
+  const apply = opts.apply === true;
+
+  // 先按事件流取每条记录的真实终态（无派发事件的孤儿结算不猜归属——与 reviewRecordViews 同口径）。
+  const records = new Map<string, { goal: string; reviewId: string; status: ReviewRecordStatus; eventConclusion: ReviewConclusion }>();
+  for (const ev of readEvents(root)) {
+    const goal = typeof ev.goal === "string" ? ev.goal : "";
+    if (!goal) continue;
+    if (goalFilter && goal !== goalFilter) continue;
+    const d = ev.details ?? {};
+    const reviewId = typeof d.review_id === "string" ? d.review_id : "";
+    if (!reviewId) continue;
+    const key = `${goal}\u0000${reviewId}`;
+    if (ev.event === "review.dispatched") {
+      records.set(key, { goal, reviewId, status: "started", eventConclusion: "UNVERIFIED" });
+      continue;
+    }
+    const cur = records.get(key);
+    if (!cur) continue;
+    if (ev.event === "review.bound") {
+      cur.status = "bound";
+    } else if (ev.event === "review.completed") {
+      cur.status = "completed";
+      cur.eventConclusion = (REVIEW_CONCLUSIONS as readonly string[]).includes(String(d.conclusion))
+        ? String(d.conclusion) as ReviewConclusion
+        : "UNVERIFIED";
+    } else if (ev.event === "review.failed") {
+      cur.status = "failed";
+      cur.eventConclusion = "UNVERIFIED";
+    }
+  }
+
+  // **单一真源**：逐条记录的「机器面结论」直接取自 `reviewRecordViews` 的同一次重放 ——
+  // 也就是 `independentOk` 读到的那个值。回填判据、回填后复查都走这一条路（不再自建第二套
+  // 结论重放规则，避免「回填了但机器面没变」或「重复回填」这类双规则漂移）。
+  const viewCache = new Map<string, Map<string, ReviewConclusion>>();
+  const machineConclusion = (goal: string, reviewId: string): ReviewConclusion | null => {
+    let byId = viewCache.get(goal);
+    if (!byId) {
+      // 视图 conclusion 为 null（理论不可达：仅未结算记录如此）时 fail-closed 记 UNVERIFIED。
+      byId = new Map(reviewRecordViews(root, goal).map((v) => [v.review_id, v.conclusion ?? "UNVERIFIED" as ReviewConclusion]));
+      viewCache.set(goal, byId);
+    }
+    return byId.get(reviewId) ?? null;
+  };
+
+  const items: ReviewConclusionReconcileItem[] = [];
+  for (const rec of records.values()) {
+    if (rec.status !== "completed" && rec.status !== "failed") continue; // 未结算记录不参与回填
+    // 视图缺失（理论不可达：两者读同一事件流）时 fail-closed 回落本循环重放值，绝不臆造结论。
+    const machine = machineConclusion(rec.goal, rec.reviewId) ?? rec.eventConclusion;
+    const stored = readReviewRecord(root, rec.goal, rec.reviewId);
+    if (!stored) {
+      items.push({
+        goal: rec.goal, review_id: rec.reviewId, status: rec.status,
+        event_conclusion: machine, snapshot: null, reparsed: "UNVERIFIED",
+        changed: false, note: "记录文件缺失，跳过（不猜结论）",
+      });
+      continue;
+    }
+    const snapshot = (REVIEW_CONCLUSIONS as readonly string[]).includes(String(stored.meta.conclusion))
+      ? String(stored.meta.conclusion) as ReviewConclusion
+      : null;
+    const reparsed = rec.status === "completed" ? parseReviewConclusion(stored.body) : "UNVERIFIED";
+    const item: ReviewConclusionReconcileItem = {
+      goal: rec.goal, review_id: rec.reviewId, status: rec.status,
+      event_conclusion: machine, snapshot, reparsed, changed: false, note: "",
+    };
+    // 回填判据**以机器面（事件流重放）为准**：它才是 `reviewRecordViews` / `independentOk`
+    // 的取值来源（`reviews/*.md` 的 frontmatter 只是快照，改它不改变机器面裁决）。只有
+    // 「机器面结论 UNVERIFIED 而正文重算出确定裁决」才回填；已记 PASS/BLOCK 一律不动 ——
+    // 既防 BLOCK 被升格为 PASS，也防解析结果反向覆盖已记裁决。
+    const needs = rec.status === "completed" && reparsed !== "UNVERIFIED" && machine === "UNVERIFIED";
+    if (!needs) {
+      if (rec.status !== "completed") {
+        item.note = "非正常完成（failed）：结论按 fail-closed 保持 UNVERIFIED，不回填";
+      } else if (reparsed === "UNVERIFIED") {
+        item.note = "正文无可解析结论行：保持 UNVERIFIED（不改写）";
+      } else if (machine === reparsed) {
+        item.note = snapshot === reparsed
+          ? "机器面与正文重算一致：无需回填"
+          : `机器面与正文一致（${reparsed}），但 frontmatter 快照=${snapshot ?? "缺失"}：只报告不改写（机器面已正确，不留第二真源）`;
+      } else {
+        item.note = `机器面已记 ${machine} 而正文重算=${reparsed}：只报告不改写（避免用解析结果覆盖已记裁决）`;
+      }
+      items.push(item);
+      continue;
+    }
+    if (!apply) {
+      item.changed = true;
+      item.note = `只读重算：将会回填 机器面 ${machine} → ${reparsed}（未写入）`;
+      items.push(item);
+      continue;
+    }
+    const meta: Record<string, any> = {
+      ...stored.meta,
+      conclusion: reparsed,
+      status: "completed",
+      conclusion_reconciled_from: machine,
+      conclusion_reconciled_at: nowIso(),
+      conclusion_reconciled_by: actor,
+      conclusion_reconcile_note: "按报告正文重算回填（g-487 结论解析容错）；评审正文逐字节未改",
+    };
+    assertReviewEventName("review.conclusion_reconciled");
+    commitPrepared(root, { actor, goal: rec.goal }, {
+      value: undefined,
+      events: [{
+        actor,
+        event: "review.conclusion_reconciled",
+        goal: rec.goal,
+        details: {
+          review_id: rec.reviewId,
+          from: machine,
+          to: reparsed,
+          snapshot_before: snapshot ?? null,
+          body_bytes: Buffer.byteLength(stored.body, "utf8"),
+          note: "误记回填：仅修正结论字段（含 frontmatter 快照），报告正文逐字节不变。",
+        },
+      }],
+      persist: () => persistReviewRecord(root, rec.goal, rec.reviewId, meta, stored.body),
+    });
+    item.changed = true;
+    item.note = `已回填 机器面 ${machine} → ${reparsed}` +
+      `（事件 review.conclusion_reconciled；快照 ${snapshot ?? "缺失"} → ${reparsed}；正文未改）`;
+    items.push(item);
+  }
+  return items;
 }
 
 // ---- Attempt（SCHEMA §3） ----
@@ -11568,7 +11966,32 @@ export function boardPayload(root: string, opts?: { includeArchived?: boolean; l
     supervisorStatusAt: readSupervisorStatusAt(events),
     // g-183：共享卡面板数据源（创建/查看/删除/引用计数）
     sharedCards: sharedCards(root),
+    // g-494：**模块开关的界面呈现裁剪**所需的下发字段 —— 与「服务端真裁剪」读**同一份**
+    // `project.yaml` 的 `modules` 段、经**同一个** `resolveModuleSwitches` 纯函数解析（单一真源）。
+    // 客户端据此隐藏已关闭模块的界面入口（隐藏 ≠ 置灰）。只下发「生效开关」这一最小面：
+    // 未配置/畸形一律 fail-safe 为开启（与 `resolveModuleSwitches` 同口径），绝不让界面比能力更严。
+    modules: moduleSwitchPayload(root),
   };
+}
+
+/**
+ * g-494：看板载荷里的模块开关投影（**与真裁剪同源**，供客户端呈现层裁剪用）。
+ *
+ * - 真源：`<root>/project.yaml` 的 `modules` 段 ⇒ `resolveModuleSwitches`（全仓唯一判定）；
+ * - 读失败/异常 ⇒ `resolveModuleSwitches(null)`（全开）——与宿主 `readModuleSwitchesForRoot`
+ *   的降级口径**逐字一致**，绝不因配置读取异常把界面入口静默砍掉；
+ * - `enabled` = 五模块「是否可用」的布尔映射（true=可用）；形状极简，客户端零解析负担。
+ */
+export function moduleSwitchPayload(root: string): Record<string, boolean> {
+  let switches: ModuleSwitches;
+  try {
+    switches = resolveModuleSwitches(readProjectConfig(root));
+  } catch {
+    switches = resolveModuleSwitches(null);
+  }
+  const out: Record<string, boolean> = {};
+  for (const id of HARNESS_MODULE_IDS) out[id] = switches.switches[id]?.on !== false;
+  return out;
 }
 
 /** 目标的上下文卡片摘要列表（看板子卡片）。
@@ -13073,7 +13496,7 @@ export function resolveSubagentPrompt(root: string, globalPrompt: string, agentT
  * 负责人 2026-10-08 裁决：本版只做**最小契约**——契约文本 + 留痕要求 + 结构守卫 + 默认 off 的开关。
  * 不引入新调度器、不做一目标多活跃 attempt、不新增强制门禁、不依赖第三方 Agent Teams 插件。
  *
- * 契约文本的唯一真源是 `dsh-graph-host/prompts/discipline.{zh,en}.md` 里的**定界块**（HTML 注释
+ * 契约文本的唯一真源是公共层 `prompts/agent-teams-contract.{zh,en}.md` 资产（历史上曾在 `discipline` 资产里用 HTML 注释
  * 标记，渲染不可见）。同一文本既出现在主管纪律（常驻文档），也（仅当开关 on）被抽出来注入
  * **派发提示词**的 `subagentPromptSection` 槽位。默认 off ⇒ 抽取结果为 null ⇒ 派发提示词逐字不变。
  * ========================================================================== */

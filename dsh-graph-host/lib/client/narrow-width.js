@@ -149,7 +149,7 @@ const HEAD_PANEL_ICONS = {
   tagfilter: "🏷️",
   tagclear: "✕",
   memory: "🧠",
-  design: "🧩",
+  help: "📖",
   shared: "📇",
   settings: "⚙",
   versionmanage: "🏷️",
@@ -166,7 +166,7 @@ function stripPanelLabelDecorations(rawLabel) {
 
 /**
  * 弹层行的「图标 + 文字」标签（图标与文字都非空 ⇒ 每行同时有图标与文字）。
- * @param {string} key 行标识（refresh/tagfilter/tagclear/memory/shared/settings）
+ * @param {string} key 行标识（refresh/tagfilter/tagclear/memory/help/shared/settings）
  * @param {string} rawLabel 既有 i18n 标签原文
  * @returns {{icon: string, text: string, label: string}}
  */

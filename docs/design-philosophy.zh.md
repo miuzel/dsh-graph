@@ -92,7 +92,7 @@
 事件，事件落盘成功后才写 `goal.md`（`core/ops.ts`）。因此 `events.jsonl` 是唯一真源，
 `goal.md` 的 `status` 只是投影；`graph_rebuild` 会重放 `goal.created` / `goal.transition`
 并报告 frontmatter 与事件流的 drift（`core/ops.ts`）。
-看板上的列位置也直接等于 `status`——所以卡片滞留列里就是在撒谎（`dsh-graph-host/supervisor-guide.zh.md`）。
+看板上的列位置也直接等于 `status`——所以卡片滞留列里就是在撒谎（`prompts/supervisor-guide.zh.md`）。
 
 <!-- sec: criteria-gate -->
 
@@ -128,15 +128,15 @@
 **但这里必须说清一个诚实边界**：`delivered` 的人工 gate 是**主管纪律约束，不是引擎强制**。
 `graph_resolve_accept` 与 `graph_transition(to='delivered')` 都不校验任何人类信号——没有 token、
 没有 GUI 确认，事件载荷也不记录批准者；引擎无从区分「负责人裁决过」与「主管自放」
-（`dsh-graph-host/supervisor-guide.zh.md`）。这是**刻意保留的弹性**：强制只会诱发 agent
+（`prompts/supervisor-guide.zh.md`）。这是**刻意保留的弹性**：强制只会诱发 agent
 取巧。纪律在主管身上，不在引擎里。相应地，主管守则把「审核」列为四类默认需负责人确认的操作之一
-（`dsh-graph-host/supervisor-guide.zh.md`），执行子代理被明确禁止自移 `review→delivered`
-（`dsh-graph-host/supervisor-guide.zh.md`）。
+（`prompts/supervisor-guide.zh.md`），执行子代理被明确禁止自移 `review→delivered`
+（`prompts/supervisor-guide.zh.md`）。
 
 ### 3.3 机器快速放行不是人工 gate 的替代
 
 `review.policy` 取三值 `auto` / `strict` / `none`（未配置时按目标类型派生：`patch`/`chore` → `auto`，
-其余 → `strict`）（`dsh-graph-host/supervisor-guide.zh.md`）。只有 `auto` 允许
+其余 → `strict`）（`prompts/supervisor-guide.zh.md`）。只有 `auto` 允许
 `fast_track`，且四项机器门禁必须全绿：
 
 1. 全量测试 `exit_code=0` 且 `fail=0`（**调用方证据**，引擎不复跑）；
@@ -145,9 +145,9 @@
 4. 全部判据以 `✅已验` 结尾（**引擎自算**）。
 
 证据分层与 fail-safe（任一信号取不到即不放行）见
-`dsh-graph-host/supervisor-guide.zh.md`；实现入口 `core/ops.ts`（`resolveAccept`）。
+`prompts/supervisor-guide.zh.md`；实现入口 `core/ops.ts`（`resolveAccept`）。
 **`fast_track` 只免除机器证据收集，未免除负责人对 `delivered` 的最终裁决**
-（`dsh-graph-host/supervisor-guide.zh.md`）。
+（`prompts/supervisor-guide.zh.md`）。
 
 <!-- sec: dispatch -->
 
@@ -215,7 +215,7 @@ g-408 实测记录在案）。构建本身是**原子发布**的：先组装到�
 `attempt.bound` 等事件先行写入（`core/ops.ts`，`bindAttemptChild`；事件先行的收敛记录见
 `docs/event-first-commit-contract.zh.md`）。执行子代理的状态自述通过
 `graph_report_status` 写进 attempt（`core/ops.ts`），**主管不得替子代理汇报**——那句话是
-子代理的自述，代劳即伪造进展（`dsh-graph-host/supervisor-guide.zh.md`）。
+子代理的自述，代劳即伪造进展（`prompts/supervisor-guide.zh.md`）。
 
 ### 5.2 自动截获：零 LLM 调用的结果面
 
@@ -251,16 +251,16 @@ g-408 实测记录在案）。构建本身是**原子发布**的：先组装到�
 评审结论只有三个值：`PASS` / `BLOCK` / `UNVERIFIED`，定义在 `core/ops.ts`
 （`REVIEW_CONCLUSIONS`），**不得使用 `FAIL`**。日常复核的分级口径还包含第四类
 `OUT-OF-SCOPE`（超出当前威胁模型或版本范围，不自动升级）——它不影响上面的闭集，
-因为闭集管的是**写进评审记录的结论**（`dsh-graph-host/supervisor-guide.zh.md`）。
+因为闭集管的是**写进评审记录的结论**（`prompts/supervisor-guide.zh.md`）。
 
 `BLOCK` 的触发面被明确收窄：跨 workspace 越界、凭据泄漏、明显路径错误、普通并发数据丢失、
 未授权破坏性写入、错误输入崩溃必须阻断；理论网络攻击、同 UID 恶意竞争、内核级全量 TOCTOU、
-分布式一致性缺陷等**不自动 BLOCK**（`dsh-graph-host/supervisor-guide.zh.md`）。
+分布式一致性缺陷等**不自动 BLOCK**（`prompts/supervisor-guide.zh.md`）。
 
 ### 6.2 独立性真源：`reviews/<review_id>.md`
 
 一次评审是**既有执行 attempt 的附属记录**——不新建 attempt、不迁移状态、不覆盖作者
-`child_id` 与 `results-att-*.md`（`dsh-graph-host/supervisor-guide.zh.md`）。
+`child_id` 与 `results-att-*.md`（`prompts/supervisor-guide.zh.md`）。
 结论独立落盘在两个位置：
 
 - 目录 `<goalDir>/reviews/`：`core/ops.ts`（`reviewsDir`），注释明确「与 `attempts/` 并列，
@@ -289,18 +289,18 @@ g-408 实测记录在案）。构建本身是**原子发布**的：先组装到�
 ### 6.4 分级策略与「未独立评审」标注
 
 `strict` 表示必须派独立（无作者偏见的）评审子代理、禁止 `fast_track`
-（`dsh-graph-host/supervisor-guide.zh.md`）。若 `strict` 目标接受时当前候选没有可审计的
+（`prompts/supervisor-guide.zh.md`）。若 `strict` 目标接受时当前候选没有可审计的
 独立评审 PASS 记录，引擎会追加一条**目标级可见化标注** `review.independent_missing`
 （`core/ops.ts`），把 policy、strict 原因、当前候选 SHA 都记进去——但
 **不阻断 accept**。看板徽标与 `review_state.independent_ok` 针对的是
 `current_candidate_sha`（最近一次被请求评审的候选），**不等于 HEAD**
-（`dsh-graph-host/supervisor-guide.zh.md`）。
+（`prompts/supervisor-guide.zh.md`）。
 
 ### 6.5 诚实边界：评审不是引擎门禁
 
 必须说清楚：`strict` 的「必须派独立评审」在插件层**只有判定与指南约束，不是引擎强制**；
 未派独立评审时看板与事件流如实标注「未独立评审」但不阻断 accept
-（`dsh-graph-host/supervisor-guide.zh.md`）。派发入口是
+（`prompts/supervisor-guide.zh.md`）。派发入口是
 `graph_start_review(goal, attempt, candidate_commit)` / `POST /api/dsh-graph/start-review`（同上）。
 
 <!-- sec: release -->
@@ -366,14 +366,14 @@ g-408 实测记录在案）。构建本身是**原子发布**的：先组装到�
 
 **分级决策铁律**：一切自发总结、技术经验、方案决策 100% 默认 `on_demand`；只有「人类明确要求
 常驻」或「涉及工作区隔离/不可违背的安全禁令」才允许 `standing`
-（`dsh-graph-host/supervisor-guide.zh.md`）。常驻注入还有独立的总预算
+（`prompts/supervisor-guide.zh.md`）。常驻注入还有独立的总预算
 `MEMORY_INJECT_TOTAL_BUDGET = 4000`（`core/ops.ts`），渲染时按「关键约束 → 人类授权 →
 重要度 → 更新时间」排序（`core/ops.ts`，`formatStandingMemorySection`）；
 预算挤不下全部关键约束时**不静默丢弃**，而是给出有界的溢出提示（`core/ops.ts`）。
 
 结构化记忆的真源是 `memory/memory.jsonl`（事件流），读取走重放
 （`core/events.ts`，`replayMemory`）；`on_demand` 条目用 `graph_memory_recall` 按需检索，
-不需要任何索引文件（`dsh-graph-host/supervisor-guide.zh.md`、`:413`）。
+不需要任何索引文件（`prompts/supervisor-guide.zh.md`、`:413`）。
 
 <!-- sec: cards -->
 
@@ -385,7 +385,7 @@ g-408 实测记录在案）。构建本身是**原子发布**的：先组装到�
 （`core/ops.ts`，`CARD_STATUSES`），scope 二值 `goal` / `shared`（`core/ops.ts`）。
 一张卡一个收集任务：`graph_add_card` 占位、派收集子代理后**必须立即** `graph_bind_collect_card`
 绑定 child（未绑定即流程违规）、子代理回填后 `filled`、主管复核后 `reviewed`
-（`dsh-graph-host/supervisor-guide.zh.md`）。
+（`prompts/supervisor-guide.zh.md`）。
 
 **共享卡**可从共享池挂载到多个目标：挂载即引用计数 +1，并追加 `card.shared_referenced` 事件
 （`core/ops.ts`，`addSharedCardRef`）；引用计数统计**含已归档目标**
@@ -393,7 +393,7 @@ g-408 实测记录在案）。构建本身是**原子发布**的：先组装到�
 （负责人 GUI）、匹配 `project.yaml` 的 `supervisor:<sessionId>` 放行；**执行子代理一律拒绝且
 零副作用**（`core/ops.ts`，`authorizeSharedCardLink` 复用 `authorizeUnbind`
 `core/ops.ts` 作为唯一判定真源）。共享卡与长期记忆不可互相替代：前者是目标组装的显式一部分，
-后者是任何 agent 都可 recall 的持久事实（`dsh-graph-host/supervisor-guide.zh.md`）。
+后者是任何 agent 都可 recall 的持久事实（`prompts/supervisor-guide.zh.md`）。
 
 ### 9.2 附件
 
@@ -530,8 +530,8 @@ prepare（调用方）  →  event（commitPrepared）  →  persist（commitPre
 | 版本泳道与 released 准入 | `core/version-lane.ts` |
 | 事件先行三段契约 | `docs/event-first-commit-contract.zh.md` |
 | 引导提示词注入边界 | `docs/guide-auto-injection.md` |
-| 主管工作指南（生命周期 / 判据门禁 / 复核纪律 / 记忆分级） | `dsh-graph-host/supervisor-guide.zh.md` |
-| 主管工作指南（英文对偶） | `dsh-graph-host/supervisor-guide.en.md` |
+| 主管工作指南（生命周期 / 判据门禁 / 复核纪律 / 记忆分级） | `prompts/supervisor-guide.zh.md` |
+| 主管工作指南（英文对偶） | `prompts/supervisor-guide.en.md` |
 | 构建隔离与发布红线 | `AGENTS.md` |
 | 发布操作手册与 tarball 对账 | `docs/release-handbook.md` |
 | 结构守卫 | `core/tests/g460-design-philosophy-guard.test.ts` |

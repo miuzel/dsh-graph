@@ -35,8 +35,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatAttemptPrompt } from "../../dist/index.js";
 
-const sourceRoot = join(import.meta.dirname, "../../dsh-graph-host");
-const shippedRoot = join(import.meta.dirname, "../../dist");
+// g-496：提示词资产（含 supervisor-guide）单一源码副本在**公共层** `prompts/`；
+// 发布形态是合并后的 `dist/prompts/`。两侧都以此为一层资产根。
+const sourceRoot = join(import.meta.dirname, "../../prompts");
+const shippedRoot = join(import.meta.dirname, "../../dist/prompts");
 const read = (root: string, name: string) => readFileSync(join(root, name), "utf8");
 const renderArgs = { goal: "g-326", attempt: "att-001", goalRel: ".dsh-graph/versions/v0.16.0/goals/g-326/goal.md" };
 
@@ -315,8 +317,8 @@ test("g-326 判据 3：渲染产物明确禁止以「轻量/文案」为由削�
 
 test("g-326 判据 4：每轮注入的主管纪律提醒（discipline.zh/en）含同一分级提醒", () => {
   for (const [label, root] of [["源码", sourceRoot], ["投递副本 dist", shippedRoot]] as const) {
-    const zh = read(join(root, "prompts"), "discipline.zh.md");
-    const en = read(join(root, "prompts"), "discipline.en.md");
+    const zh = read(root, "discipline.zh.md");
+    const en = read(root, "discipline.en.md");
     expectAll(zh, `${label} prompts/discipline.zh.md`, ["测试力度按改动性质分级", "不强制新增单测", "全量既有测试全绿", "绝不因「轻量/文案」跳过、删改或削弱既有测试"]);
     expectAll(en, `${label} prompts/discipline.en.md`, ["Test intensity is tiered by the nature of the change", "does not force new unit tests", "full existing suite green", "never skip, delete, or weaken existing tests"]);
   }

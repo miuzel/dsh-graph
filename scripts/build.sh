@@ -135,15 +135,84 @@ cp dsh-graph-host/lib/server-i18n.js dist/lib/server-i18n.js
 cp dsh-graph-host/cordis.patch.yml dist/cordis.patch.yml
 cp dsh-graph-host/LICENSE dist/LICENSE
 cp dsh-graph-host/README.md dist/README.md
-cp -r dsh-graph-host/prompts dist/prompts
+# g-496：提示词资产**合并**两层 → dist/prompts/（负责人 2026-10-14 跨宿主所有权裁定）
+#
+#   · **公共层** `prompts/`（仓库根）—— 跨宿主共用正文的唯一维护源码；
+#   · **宿主专属层** `dsh-graph-host/prompts/` —— DSH 会话/section/GUI 语义专属正文。
+#
+# 复制是**生成产物**，不构成第二份维护源码（共享正文只在公共层有一份受版本控制的副本）。
+# 合并**必须检测同名冲突**并明确失败：绝不以「后复制覆盖先复制」掩盖重复所有权
+# （同名 = 同一资产同时被两层声明 = 归属错误，静默覆盖会让某一层的改动悄悄失效）。
+#
+# 注意：本段在暂存根内执行（工作目录已切到暂存树），故**源目录必须是相对仓库根的绝对路径**
+# （`$REPO_ROOT/...`），而目标 `dist/prompts` 相对暂存根。
+mkdir -p dist/prompts
+# `$1`=源目录（相对仓库根）  `$2`=层名  `$3`=required（"required" 时缺失即失败）
+#
+# 层层是否**必须存在**：公共层是唯一维护源码，缺失一定是环境问题 ⇒ required。
+# 宿主专属层**允许为空**：g-496 起 DSH 专属资产可能全部驻留公共层目录（归属按内容判定，
+# 不按物理目录），此时该层甚至无需存在 —— 视为「本层无资产」，不是错误。
+# 但**已存在**的层若含 .md 却读不出（如权限），下面 cp 会失败并因 set -e 中止。
+_merge_prompts_layer() {
+  local src_dir="$REPO_ROOT/$1" label="$2" required="$3" f base dest
+  if [ ! -d "$src_dir" ]; then
+    if [ "$required" = "required" ]; then
+      echo "❌ 提示词资产层目录缺失：${1}（${label}）不存在。" >&2
+      exit 1
+    fi
+    return 0
+  fi
+  for f in "$src_dir"/*.md; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    dest="dist/prompts/$base"
+    if [ -e "$dest" ]; then
+      echo "❌ 提示词资产同名冲突：'$base' 同时存在于公共层 prompts/ 与宿主专属层 dsh-graph-host/prompts/。" >&2
+      echo "   同一资产只能有一层所有权；请将其从一层移除以消除重复所有权。" >&2
+      exit 1
+    fi
+    cp "$f" "$dest"
+  done
+}
+# 顺序无关：冲突在复制前显式检测，不依赖遍历顺序。
+_merge_prompts_layer "prompts" "公共层" "required"
+_merge_prompts_layer "dsh-graph-host/prompts" "宿主专属层" "optional"
+unset -f _merge_prompts_layer
+
+# 完整性对账（g-496 返工：**不再固定 26**）：合并结果必须与「两层来源文件集合的并集」
+# **逐一相等**（双向）—— 既不得丢资产（包内少），也不得多出无来源的文件（包内多）。
+# 用集合对账取代硬编码计数：后续合并**新合法 host 资产**（如插件层 GUI 模板正文）时
+# 无需再改本脚本里的数字，而任何来源与产物不一致仍必然判红。
+# 注意：同名冲突已在上面 fail-closed，故此处并集不会掩盖重复所有权。
+_prompt_src_list="$(mktemp)"
+{
+  ls "$REPO_ROOT/prompts"/*.md 2>/dev/null || true
+  ls "$REPO_ROOT/dsh-graph-host/prompts"/*.md 2>/dev/null || true
+} | while IFS= read -r p; do [ -e "$p" ] && basename "$p"; done | LC_ALL=C sort > "$_prompt_src_list"
+_prompt_dist_list="$(mktemp)"
+ls dist/prompts/*.md 2>/dev/null | while IFS= read -r p; do basename "$p"; done | LC_ALL=C sort > "$_prompt_dist_list"
+if ! diff -u "$_prompt_src_list" "$_prompt_dist_list" > /dev/null; then
+  echo "❌ 提示词资产完整性对账失败：产物 dist/prompts/ 与「公共层 + 宿主专属层」来源集合不一致。" >&2
+  diff -u "$_prompt_src_list" "$_prompt_dist_list" | sed 's/^/   /' >&2
+  rm -f "$_prompt_src_list" "$_prompt_dist_list"
+  exit 1
+fi
+if [ ! -s "$_prompt_src_list" ]; then
+  echo "❌ 提示词资产完整性对账失败：来源集合为空（两层均无 .md）。" >&2
+  rm -f "$_prompt_src_list" "$_prompt_dist_list"
+  exit 1
+fi
+rm -f "$_prompt_src_list" "$_prompt_dist_list"
+
 # g-462：设计哲学交互图（g-460 定稿的自包含 HTML 产物 + archify 源/静态预览）随包发布；
 # 宿主只读路由 /api/dsh-graph/diagram/<name> 从 dist/diagrams/ 现读（白名单仅两张 HTML）。
 cp -r dsh-graph-host/diagrams dist/diagrams
-cp dsh-graph-host/supervisor-guide.zh.md dist/supervisor-guide.zh.md
-cp dsh-graph-host/supervisor-guide.en.md dist/supervisor-guide.en.md
 
 # 从 dsh-graph-host/package.json 生成 dist/package.json：
-# 移除 scripts（构建已在仓库根完成），添加 main 和 exports（指向 dist 内产物）
+# 移除 scripts（构建已在仓库根完成），添加 main 和 exports（指向 dist 内产物），
+# 并把 `dsh.promptAssets.layout` 从 `source` 改写为 **`merged`** —— 这是发布形态的
+# **显式布局标记**（g-496 返工）：运行期只读该标记取根，**不以任何资产/目录的存在性**推断
+# 形态（存在性判别是 fail-open 来源：包内缺资产时会被邻接源码树掩盖）。
 node -e '
   const src = JSON.parse(require("fs").readFileSync("dsh-graph-host/package.json", "utf8"));
   delete src.scripts;
@@ -154,6 +223,8 @@ node -e '
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   };
+  // 发布形态标记：公共层与宿主专属层已由本脚本**合并**进包内单一 `./prompts/`。
+  src.dsh = Object.assign({}, src.dsh, { promptAssets: { layout: "merged", dir: "./prompts" } });
   require("fs").writeFileSync("dist/package.json", JSON.stringify(src, null, 2) + "\n");
 '
 cd "$REPO_ROOT"

@@ -104,7 +104,7 @@ Transitions all go through `transition()` (`core/ops.ts`) and are **event-first*
 in `goal.md` is only a projection; `graph_rebuild` replays `goal.created` / `goal.transition` and reports
 any drift between frontmatter and the event log (`core/ops.ts`).
 The board column is the `status` itself — so a card left sitting in the wrong column is a lie
-(`dsh-graph-host/supervisor-guide.zh.md`).
+(`prompts/supervisor-guide.zh.md`).
 
 <!-- sec: criteria-gate -->
 
@@ -142,18 +142,18 @@ Requesting acceptance is the `review.requested` event (`core/ops.ts`).
 constraint, not engine enforcement**. Neither `graph_resolve_accept` nor
 `graph_transition(to='delivered')` validates any human signal — no token, no GUI confirmation, and the
 event payload does not record an approver; the engine cannot distinguish "the owner adjudicated" from
-"the supervisor let itself through" (`dsh-graph-host/supervisor-guide.zh.md`). This flex is
+"the supervisor let itself through" (`prompts/supervisor-guide.zh.md`). This flex is
 **deliberate**: hard enforcement would only push agents into workarounds. The discipline lives with the
 supervisor, not in the engine. Correspondingly, the supervisor guide lists "review" as one of the four
-operations that need owner confirmation by default (`dsh-graph-host/supervisor-guide.zh.md`), and
+operations that need owner confirmation by default (`prompts/supervisor-guide.zh.md`), and
 execution subagents are explicitly forbidden from moving `review→delivered` themselves
-(`dsh-graph-host/supervisor-guide.zh.md`).
+(`prompts/supervisor-guide.zh.md`).
 
 ### 3.3 Machine fast-track is not a substitute for the human gate
 
 `review.policy` takes three values, `auto` / `strict` / `none` (when unset it is derived from the goal
 type: `patch`/`chore` → `auto`, everything else → `strict`)
-(`dsh-graph-host/supervisor-guide.zh.md`). Only `auto` permits `fast_track`, and all four machine
+(`prompts/supervisor-guide.zh.md`). Only `auto` permits `fast_track`, and all four machine
 gates must be green:
 
 1. full test suite `exit_code=0` **and** `fail=0` (**caller evidence**; the engine does not re-run it);
@@ -162,9 +162,9 @@ gates must be green:
 4. every criterion ends with `✅已验` (**computed by the engine**).
 
 Evidence layering and fail-safe behaviour (any missing signal means no pass) are described in
-`dsh-graph-host/supervisor-guide.zh.md`; the implementation entry point is `core/ops.ts`
+`prompts/supervisor-guide.zh.md`; the implementation entry point is `core/ops.ts`
 (`resolveAccept`). **`fast_track` only waives machine evidence collection; it does not waive the owner's
-final adjudication of `delivered`** (`dsh-graph-host/supervisor-guide.zh.md`).
+final adjudication of `delivered`** (`prompts/supervisor-guide.zh.md`).
 
 <!-- sec: dispatch -->
 
@@ -241,7 +241,7 @@ and `attempt.started` / `attempt.bound` events are written first (`core/ops.ts`,
 Execution subagents self-report through `graph_report_status`, which writes into the attempt
 (`core/ops.ts`); **the supervisor must never report on a subagent's behalf** — that line is the
 subagent's own statement, and standing in for it fabricates progress
-(`dsh-graph-host/supervisor-guide.zh.md`).
+(`prompts/supervisor-guide.zh.md`).
 
 ### 5.2 Auto-capture: a results surface with zero LLM calls
 
@@ -280,18 +280,18 @@ There are exactly three review conclusions: `PASS` / `BLOCK` / `UNVERIFIED`, def
 `core/ops.ts` (`REVIEW_CONCLUSIONS`); **`FAIL` may not be used**. Day-to-day review grading also
 includes a fourth class, `OUT-OF-SCOPE` (beyond the current threat model or version scope; it does not
 auto-escalate) — that does not affect the closed set above, because the closed set governs **what may be
-written into a review record** (`dsh-graph-host/supervisor-guide.zh.md`).
+written into a review record** (`prompts/supervisor-guide.zh.md`).
 
 What may trigger `BLOCK` is explicitly narrowed: workspace escape, credential leakage, obvious path
 errors, ordinary concurrent data loss, unauthorised destructive writes and crashes on bad input must
 block; theoretical network attacks, same-UID malicious races, kernel-level full TOCTOU and distributed
-consistency flaws **do not auto-block** (`dsh-graph-host/supervisor-guide.zh.md`).
+consistency flaws **do not auto-block** (`prompts/supervisor-guide.zh.md`).
 
 ### 6.2 The independence source of truth: `reviews/<review_id>.md`
 
 A review is an **attachment to an existing execution attempt** — it creates no attempt, transitions no
 state, and overwrites neither the author's `child_id` nor `results-att-*.md`
-(`dsh-graph-host/supervisor-guide.zh.md`). The conclusion is written, independently, in two places:
+(`prompts/supervisor-guide.zh.md`). The conclusion is written, independently, in two places:
 
 - the directory `<goalDir>/reviews/`: `core/ops.ts` (`reviewsDir`), whose comment states it sits
   beside `attempts/` and is **never written into `attempts/`**;
@@ -322,19 +322,19 @@ they do not constitute independent verification either (`core/ops.ts`).
 ### 6.4 Grading policy and the "not independently reviewed" marker
 
 `strict` means an independent (author-bias-free) review subagent must be dispatched and `fast_track` is
-forbidden (`dsh-graph-host/supervisor-guide.zh.md`). If a `strict` goal is accepted while the current
+forbidden (`prompts/supervisor-guide.zh.md`). If a `strict` goal is accepted while the current
 candidate has no auditable independent PASS record, the engine appends a **goal-level visibility marker**
 `review.independent_missing` (`core/ops.ts`) recording the policy, the strict reasons and the
 current candidate SHA — but it **does not block acceptance**. The board badge and
 `review_state.independent_ok` refer to `current_candidate_sha` (the candidate most recently requested for
-review), which is **not HEAD** (`dsh-graph-host/supervisor-guide.zh.md`).
+review), which is **not HEAD** (`prompts/supervisor-guide.zh.md`).
 
 ### 6.5 Honest boundary: review is not an engine gate
 
 It must be stated plainly: in the plugin layer, `strict`'s "an independent reviewer must be dispatched" is
 **only a judgement and a guideline constraint, not engine enforcement**; with no independent review
 dispatched, the board and the event log honestly mark "not independently reviewed" but acceptance is not
-blocked (`dsh-graph-host/supervisor-guide.zh.md`). The dispatch entry point is
+blocked (`prompts/supervisor-guide.zh.md`). The dispatch entry point is
 `graph_start_review(goal, attempt, candidate_commit)` / `POST /api/dsh-graph/start-review` (same section).
 
 <!-- sec: release -->
@@ -411,7 +411,7 @@ control characters and text that looks like a credential or token (`core/ops.ts`
 **The grading rule**: every self-generated summary, technical lesson or design decision defaults 100% to
 `on_demand`; `standing` is allowed only when "a human explicitly asks for it to be permanent" or the entry
 "concerns workspace isolation / a non-negotiable safety prohibition"
-(`dsh-graph-host/supervisor-guide.zh.md`). Permanent injection also has its own total budget,
+(`prompts/supervisor-guide.zh.md`). Permanent injection also has its own total budget,
 `MEMORY_INJECT_TOTAL_BUDGET = 4000` (`core/ops.ts`); rendering sorts by
 "critical constraint → human authorisation → importance → update time" (`core/ops.ts`,
 `formatStandingMemorySection`), and when the budget cannot fit every critical constraint it **does not
@@ -419,7 +419,7 @@ silently drop them** but emits a bounded overflow notice (`core/ops.ts`).
 
 The source of truth for structured memory is `memory/memory.jsonl` (an event log) read by replay
 (`core/events.ts`, `replayMemory`); `on_demand` entries are retrieved with `graph_memory_recall` and
-need no index file at all (`dsh-graph-host/supervisor-guide.zh.md`, `:413`).
+need no index file at all (`prompts/supervisor-guide.zh.md`, `:413`).
 
 <!-- sec: cards -->
 
@@ -432,7 +432,7 @@ The card lifecycle is a four-state closed set `empty → collecting → filled �
 One card is one collection task: `graph_add_card` registers the placeholder, the collecting subagent must
 be bound **immediately** with `graph_bind_collect_card` (no binding is a process violation), the subagent
 fills it back to `filled`, and the supervisor reviews it to `reviewed`
-(`dsh-graph-host/supervisor-guide.zh.md`).
+(`prompts/supervisor-guide.zh.md`).
 
 A **shared card** can be mounted into multiple goals: mounting increments the reference count and appends a
 `card.shared_referenced` event (`core/ops.ts`, `addSharedCardRef`); the count includes
@@ -442,7 +442,7 @@ creator, `human:*` (the owner's GUI), and the `supervisor:<sessionId>` matching 
 `authorizeSharedCardLink`, which reuses `authorizeUnbind` at `core/ops.ts` as the single decision
 source of truth). Shared cards and long-term memory are not interchangeable: the former is an explicit part
 of goal assembly, the latter is a persistent fact any agent can recall
-(`dsh-graph-host/supervisor-guide.zh.md`).
+(`prompts/supervisor-guide.zh.md`).
 
 ### 9.2 Attachments
 
@@ -592,8 +592,8 @@ Every path below really exists in the repository; the structural guard
 | Version lanes and `released` admission | `core/version-lane.ts` |
 | Event-first three-phase contract | `docs/event-first-commit-contract.zh.md` |
 | Guide-prompt injection boundary | `docs/guide-auto-injection.md` |
-| Supervisor guide (lifecycle / criteria gate / review discipline / memory grading) | `dsh-graph-host/supervisor-guide.zh.md` |
-| Supervisor guide (English counterpart) | `dsh-graph-host/supervisor-guide.en.md` |
+| Supervisor guide (lifecycle / criteria gate / review discipline / memory grading) | `prompts/supervisor-guide.zh.md` |
+| Supervisor guide (English counterpart) | `prompts/supervisor-guide.en.md` |
 | Build isolation and release red lines | `AGENTS.md` |
 | Release handbook and tarball reconciliation | `docs/release-handbook.md` |
 | Structural guard | `core/tests/g460-design-philosophy-guard.test.ts` |

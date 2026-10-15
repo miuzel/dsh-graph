@@ -1,5 +1,5 @@
 /**
- * g-347 守护（g-349 收敛版）：`graph_help` 帮助资产（`dsh-graph-host/prompts/help.{zh,en}.md`）
+ * g-347 守护（g-349 收敛版）：`graph_help` 帮助资产（`prompts/help.{zh,en}.md`）
  * 必须与引擎 tool schema 对齐。
  *
  * 为什么需要：`graph_help` 是主管会话的**首要工具速查**，而该资产此前**零测试覆盖**。
@@ -56,7 +56,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { apply } from "../../dist/index.js";
-import { init, unbindGoalChild } from "../ops.ts";
+import { init, unbindGoalChild, HARNESS_MODULE_IDS } from "../ops.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 
@@ -86,12 +86,17 @@ function outOfRepoTempBase(): string {
   return tmpdir();
 }
 const SOURCE_HELP = {
-  zh: join(repoRoot, "dsh-graph-host", "prompts", "help.zh.md"),
-  en: join(repoRoot, "dsh-graph-host", "prompts", "help.en.md"),
+  zh: join(repoRoot, "prompts", "help.zh.md"),
+  en: join(repoRoot, "prompts", "help.en.md"),
 };
 const DIST_HELP = {
   zh: join(repoRoot, "dist", "prompts", "help.zh.md"),
   en: join(repoRoot, "dist", "prompts", "help.en.md"),
+};
+/** g-495：按需面（agent 需要细则时读的那一面；`help(topic="usage")` + skill dsh-graph 正文）。 */
+const SOURCE_USAGE = {
+  zh: join(repoRoot, "prompts", "usage.zh.md"),
+  en: join(repoRoot, "prompts", "usage.en.md"),
 };
 
 type ToolDef = { name: string; params: string[]; required: string[] };
@@ -411,69 +416,277 @@ function countProblems(text: string, lang: string, expected: number): string[] {
 
 const defs = toolDefsFrom(apply);
 const defByName = new Map(defs.map((d) => [d.name, d]));
+
+/**
+ * ── g-495 改判（负责人授权）：help 资产的可判定面从「51 条工具清单」换成「功能模块表」 ──
+ *
+ * help.zh/en 现在是 **agent 面的渐进式披露**：只列功能模块 + 当前开关状态，工具细节以
+ * harness 注入的 schema 为准。原 A2（条目集合 == schema 工具集合）与 A3（条目数 == schema 实数）
+ * 的**真源**随之从「工具」改为「模块」：
+ *   A2' 模块表的 `{moduleId}` 占位集合 == 引擎模块注册表 `HARNESS_MODULE_IDS`（不缺/不多/不重复/zh-en 对称）
+ *   A3' 文件头声明的模块数 == `HARNESS_MODULE_IDS.length`（仍与中英文措辞解耦）
+ * 判别力**不降**：占位被删/拼错/多写 ⇒ 集合不等必红；模块数写错或声明被删 ⇒ 必红（负向对照见下）。
+ */
+
+/** 从 markdown 表格里抽取模块行：`| 标签 | … | {tags} |` ⇒ `{rowName, moduleId}`。 */
+function parseModuleTable(text: string): Array<{ rowName: string; moduleId: string }> {
+  const out: Array<{ rowName: string; moduleId: string }> = [];
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\|\s*([^|]+?)\s*\|[^|]*\|\s*\{([a-z_]+)\}\s*\|\s*$/);
+    if (m) out.push({ rowName: m[1], moduleId: m[2] });
+  }
+  return out;
+}
+
+function moduleTableProblems(text: string, lang: string): string[] {
+  const problems: string[] = [];
+  const rows = parseModuleTable(text);
+  const ids = rows.map((r) => r.moduleId);
+  const expected = [...HARNESS_MODULE_IDS];
+  if (ids.length !== expected.length) {
+    problems.push(`help.${lang}.md 模块表行数 ${ids.length} 与引擎模块注册表 ${expected.length} 不一致`);
+  }
+  const dupes = [...new Set(ids.filter((n, i) => ids.indexOf(n) !== i))];
+  if (dupes.length) problems.push(`help.${lang}.md 模块表存在重复模块: ${dupes.join(", ")}`);
+  const missing = expected.filter((n) => !ids.includes(n));
+  if (missing.length) problems.push(`help.${lang}.md 缺少模块行: ${missing.join(", ")}`);
+  const extra = ids.filter((n) => !expected.includes(n));
+  if (extra.length) problems.push(`help.${lang}.md 含注册表外模块: ${extra.join(", ")}`);
+  return problems;
+}
+
+/** 模块数声明（与措辞解耦）：`共 5 个功能模块` / `5 feature modules`。 */
+const MODULE_COUNT_PATTERNS = [/(\d+)\s*个功能模块/g, /(\d+)\s+feature modules/g];
+
+function moduleCountProblems(text: string, lang: string): string[] {
+  const problems: string[] = [];
+  const expected = HARNESS_MODULE_IDS.length;
+  let hits = 0;
+  for (const re of MODULE_COUNT_PATTERNS) {
+    for (const m of text.matchAll(re)) {
+      hits++;
+      if (Number(m[1]) !== expected) {
+        problems.push(`help.${lang}.md 模块计数声明为 ${m[1]}，应为 ${expected}`);
+      }
+    }
+  }
+  if (hits === 0) problems.push(`help.${lang}.md 未解析到模块计数声明（声明被删/措辞已变，守卫不得退化为恒真）`);
+  return problems;
+}
+
 const help = {
   zh: { text: readFileSync(SOURCE_HELP.zh, "utf8"), entries: parseHelp(readFileSync(SOURCE_HELP.zh, "utf8")) },
   en: { text: readFileSync(SOURCE_HELP.en, "utf8"), entries: parseHelp(readFileSync(SOURCE_HELP.en, "utf8")) },
 };
+
+const USAGE = {
+  zh: { text: readFileSync(SOURCE_USAGE.zh, "utf8") },
+  en: { text: readFileSync(SOURCE_USAGE.en, "utf8") },
+};
+
+/**
+ * 从按需面 usage 抽取工具签名条目。usage 的清单行有两种形态：
+ *   `- graph_x(a[, b]) 说明；`            （单工具一行）
+ *   `- graph_a(p) …；graph_b(p) …`        （同一行用 `；`/`;` 分隔多工具）
+ * 逐行扫描所有 `graph_xxx(...)` 出现点，取 `(` 到配对 `)` 的签名。
+ */
+function parseUsageEntries(text: string): HelpEntry[] {
+  const out: HelpEntry[] = [];
+  text.split("\n").forEach((line, i) => {
+    const re = /\b(graph_[a-z0-9_]+)\s*\(/g;
+    for (const m of line.matchAll(re)) {
+      const start = (m.index ?? 0) + m[0].length - 1; // 指向 `(`
+      let depth = 0;
+      let end = -1;
+      for (let k = start; k < line.length; k++) {
+        if (line[k] === "(") depth++;
+        else if (line[k] === ")") { depth--; if (depth === 0) { end = k; break; } }
+      }
+      if (end < 0) continue; // 括号不闭合 ⇒ 交给 usageSignatureProblems 的 isBalanced 分支报红
+      out.push({ name: m[1], line: line.slice(m.index ?? 0, end + 1), lineNo: i + 1 });
+    }
+  });
+  return out;
+}
+
+/**
+ * usage 签名 vs schema：复用与 help 期**同一套**判定核心（铁律：不留弱化副本）。
+ *
+ * usage 是**代表性速查面**（agent 需要细则时才读），不是 schema 的逐字镜像：
+ * 它按教学需要挑选参数、用 `goal | goals[]` 这类自然记法。因此这里只保留**健全性（soundness）**
+ * 判定 —— 凡 usage 写出来的东西必须是对的；**完整性（completeness）**判定归 harness 注入的 schema 本身。
+ *
+ * 保留（健全性，g-311/g-329 的真正判别力）：
+ *   ① 不得出现 schema 外 token（`签名含 schema 外 token`）—— 文档写了引擎不存在的参数必红；
+ *   ② 必填参数不得被写成可选（`必填参数被写成可选`）—— 少写方括号会让 agent 漏传必填参数；
+ *   ③ union 组必须是白名单里的真 XOR（`one-of 组 … 不在白名单`）；
+ *   ④ 签名括号必须闭合（`签名括号未闭合`）。
+ * 豁免（usage 体例，非缺陷）：缺可选参数、可选参数没加方括号、`a | b` 选择记法。
+ */
+function usageSignatureProblems(
+  text: string,
+  defByName: Map<string, ToolDef>,
+  lang: string,
+  unionWhitelist: Record<string, string[][]> = UNION_WHITELIST,
+): string[] {
+  // 用「已闭合」的条目送入判定核心；`goal | goals[]` / `content=…` 这类速查记法先归一成裸参数名，
+  // 以免把体例差异误判成 foreign token（归一后仍会被 ①②③④ 逐条校验）。
+  const entries = parseUsageEntries(text).map((e) => ({ ...e, line: normalizeUsageSignature(e.line) }));
+  return signatureProblems(entries, defByName, lang, unionWhitelist).filter(
+    (p) =>
+      !/签名缺参数/.test(p) && // usage 体例：允许只列必填（完整性由 schema 注入承担）
+      !/可选参数未加方括号/.test(p) && // usage 体例：可选参数不必写方括号
+      !/可选参数被写成必填/.test(p), // 同上（速查面不区分方括号）
+  );
+}
+
+/** 把 usage 的速查记法归一成判定核心认识的形态：`goal | goals[]` → `goal`；`content=…` → `content`。 */
+function normalizeUsageSignature(line: string): string {
+  return line
+    .replace(/([A-Za-z_][\w]*)\s*=\s*(?:…|\.\.\.|[^,)\s]+)/g, "$1") // `content=…` / `llm:true` 形式的赋值记法
+    .replace(/\s*[|]\s*[A-Za-z_][\w]*(?:\[\])?/g, "") // `goal | goals[]` 选择记法
+    .replace(/([A-Za-z_][\w]*)(?:\[\])?(?:…|\.\.\.)/g, "$1"); // `x…` 去省略号（`criteria[]` 不受影响）
+}
+
+/** usage 的「工具细则」段（`## Tool details` / `## 工具细则` 之后）。 */
+function toolDetailSection(text: string): string {
+  const m = text.match(/^##\s+(?:Tool details|工具细则).*$/m);
+  if (!m || m.index === undefined) return "";
+  return text.slice(m.index);
+}
+
+/** 某工具在细则段里的窗口：从该工具名首次出现到下一个 `**graph_` 段落标题或段尾。 */
+function toolDetailWindow(text: string, tool: string): string {
+  const section = toolDetailSection(text);
+  const start = section.indexOf(tool);
+  if (start < 0) return "";
+  const rest = section.slice(start);
+  const next = rest.slice(tool.length).search(/\n\*\*graph_/);
+  return next < 0 ? rest : rest.slice(0, tool.length + next);
+}
 
 test("A1 schema 恰为 51 个 graph_* 工具，且名字唯一", () => {
   assert.equal(defs.length, 51, `引擎注册的 graph_* 工具数应为 51（g-436 新增 graph_start_review），实际 ${defs.length}`);
   assert.equal(new Set(defs.map((d) => d.name)).size, 51, "引擎工具名存在重复");
 });
 
-test("A2 zh/en 帮助条目与 schema 工具集合逐一相等（不缺/不多/不重复），且 zh/en 结构对称", () => {
+test("A2' zh/en 帮助模块表与引擎模块注册表逐一相等（不缺/不多/不重复），且 zh/en 结构对称", () => {
   for (const lang of ["zh", "en"] as const) {
-    assert.deepEqual(structureProblems(help[lang].entries, defs, lang), [], `help.${lang}.md 结构面不一致`);
-    // 原判别力显式保留：条目数、唯一性、集合相等
-    const names = help[lang].entries.map((e) => e.name);
-    assert.equal(names.length, 51, `help.${lang}.md 条目数应为 51，实际 ${names.length}`);
-    assert.equal(new Set(names).size, names.length, `help.${lang}.md 存在重复条目`);
-    assert.deepEqual([...names].sort(), [...defs.map((d) => d.name)].sort(), `help.${lang}.md 与 schema 工具集合不一致`);
+    assert.deepEqual(moduleTableProblems(help[lang].text, lang), [], `help.${lang}.md 模块表面不一致`);
+    // 原判别力显式保留（换成模块口径）：行数、唯一性、集合相等
+    const ids = parseModuleTable(help[lang].text).map((r) => r.moduleId);
+    assert.equal(ids.length, HARNESS_MODULE_IDS.length, `help.${lang}.md 模块行数应为 ${HARNESS_MODULE_IDS.length}，实际 ${ids.length}`);
+    assert.equal(new Set(ids).size, ids.length, `help.${lang}.md 存在重复模块行`);
+    assert.deepEqual([...ids].sort(), [...HARNESS_MODULE_IDS].sort(), `help.${lang}.md 与引擎模块注册表不一致`);
   }
-  // zh/en 对称：条目顺序与章节数一致（两份资产的投影结构必须逐条对应）
+  // zh/en 对称：模块行顺序一致（两份资产的投影结构必须逐条对应）
   assert.deepEqual(
-    help.zh.entries.map((e) => e.name),
-    help.en.entries.map((e) => e.name),
-    "help.zh.md 与 help.en.md 的工具条目顺序不一致（zh/en 非对称）",
+    parseModuleTable(help.zh.text).map((r) => r.moduleId),
+    parseModuleTable(help.en.text).map((r) => r.moduleId),
+    "help.zh.md 与 help.en.md 的模块行顺序不一致（zh/en 非对称）",
   );
   const headings = (t: string) => t.split("\n").filter((l) => l.startsWith("## ")).length;
   assert.equal(headings(help.zh.text), headings(help.en.text), "help.zh.md 与 help.en.md 的章节数不一致");
 });
 
-test("A3 文件头声明的工具计数与 schema 实数一致（与中英文措辞解耦）", () => {
+test("A3' 文件头声明的模块计数与引擎模块注册表一致（与中英文措辞解耦）", () => {
   for (const lang of ["zh", "en"] as const) {
-    assert.deepEqual(countProblems(help[lang].text, lang, defs.length), [], `help.${lang}.md 计数声明与 schema 实数不一致`);
+    assert.deepEqual(moduleCountProblems(help[lang].text, lang), [], `help.${lang}.md 模块计数声明与注册表不一致`);
   }
-  // 反恒真：确认确实解析到「计数声明」（而非「文件头任意数字存在」这种更弱的条件——
-  // 那正是 R2 的误红面来源：版本号等无关数字会让它恒真）。
-  assert.ok(countDeclarations(help.zh.text).length > 0, "help.zh.md 文件头未解析到工具计数声明");
-  assert.ok(countDeclarations(help.en.text).length > 0, "help.en.md 文件头未解析到工具计数声明");
+  // 反恒真：确认确实解析到「计数声明」（而非「文件头任意数字存在」这种更弱的条件）。
+  for (const lang of ["zh", "en"] as const) {
+    assert.ok(
+      MODULE_COUNT_PATTERNS.some((re) => re.test(help[lang].text)),
+      `help.${lang}.md 未解析到模块计数声明`,
+    );
+  }
 });
 
-test("B 每个工具的签名行覆盖全部参数名（zh/en），且必填/可选性与 schema 一致", () => {
+test("A2''/A3'' 负向对照：模块占位被改坏 / 模块数写错 / 声明被删，均必红", () => {
+  const base = { zh: help.zh.text, en: help.en.text };
+  // ① 模块占位拼错（`{memory}` → `{memry}`）⇒ 集合不等必红
+  const typo = { ...base, zh: base.zh.replace("{memory}", "{memry}") };
+  assert.notEqual(typo.zh, base.zh, "变异必须生效");
+  assert.match(moduleTableProblems(typo.zh, "zh").join("\n"), /缺少模块行: memory/, "模块占位拼错未判红");
+  assert.match(moduleTableProblems(typo.zh, "zh").join("\n"), /注册表外模块: memry/, "模块占位拼错未判红");
+  // ② 整行删除 ⇒ 行数不等 + 缺模块，必红
+  const dropped = { ...base, zh: base.zh.replace(/^\| 记忆 \|.*\{\{?memory\}?\}.*$/m, "") };
+  assert.notEqual(dropped.zh, base.zh, "变异必须生效");
+  assert.match(moduleTableProblems(dropped.zh, "zh").join("\n"), /模块表行数 4 与引擎模块注册表 5 不一致/, "删模块行未判红");
+  // ③ 模块数写错（5 → 4）⇒ 必红
+  const wrongNum = { ...base, zh: base.zh.replace("共 5 个功能模块", "共 4 个功能模块") };
+  assert.notEqual(wrongNum.zh, base.zh, "变异必须生效");
+  assert.match(moduleCountProblems(wrongNum.zh, "zh").join("\n"), /模块计数声明为 4，应为 5/, "模块数写错未判红");
+  // ④ 计数声明整条删除 ⇒ 判「未解析到」必红（守卫不得退化为恒真）
+  const noDecl = { ...base, zh: base.zh.replace(/共 \d+ 个功能模块/, "功能模块：") };
+  assert.notEqual(noDecl.zh, base.zh, "变异必须生效");
+  assert.match(moduleCountProblems(noDecl.zh, "zh").join("\n"), /未解析到模块计数声明/, "计数声明被删未判红");
+  // hermetic：只改内存副本
+  assert.equal(readFileSync(SOURCE_HELP.zh, "utf8"), base.zh, "负向对照污染了真实 help.zh.md");
+});
+
+test("B（g-495 改判后已由 B' 接管）help 无逐工具签名行时本判据对空集合为真，不得退化为静默跳过", () => {
+  // help 现在**刻意不含**逐工具签名（工具细节以 harness 注入的 schema 为准）。
+  // 保留 signatureProblems 的**合成样本**判别力由 F 负责；真实资产上的口径改由 B'（按需面 usage）承担。
+  // 这里显式断言「help 确实没有签名条目」，使「help 又被加回 51 条清单」这种回退也能被看见。
+  assert.equal(help.zh.entries.length, 0, "help.zh.md 不应再有逐工具条目（改判后为模块清单）");
+  assert.equal(help.en.entries.length, 0, "help.en.md 不应再有逐工具条目（改判后为模块清单）");
+  // 若将来误把清单加回，signatureProblems 会重新生效并逐条校验（fail-closed，不是放行）。
   const problems = [
     ...signatureProblems(help.zh.entries, defByName, "zh"),
     ...signatureProblems(help.en.entries, defByName, "en"),
   ];
   assert.deepEqual(problems, [], `帮助资产与引擎 schema 不一致：\n${problems.join("\n")}`);
 });
+test("B' 按需面（usage）里出现的每个工具签名都是 schema 的真投影（参数名/可选性/union 白名单）", () => {
+  // g-495 改判（负责人授权）：help 不再逐条列工具签名 —— 其覆盖力**改判**到按需面 usage（它是
+  // `help(topic="usage")` 与 skill dsh-graph 的正文，agent 需要细则时读的那一面）。口径不降：
+  // ① usage 出现的每个签名都必须覆盖该工具 schema 的**全部**参数名（g-311/g-329 的原始判别力：
+  //    引擎加了参数而文档没跟 ⇒ 必红）；② 必填/可选性必须与 schema.required 一致；
+  // ③ union（`{a|b}`）只能用于真 XOR 白名单工具；④ 签名不得含 schema 外 token。
+  // 与 help 期不同之处只在「覆盖面」：usage 是**代表性**速查面（不是 51 条全量清单），故只对
+  // **它自己声明过的**工具判真，不要求它列全 51 个 —— 但列出来的每一条都必须逐字正确。
+  const problems = [
+    ...usageSignatureProblems(USAGE.zh.text, defByName, "zh"),
+    ...usageSignatureProblems(USAGE.en.text, defByName, "en"),
+  ];
+  assert.deepEqual(problems, [], `按需面 usage 与引擎 schema 不一致：\n${problems.join("\n")}`);
+  // 反恒真：usage 必须真的承载签名（否则本判据退化为空判）。
+  assert.ok(parseUsageEntries(USAGE.zh.text).length > 0, "usage.zh.md 未解析到任何工具签名（判据退化）");
+  assert.ok(parseUsageEntries(USAGE.en.text).length > 0, "usage.en.md 未解析到任何工具签名（判据退化）");
+  // zh/en 覆盖同一工具集合（两份资产必须谈同一批工具）
+  assert.deepEqual(
+    parseUsageEntries(USAGE.zh.text).map((e) => e.name).sort(),
+    parseUsageEntries(USAGE.en.text).map((e) => e.name).sort(),
+    "usage.zh.md 与 usage.en.md 声明的工具集合不一致",
+  );
+});
 
-test("C 关键参数钉在对应工具行的同一逻辑行（含签名内）", () => {
-  const entryOf = (lang: "zh" | "en", name: string) => help[lang].entries.find((e) => e.name === name)!;
+test("C' 关键参数钉在对应工具的同一逻辑行（按需面 usage，含签名内）", () => {
+  // g-495 改判：C 原钉在 help 的逐工具行上；help 已无逐工具行 ⇒ 载体改判到 usage 的
+  // 「工具细则」段（那里现在承载 fast_track / machine_report / legacy 的操作口径）。
   for (const lang of ["zh", "en"] as const) {
-    const resolve = entryOf(lang, "graph_resolve_accept").line;
-    assert.match(resolve, /\bfast_track\b/, `help.${lang}.md graph_resolve_accept 行缺 fast_track`);
-    assert.match(resolve, /\bmachine_report\b/, `help.${lang}.md graph_resolve_accept 行缺 machine_report`);
-    const unbind = entryOf(lang, "graph_unbind_goal_child").line;
-    assert.match(unbind, /\blegacy\b/, `help.${lang}.md graph_unbind_goal_child 行缺 legacy`);
-    // 加固：这三个参数必须落在**签名括号内**（散文提及不算；B 已要求签名覆盖，这里再钉住其归属工具）
-    assert.match(signatureOf(resolve), /\bfast_track\b/, `help.${lang}.md graph_resolve_accept 签名缺 fast_track`);
-    assert.match(signatureOf(resolve), /\bmachine_report\b/, `help.${lang}.md graph_resolve_accept 签名缺 machine_report`);
-    assert.match(signatureOf(unbind), /\blegacy\b/, `help.${lang}.md graph_unbind_goal_child 签名缺 legacy`);
+    const text = USAGE[lang].text;
+    // 这三个参数必须在同一段落里与它们的归属工具同时出现（归属正确性）。
+    const section = toolDetailSection(text);
+    assert.match(section, /graph_resolve_accept/, `usage.${lang}.md 细则段缺 graph_resolve_accept`);
+    assert.match(section, /\bfast_track\b/, `usage.${lang}.md graph_resolve_accept 段缺 fast_track`);
+    assert.match(section, /\bmachine_report\b/, `usage.${lang}.md graph_resolve_accept 段缺 machine_report`);
+    assert.match(section, /graph_unbind_goal_child/, `usage.${lang}.md 细则段缺 graph_unbind_goal_child`);
+    assert.match(section, /\blegacy\b/, `usage.${lang}.md graph_unbind_goal_child 段缺 legacy`);
+    // 加固：归属必须**同段**（跨段算失败）—— 取该工具名到下一段落标题之间做窗口。
+    assert.ok(
+      toolDetailWindow(text, "graph_resolve_accept").includes("machine_report"),
+      `usage.${lang}.md machine_report 未落在 graph_resolve_accept 的同一段落内`,
+    );
+    assert.ok(
+      toolDetailWindow(text, "graph_unbind_goal_child").includes("legacy"),
+      `usage.${lang}.md legacy 未落在 graph_unbind_goal_child 的同一段落内`,
+    );
   }
 });
 
-test("D graph_help run() 返回源资产原文，且 dist 副本与源逐字一致", () => {
+test("D graph_help run() 渲染模块开关后返回，且 dist 副本与源逐字一致", () => {
   for (const lang of ["zh", "en"] as const) {
     assert.equal(
       readFileSync(DIST_HELP[lang], "utf8"),
@@ -486,7 +699,34 @@ test("D graph_help run() 返回源资产原文，且 dist 副本与源逐字一�
   apply(ctx, { root });
   const helpDef = registered.find((d) => d.name === "graph_help");
   assert.ok(helpDef, "graph_help 未注册");
-  assert.equal(helpDef.execute().help, help.zh.text, "graph_help execute() 返回值与源资产 help.zh.md 不一致");
+  const rendered = helpDef.execute().help as string;
+  // g-495（A）：help 的模块状态位从 `{moduleId}` 占位渲染为**当前生效值**；
+  // 未配置 = 全部开启（fail-safe）。渲染后不得残留任何占位符。
+  assert.doesNotMatch(rendered, /\{[a-z_]+\}/, "graph_help 返回文本残留未渲染的 {moduleId} 占位");
+  assert.equal(
+    rendered,
+    help.zh.text.replace(/\{(tags|memory|shared_cards|automation_prompts|attachments)\}/g, "开启"),
+    "graph_help execute() 渲染结果与「源资产 + 全开启」不一致",
+  );
+  // 除占位渲染外，其余正文必须与源资产**逐字一致**（章节/表格/散文都不可能被 run() 改写）。
+  // 只在**模块表行**上做归一（散文里本就出现「开启」字样，全局 replace 会误伤）。
+  const normalizeModuleRows = (t: string) =>
+    t
+      .split("\n")
+      .map((l) => (/^\|\s*[^|]+\|[^|]*\|\s*(?:\{[a-z_]+\}|开启|关闭)\s*\|\s*$/.test(l) ? l.replace(/\|\s*(?:\{[a-z_]+\}|开启|关闭)\s*\|$/, "| {M} |") : l))
+      .join("\n");
+  assert.equal(
+    normalizeModuleRows(rendered),
+    normalizeModuleRows(help.zh.text),
+    "graph_help execute() 除模块状态位外改动了源资产正文",
+  );
+  // 占位渲染是「数据投影」而非「文本替换」的负向对照：把源资产的一个占位改坏 ⇒ 渲染结果必变。
+  const mutated = help.zh.text.replace("{memory}", "{memry}");
+  assert.notEqual(
+    mutated.replace(/\{(tags|memory|shared_cards|automation_prompts|attachments)\}/g, "开启"),
+    rendered,
+    "占位符改名后渲染结果未变 ⇒ 渲染判据未真正绑定占位符",
+  );
 });
 
 /**

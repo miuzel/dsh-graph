@@ -50,9 +50,6 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
 6. **惰性激活**：下游工作（收集、执行）只有上游结论成立后才派发；
 7. **目标内容体现最终修订**：负责人的补充与修正用 `graph_amend_goal` 记录，并把
    最终版写进目标描述——后续执行者读到的是最终版，不是初版；
-   **append 用法（防重复小节）**：补描述用 `graph_amend_goal(append=...)` 时
-   **append 只传正文内容，绝不自带「## 目标描述」等标题**——amendGoal 内部已并入
-   目标描述小节；自带标题会生成重复小节，看板取第一个（占位）显示为「待填写」；
 8. **时间纪律**：不做长时间探索/调研/编写，充分利用 dsh-graph 把工作派下去——
    信息收集、功能开发、手册编写都交给子代理；自己动手仅限短平快决策/小修；
 9. **负责人直接干预子代理时不插手**：负责人正通过 checklist 💬 反馈或直接会话指挥
@@ -64,8 +61,8 @@ description: dsh-graph 主管 Agent 工作指南。当使用 dsh-graph 插件管
     - `append`（可选）：**写进目标描述正文**——用于影响目标范围/需求/设计、执行者
       与看板应读到的**内容**（需求、反馈、设计方案、约束、决策理由）；
     - 判定：凡属「目标自身内容」（要落实、要被执行者/看板看到）→ `append`；凡属
-      「过程/事件/仅留痕」→ 只用 `note`。**拿不准就 `append`**。append 只传正文、
-      勿自带 `## 标题`（见 #7）；
+      「过程/事件/仅留痕」→ 只用 `note`。**拿不准就 `append`**；append 只传正文、
+      勿自带 `## 标题`——自带标题会生成重复小节，看板取第一个（占位）显示为「待填写」；
 11. **目标定义润色与 PM 建议闭环**：
     - PM Agent 回报格式要求：回报标题必须包含 goal id，格式为 `【g-XXX 润色建议】`或 `【g-XXX 定义建议】`；
     - 使用 `parsePmReportGoalId(report)` 从回报标题中自动提取 goal id，确保建议正确关联到目标；
@@ -137,14 +134,14 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
 - **强制升级 strict 的闭集**（命中任一即 strict，显式 `auto`/`none` 不得推翻）：变更路径含有效契约文件（`project.yaml` 的 `review.contract_paths`，默认未配置时不猜契约 M1 不触发；改 `core/schema.ts` 在已登记项目中触发，即便契约文件为 `.md` 同样严格触发）；产品代码变更 ≥150 行；产品代码变更跨 ≥3 个顶层区域（`review.regions`，普适默认 `src/lib/app/packages/server/client/scripts/tests` 或项目自定义，纯文档/生成物不单独触发 M3）；supervisor 显式声明 `strict_required`（覆盖核心层重写等无法用路径与行数表达的情形）；产品代码落在未登记区域时安全升级为 strict（`unknown_region` 追加在末尾）；`review.regions: []` 显式空列表无可评估区域安全升级为 strict。
 - **项目评审配置校准**：主管应按项目实际架构校准 `project.yaml`（通过 `graph_get_settings` 查询、`graph_update_settings` 写入；必要时向负责人确认）：`review.regions`（按代码边界与顺序登记，最长前缀优先）、`review.contract_paths`（冻结契约路径，显式空列表 `[]` 合法且 M1 不触发）、`review.non_product_prefixes`（排除非产品前缀）。未登记区域的产品代码改动升级为 strict。
 - **设置面板可视化编辑**：同一份 `project.yaml` 评审条件也可在 workspace 设置面板的「评审条件」区块查看与编辑（显示生效值与来源：显式配置 / 缺省（普适））；未配置时展示的是普适缺省，只有点「改为显式配置」才会写入，`regions` 不允许显式空列表。
-- **机器门禁四项**（逐条可执行，`graph_resolve_accept(fast_track=true, machine_report=…)` 调用前须逐条实测）：
-  1. 全量测试：项目配置的测试命令（本项目示例：`node --test core/tests/*.test.ts`）→ `exit_code=0` 且 `fail=0`（双条件，只看文本会被截断误导）；**这是调用方证据**——引擎不复跑，报告须附 `command`（命令原文）/`collected_at`（采集时间）/`source`（来源），缺任一项即拒绝，三者原样记入 `review.fast_track` 事件的 `caller_evidence`；
-  2. 类型检查：项目配置的类型检查命令（本项目示例：`./node_modules/.bin/tsc --noEmit -p tsconfig.json`）→ `exit_code=0`（留痕规则同 ①）；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
-  3. 变更规模（**由引擎 Git 自算，不是调用方自报**）：引擎按 `machine_report.attempt`（必填，显式绑定执行树）在**实际 attempt 工作树**上采集真源——记录为 `worktree: false` 的非隔离 attempt 绑定其工作区仓库；工作树缺失/已删/未注册一律拒绝，**绝不回退主树**。采集用 `git diff --numstat -z` 与 `git status --porcelain=v1 -z`：产品代码增删合计须 <150 行（按 `review.non_product_prefixes` 排除非产品代码，rename/copy 的旧新路径都参与分类与契约匹配），且无未跟踪用户文件（插件自有看板/工作树目录按真实归属排除，真实用户文件仍阻断）；报告值须与真源**逐项一致**（普通调用方用 `git diff --name-status -z <attempt.baseline_commit> HEAD` 采集 `changed_paths`——**rename/copy 会给出旧新两条路径**；`git diff --numstat <attempt.baseline_commit> HEAD` 口径亦可，但**非 `-z` 的 rename 会显示成 `old => new` 复合串、`--name-only` 只给新路径**，两者都过不了集合相等对账），存在未提交 tracked 改动（staged/unstaged/deleted）、二进制等非数字列、git 或基线不可解析一律拒绝；注意本门禁与策略层 **M2 用的是同一条 150 行阈值**（≥150 行会先被策略层升级 strict，根本到不了这里）；`machine_report.baseline_commit` 必填且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可）——锚点只取自 attempt 记录、**绝不取自报告**，缺失或不等即拒绝（错误文案给出「显式 baseline 重新派发该 attempt」或「改走普通 accept」两条出路）；
-  4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（**由引擎自算**，不采信调用方自报）。
-- **证据分层（如实）**：① ② 是**调用方证据**（引擎只留痕、不复跑）；③ ④ 是**引擎自算**。`review.fast_track` 事件的 `gate_sources` 逐项标注来源，`git_truth` 记录绑定的工作树、基线解析值、HEAD 与实采结果。
+- **机器门禁四项**（`graph_resolve_accept(fast_track=true, machine_report=…)` 调用前须逐条实测）：
+  **证据分层（如实）**：① ② 是**调用方证据**——引擎只留痕、**不复跑**；③ ④ 是**引擎自算**；`gate_sources` 逐项标注来源。
+  1. 全量测试 → `exit_code=0` 且 `fail=0`（本项目示例：`node --test core/tests/*.test.ts`；双条件，只看文本会被截断误导）；报告须附 `command`（命令原文）/`collected_at`（采集时间）/`source`（来源），缺任一项即拒绝，三者原样记入 `caller_evidence`；
+  2. 类型检查：本项目示例 `./node_modules/.bin/tsc --noEmit -p tsconfig.json` → `exit_code=0`（留痕规则同 ①）；覆盖缺口如实标注——`tsconfig.json` 的 `include` 仅 `core/*.ts`，`core/tests` 与 host 的 `.js` 不在其内；
+  3. 变更规模（**引擎按 Git 真源自算，不是调用方自报**）：按 `machine_report.attempt`（必填，显式绑定执行树）在**实际 attempt 工作树**采集——`worktree: false` 的非隔离 attempt 绑其工作区仓库；工作树缺失/已删/未注册一律拒绝，**绝不回退主树**。真源取 `git diff --numstat -z` 与 `git status --porcelain=v1 -z`：产品代码增删合计须 <150 行（按 `review.non_product_prefixes` 排除非产品代码，rename/copy 的**旧新两条路径都**参与分类与契约匹配），且无未跟踪用户文件（插件自有看板/工作树目录按真实归属排除，真实用户文件仍阻断），存在未提交 tracked 改动（staged/unstaged/deleted）、二进制等非数字列、git 或基线不可解析一律拒绝。`changed_paths` 用 `git diff --name-status -z <attempt.baseline_commit> HEAD` 采集，报告值须与真源**逐项一致**：**非 `-z` 的 rename 会显示成 `old => new` 复合串、`--name-only` 只给新路径**，两者都过不了集合相等对账（`git diff --numstat <attempt.baseline_commit> HEAD` 口径亦可）。`machine_report.baseline_commit` 必填且必须**等于**该 attempt 的**引擎锚点**（派发响应回传的 `baseline_commit`；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可）——锚点只取自 attempt 记录、**绝不取自报告**，缺失或不等即拒绝（错误文案给出「显式 baseline 重新派发该 attempt」或「改走普通 accept」两条出路）。本门禁与策略层 **M2 是同一条 150 行阈值**（≥150 行先被策略层升级 strict，到不了这里）；
+  4. 判据已验：该目标全部判据文本均以 `✅已验` 结尾（**引擎自算**，不采信调用方自报）。
 - **fail-safe**：任一信号取不到（命令失败、报告缺字段、基线不可用）即不放行，不得把「拿不到证据」当作「证据为真」。
-- **通过后的行为**：`graph_resolve_accept(fast_track=true, …)` 先追加 `review.fast_track` 事件（含四项机器证据与 baseline），再走同一 accept 映射；任一项不满足即拒绝且零副作用（状态不变、无 `review.passed` 事件）。
+- **通过后的行为**：`graph_resolve_accept(fast_track=true, …)` 先追加 `review.fast_track` 事件（含四项机器证据、`git_truth` 的绑定工作树/基线解析值/HEAD/实采结果与 baseline），再走同一 accept 映射；任一项不满足即拒绝且**零副作用**（状态不变、无 `review.passed` 事件）。
 - **边界（如实标注）**：`strict` 的「必须派发独立评审子代理」在插件层只有判定与指南约束，不是引擎强制——派发入口**已接线**：工具 `graph_start_review(goal, attempt, candidate_commit)`（HTTP `POST /api/dsh-graph/start-review`）；评审是**既有执行 attempt 的附属记录**——不新建 attempt、不迁移状态、不覆盖作者 `child_id` 与 `results-att-*.md`，结论独立落盘 `<goalDir>/reviews/<review_id>.md`；未派独立评审时看板与事件流如实标注「未独立评审」但**不阻断** accept。**`delivered` 的人工 gate 同样是「指南约束」而非引擎强制**：`graph_resolve_accept` 与 `graph_transition(to='delivered')` 都不校验任何人类信号（无 token、无 GUI 确认、事件载荷也不记录批准者），引擎无从区分「负责人裁决过」与「主管自放」。⇒ 质量把控由**主管 agent 与负责人共同负责**，刻意保留弹性：**不做机器强制**——强制只会诱发 agent 取巧，徒耗时间与 token。纪律在主管身上，不在引擎里。
 - **徽标口径（r3）**：看板徽标与 `review_state.independent_ok` 针对 **`current_candidate_sha`**（最近一次被请求评审的候选），**不等于 HEAD**——HEAD 之后有新提交但未派评审时，徽标与独立 PASS 不会随之改变；判读时请直接比对 `current_candidate_sha` 与真实 HEAD（徽标旁亦显示该候选短 SHA）。
 - **纯文档/记忆类改动**可设 `review.policy: none` 免除机器门禁；它只免除机器证据收集，不免除负责人对 `delivered` 的最终裁决。
@@ -236,7 +233,7 @@ Review 严格度**不是全局默认值**。首次初始化/接手一个项目�
 
 **会话复用政策**：跨目标复用保持主管判断（宽松），但复用前应先 **fork 新子代理 +
 compact 上下文**——卡片绑定干净的新子代理（继承压缩后的上下文），原子代理留在原 turn
-可续。**复用时必须改子代理名称**（fork 创建时设新 label，DSH 无 rename API）；
+可续。**复用时用新 label；宿主不支持重命名时，fork 指定新 label**；
 **原绑定卡片的实时代理要标记「被复用」**（child_id 被多个目标绑定 → 旧绑定显示
 「被复用→新目标」），并主动记 `attempt.reused` 事件（child_id、reused_by）。
 
@@ -273,14 +270,12 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 
 ## 执行规范
 
-- **自报状态（每轮开始立即 + 关键阶段更新）**：supervisor 自己也要用
-  `graph_report_supervisor_status` 在**每轮开始的第一时间**报一句最新状态，覆盖上一轮
-  残留——否则看板顶部长时间显示过期 status。**不止轮首**：在关键阶段变化
-  （派发执行、收集回填、复核结论、提交推送、状态迁移、等负责人输入时）都立即更新一句；
-  常规细微动作无需机械汇报，长任务适度节流心跳；
-  等人工输入的空窗期也要报「正在等 X」，让负责人知道你没卡死；
-- **每轮收尾更新为完成态**：结束工作前最后一步把 status 更新为「空闲待命 / 本轮完成 /
-  等待输入」等完成态——看板如实反映空闲/完成状态；
+- **自报状态（轮首必报 + 关键阶段更新 + 收尾完成态）**：supervisor 用
+  `graph_report_supervisor_status` 在**每轮开始的第一时间**报一句最新状态，覆盖上一轮残留
+  （否则看板顶部长期显示过期 status）；关键阶段变化（派发执行、收集回填、复核结论、
+  状态迁移、等负责人输入）也立即更新一句，等人工输入的空窗期报「正在等 X」；结束工作前
+  最后一步把 status 更新为「空闲待命 / 本轮完成 / 等待输入」等完成态——看板如实反映
+  在忙/空闲。常规细微动作无需机械汇报，长任务适度节流心跳；
 - **派发前先写目标描述**：目标描述为空（或仅占位符）时 `graph_start_attempt` 直接拒绝派发——先 `graph_set_description` 补写清楚，再重试；
 - `graph_start_attempt` 派发执行；传入可选 `card` 参数时统一派发卡片收集（自动生成完整收集提示词并绑定卡片）；**status_line 仅由执行子代理更新**
   （`graph_report_status`，绑定 attempt），**supervisor 绝不替子代理汇报**——卡片上那句话是子代理的
@@ -388,16 +383,9 @@ compact 上下文**——卡片绑定干净的新子代理（继承压缩后的�
 
 ## 工具速查
 
-`graph_create_goal` 建卡（可带 version 排期）｜ `graph_move_goal` 排期移动｜
-`graph_set_criteria` 登记判据（自动快照规则版本）｜ `graph_transition` 状态迁移｜
-`graph_amend_goal` 修订记录｜ `graph_add_card / graph_fill_card / graph_review_card`
-信息收集卡（仅当目标确有收集需求时使用）｜ `graph_bind_collect_card` 收集子代理绑卡（parent_session_id 反查会话头）｜
-`graph_start_attempt` 派发执行 attempt（`card` 参数仅用于信息收集派发）｜ `graph_report_status`
-状态汇报｜ `graph_validate` 全量校验｜ `graph_rebuild` 事件流对账｜
-`graph_write_results` 人工写某次 attempt 的完成摘要（`source=manual` + 写入者标注）｜
-`graph_refresh_results` 重写 `results.md`（零 LLM 兜底拼装 / 或采用 `content`：专用摘要子代理按目标详情写「改动 / 影响 / 值得注意」，source=llm；旧版归档；单目标或批量 `goals[]`，content 仅限单目标）
-——**主管自做 chore/patch 等无子代理改动、或 attempt 没截获到输出时必须自己补写结果**，不留结果真空
-（派发执行的输出由插件自动截获到 `results-att-<attempt>.md`，无需手工）
+工具签名、参数与行为以**注入的工具定义**为准（本 skill 不复制）；需要按主题的用法说明时调用 skill `dsh-graph`。
+
+——**主管自做 chore/patch 等无子代理改动、或 attempt 没截获到输出时必须自己补写结果**（`graph_write_results` / `graph_refresh_results`），不留结果真空。
 
 ## 换会话
 

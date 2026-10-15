@@ -102,10 +102,11 @@
       return { ok, failed };
     }
 
-    // 聚合主管通知文案：整批一条（含目标清单与总数），与单卡【负责人交付复核请求】同系列话术。
-    function batchAcceptSupervisorMessage(goalIds) {
-      // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-      return `【负责人批量交付复核请求】负责人已对目标 ${goalIds.join(", ")}（共 ${goalIds.length} 个）确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。`;
+    // 聚合主管通知文案：整批一条（含目标清单与总数），与单卡交付复核请求同系列话术。
+    // g-496：正文取自宿主只读资产（宿主专属层 `dsh-graph-host/prompts/gui-batch-accept-review-request.*.md`），
+    // 本函数只做**插值**（纯函数、非递归）：目标清单与总数是变量，模板骨架在资产里。
+    function batchAcceptSupervisorMessage(goalIds, template) {
+      return interpolateGuiPrompt(template, { goalIds: goalIds.join(", "), count: goalIds.length });
     }
 
     // 发送聚合主管通知：整批**一条** queue 消息；无 supervisorSession / 会话不可用 → 返回 false，
@@ -123,7 +124,17 @@
       if (!supervisorSession || !Array.isArray(goalIds) || goalIds.length === 0) return false;
       try {
         const rt = sessionsRt ?? appCtx?.get?.("sessions");
-        const parts = [{ type: "text", text: batchAcceptSupervisorMessage(goalIds) }];
+        // g-496：**先取模板再投递**；读取失败返回 false（与「投递未确认」同一返回口径）——
+        // 调用方**绝不**因此把已成功的接受改写为失败（本函数返回值只驱动可见提示）。
+        let text;
+        try {
+          const template = await loadGuiPromptAsset("gui-batch-accept-review-request");
+          text = batchAcceptSupervisorMessage(goalIds, template);
+        } catch (e) {
+          console.warn("[dsh-graph-host] batch accept: prompt asset load failed:", e);
+          return false;
+        }
+        const parts = [{ type: "text", text }];
         return await promptSessionQueue(rt, supervisorSession, parts, "[dsh-graph-host] batch accept: prompt supervisorSession failed:");
       } catch (err) {
         // helper 已自兜底（绝不抛）；此处仅作最后一道防线，保持既有 console.warn 形态。

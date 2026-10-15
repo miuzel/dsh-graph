@@ -11,7 +11,7 @@
  * 即缺口说明可被静默删除（虚假完整性回归）。本文件就是那道守护。
  *
  * 判据映射：
- *  - 判据 1 → 缺口标注存在于 `dsh-graph-host/supervisor-guide.{zh,en}.md` 的门禁②行、
+ *  - 判据 1 → 缺口标注存在于 `prompts/supervisor-guide.{zh,en}.md` 的门禁②行、
  *             以及 `core/review-policy.ts` 的门禁定义注释与失败文案；zh/en 行数严格相等。
  *  - 判据 2 → 本文件的断言即交付物：删除或改写任一侧的缺口说明必红。
  *  - 判据 3 → `package.json` 暴露 `typecheck` 脚本（门禁②命令），且**未**接进 build/prepare。
@@ -51,11 +51,11 @@ import { join, relative } from "node:path";
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
 
-const ZH_GUIDE_SRC = join(repoRoot, "dsh-graph-host", "supervisor-guide.zh.md");
-const EN_GUIDE_SRC = join(repoRoot, "dsh-graph-host", "supervisor-guide.en.md");
+const ZH_GUIDE_SRC = join(repoRoot, "prompts", "supervisor-guide.zh.md");
+const EN_GUIDE_SRC = join(repoRoot, "prompts", "supervisor-guide.en.md");
 const POLICY_SRC = join(repoRoot, "core", "review-policy.ts");
-const ZH_GUIDE_DIST = join(distRoot, "supervisor-guide.zh.md");
-const EN_GUIDE_DIST = join(distRoot, "supervisor-guide.en.md");
+const ZH_GUIDE_DIST = join(distRoot, "prompts", "supervisor-guide.zh.md");
+const EN_GUIDE_DIST = join(distRoot, "prompts", "supervisor-guide.en.md");
 const POLICY_DIST = join(distRoot, "core", "review-policy.js");
 
 /** 门禁②的命令字面量（指南与门禁失败文案共用；判据 3 的 typecheck 脚本亦须暴露它）。 */
@@ -472,7 +472,7 @@ test("g-346 判据 1：tsconfig 扫描覆盖全仓非忽略目录（含 dsh-grap
 
   // 正向：扫描确实递归进 dsh-graph-host/（旧实现只扫 repoRoot + core/，host 目录的绕过因此看不见）。
   assert.ok(
-    files.includes("dsh-graph-host/supervisor-guide.zh.md"),
+    files.includes("prompts/supervisor-guide.zh.md"),
     "判据 4 收敛失效：tsconfig 扫描未覆盖 dsh-graph-host/（host 内的宽松 tsconfig 可绕过守护）",
   );
   assert.ok(files.includes("core/review-policy.ts"), "判据 4 收敛失效：扫描未覆盖 core/");

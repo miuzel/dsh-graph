@@ -133,6 +133,16 @@ import {
   resolveAgentTeamsInjection,
   readProjectConfig,
   writeProjectConfig,
+  // g-480：harness 模块可选开关（唯一映射表 + 纯判定函数都在 core，宿主不另抄一份字面量）
+  HARNESS_MODULE_IDS,
+  MODULE_TOOL_NAMES,
+  moduleToolNames,
+  resolveModuleSwitches,
+  disabledModuleTools,
+  stripModuleToolMentions,
+  // g-480：角色档案自适应（模块关 ⇒ 该模块工具不再算必需/可用）的**唯一真源**在 core，
+  // 这里只消费它算出的「受影响角色清单」用于 schema_hints 如实登记。
+  rolesAdaptedByModule,
   REVIEW_POLICIES,
   REVIEW_LIST_FIELDS,
   DEFAULT_REVIEW_REGIONS,
@@ -192,7 +202,7 @@ import {
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
-import { sT } from "./lib/server-i18n.js";
+import { sT, TOOL_CATEGORIES, TOOL_TAXONOMY, helpToolTaxonomyProblems } from "./lib/server-i18n.js";
 // g-133：接入 DSH profile 级用户设置（dsh-settings）。为避免在 @deepseek-ai/* 不可解析的上下文
 // （工作树 link、仅 headless、无 settings 供应商的组合）导致整个插件加载失败、拖垮 GUI，
 // 这里不静态 import @deepseek-ai/*；改为在 apply() 内**守卫式动态 import** schemastery（仅 schema），
@@ -211,6 +221,12 @@ export { resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 // g-111 B7：boardPayload 已移入 core（消除 client→host 跨包依赖），此处 re-export 保持兼容。
 // board 载荷含 supervisorSession 字段（project.yaml 的 supervisor.session，g-108），由 host 端点 /api/dsh-graph 下发。
 export { boardPayload, versionGoals, backlogGoals, compareVersions } from "./core/ops.js";
+
+// g-495 返工项 B：把 `helpTopicText` 与点题**章节判定**导出为**测试钩子** —— 负向对照必须把
+// 变异后的 help/usage 文本送进**真实实现**得出裁决，而不是用本地纯谓词自证（同义反复）。
+// 导出的是**同一函数引用**（非副本），故经此入口的裁决与 `graph_help` 运行时逐字同源；
+// 生产代码不消费这两个导出，注册面与行为均不变。
+export { helpTopicText as _helpTopicText, isGraphEngineeringSectionTitle as _isGraphEngineeringSectionTitle };
 
 // g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
 // JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
@@ -252,6 +268,187 @@ export function resolveDesignDiagramRequest(rawUrl) {
   if (!DESIGN_DIAGRAM_NAME_RE.test(name) || name.includes("..")) return { status: 400, reason: "illegal-name" };
   if (!DESIGN_DIAGRAM_FILES.includes(name)) return { status: 404, reason: "unknown-diagram" };
   return { status: 200, name };
+}
+
+// ===== g-481：「使用说明」弹窗的**只读**提示词资产路由 + 帮助目录端点 =====
+// 「提示词模板」页签把**随包发布**的 `prompts/*.md` 逐个只读展示给用户 —— 展示的内容与引擎
+// 实际投递给 Agent 的资产是**同一份产物**（`dist/prompts/`），不复制、不改写、不新增第二份文案。
+// 安全口径（与 g-462 图路由同一形状：单一路径入口、**无任何写路径**）：
+//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-496 起 54 个 = 27 个资产
+//      × zh/en）可被读取，其余一律拒绝；清单**不在此处硬编码**（注册表是唯一真源）；
+//   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
+//      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
+//      （即使判定失误，也只会在 `prompts/` 白名单目录里按白名单名读取）。
+export const HELP_ASSET_ROUTE = "/api/dsh-graph/help/asset";
+/** g-496：帮助可达资产的**唯一 name → relativePath 注册**（冻结真源），并**携带所有权**。
+ *
+ *  发布布局（g-496 起）：**全部**提示词资产（公共层 + 宿主专属层）由 `build.sh` 合并进单一的
+ *  包内 `prompts/` 目录 ⇒ 注册路径统一为 `prompts/<name>`。不再有根级资产。
+ *  （此前 `supervisor-guide.{zh,en}.md` 位于包根，故注册需相对路径以表达两类位置；合并后
+ *  该特例消失，但注册表作为**唯一 name → path 真源**的职责不变。）
+ *
+ *  注册同时是**白名单**、**目录投影**、**所有权归属**与**展示分类**的单一来源（g-496 返工 / g-498）：
+ *  `HELP_PROMPT_ASSETS` 由它投影（顺序即展示顺序），处理器按 `relativePath` 读取，
+ *  reader 按 `ownership` 决定源形态取根。**不持有第二份清单** —— 新增一份资产 = 在此加一行。
+ *
+ *  g-498：`category` 是按语义分组用的分类键（投影进 `/help/catalog` 的 `prompt_categories`），
+ *  取值限 `HELP_PROMPT_CATEGORY_KEYS`。客户端只按投影分组、**不另抄文件名清单**；分类**可选** ——
+ *  旧形态条目缺 `category` 也照常工作，缺/未登记即归入「未分类」并**仍然可见**（不静默丢项）。
+ *  安全口径不变：`relativePath` 只允许**受控的两类形态**（`<name>` 或 `prompts/<name>`），
+ *  且 `<name>` 仍须过 `HELP_ASSET_NAME_RE`；`..` / 绝对路径 / 反斜杠一律拒绝（结构性守卫断言）。 */
+const HELP_ASSET_REGISTRY = Object.freeze([
+  { name: "agent-teams-contract.en.md", ownership: "public", category: "subagents", relativePath: "prompts/agent-teams-contract.en.md" },
+  { name: "agent-teams-contract.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/agent-teams-contract.zh.md" },
+  { name: "attempt-instructions.en.md", ownership: "public", category: "execution", relativePath: "prompts/attempt-instructions.en.md" },
+  { name: "attempt-instructions.zh.md", ownership: "public", category: "execution", relativePath: "prompts/attempt-instructions.zh.md" },
+  { name: "attempt-report-skeleton.en.md", ownership: "public", category: "reporting", relativePath: "prompts/attempt-report-skeleton.en.md" },
+  { name: "attempt-report-skeleton.zh.md", ownership: "public", category: "reporting", relativePath: "prompts/attempt-report-skeleton.zh.md" },
+  { name: "automation-guidance.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.en.md" },
+  { name: "automation-guidance.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.zh.md" },
+  { name: "collect-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.en.md" },
+  { name: "collect-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.zh.md" },
+  { name: "discipline.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/discipline.en.md" },
+  { name: "discipline.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/discipline.zh.md" },
+  { name: "executor-discipline.en.md", ownership: "public", category: "execution", relativePath: "prompts/executor-discipline.en.md" },
+  { name: "executor-discipline.zh.md", ownership: "public", category: "execution", relativePath: "prompts/executor-discipline.zh.md" },
+  { name: "guide-hint.en.md", ownership: "public", category: "help", relativePath: "prompts/guide-hint.en.md" },
+  { name: "guide-hint.zh.md", ownership: "public", category: "help", relativePath: "prompts/guide-hint.zh.md" },
+  // g-496：GUI 提示词模板（9 类 × zh/en）—— **宿主专属层**所有权：这些正文绑定 DSH 会话
+  // `session.prompt` 载荷与看板 GUI 动作语义（发往主管/执行会话的提示词），跨宿主插件不复用。
+  // 正文的唯一事实源是 `dsh-graph-host/prompts/gui-*.{zh,en}.md`（构建合并进包内 prompts/）。
+  { name: "gui-accept-review-request.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-accept-review-request.en.md" },
+  { name: "gui-accept-review-request.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-accept-review-request.zh.md" },
+  { name: "gui-backward-reason.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-backward-reason.en.md" },
+  { name: "gui-backward-reason.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-backward-reason.zh.md" },
+  { name: "gui-batch-accept-review-request.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-batch-accept-review-request.en.md" },
+  { name: "gui-batch-accept-review-request.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-batch-accept-review-request.zh.md" },
+  { name: "gui-criteria-feedback-executor.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-executor.en.md" },
+  { name: "gui-criteria-feedback-executor.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-executor.zh.md" },
+  { name: "gui-criteria-feedback-supervisor.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-supervisor.en.md" },
+  { name: "gui-criteria-feedback-supervisor.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-criteria-feedback-supervisor.zh.md" },
+  { name: "gui-define-polish-request.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-define-polish-request.en.md" },
+  { name: "gui-define-polish-request.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-define-polish-request.zh.md" },
+  { name: "gui-deliver-notice.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-deliver-notice.en.md" },
+  { name: "gui-deliver-notice.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-deliver-notice.zh.md" },
+  { name: "gui-help-takeover-example.en.md", ownership: "host", category: "help", relativePath: "prompts/gui-help-takeover-example.en.md" },
+  { name: "gui-help-takeover-example.zh.md", ownership: "host", category: "help", relativePath: "prompts/gui-help-takeover-example.zh.md" },
+  { name: "gui-reexecute.en.md", ownership: "host", category: "gui", relativePath: "prompts/gui-reexecute.en.md" },
+  { name: "gui-reexecute.zh.md", ownership: "host", category: "gui", relativePath: "prompts/gui-reexecute.zh.md" },
+  { name: "help.en.md", ownership: "public", category: "help", relativePath: "prompts/help.en.md" },
+  { name: "help.zh.md", ownership: "public", category: "help", relativePath: "prompts/help.zh.md" },
+  { name: "minor-task.en.md", ownership: "public", category: "execution", relativePath: "prompts/minor-task.en.md" },
+  { name: "minor-task.zh.md", ownership: "public", category: "execution", relativePath: "prompts/minor-task.zh.md" },
+  { name: "no-isolation.en.md", ownership: "public", category: "execution", relativePath: "prompts/no-isolation.en.md" },
+  { name: "no-isolation.zh.md", ownership: "public", category: "execution", relativePath: "prompts/no-isolation.zh.md" },
+  { name: "pm-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/pm-task.en.md" },
+  { name: "pm-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/pm-task.zh.md" },
+  { name: "review-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/review-task.en.md" },
+  { name: "review-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/review-task.zh.md" },
+  { name: "subagent-mode.en.md", ownership: "public", category: "subagents", relativePath: "prompts/subagent-mode.en.md" },
+  { name: "subagent-mode.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/subagent-mode.zh.md" },
+  { name: "summary-task.en.md", ownership: "public", category: "reporting", relativePath: "prompts/summary-task.en.md" },
+  { name: "summary-task.zh.md", ownership: "public", category: "reporting", relativePath: "prompts/summary-task.zh.md" },
+  { name: "supervisor-guide.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/supervisor-guide.en.md" },
+  { name: "supervisor-guide.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/supervisor-guide.zh.md" },
+  { name: "usage.en.md", ownership: "public", category: "help", relativePath: "prompts/usage.en.md" },
+  { name: "usage.zh.md", ownership: "public", category: "help", relativePath: "prompts/usage.zh.md" },
+  { name: "worktree.en.md", ownership: "public", category: "execution", relativePath: "prompts/worktree.en.md" },
+  { name: "worktree.zh.md", ownership: "public", category: "execution", relativePath: "prompts/worktree.zh.md" },
+]);
+
+/** 白名单（名字清单，投影自注册表；**不是**第二份清单）。 */
+export const HELP_PROMPT_ASSETS = Object.freeze(HELP_ASSET_REGISTRY.map((e) => e.name));
+
+/** 纯函数：白名单资产名 → 其在包内的相对路径（未注册 ⇒ null）。 */
+export function helpAssetRelativePath(name) {
+  const hit = HELP_ASSET_REGISTRY.find((e) => e.name === name);
+  return hit ? hit.relativePath : null;
+}
+
+/** g-496：白名单资产名 → 其**语义归属**（`"public"` | `"host"`）。
+ *
+ *  只读投影自 `HELP_ASSET_REGISTRY`（所有权唯一真源，**不新增第二份清单**）；未注册名按公共层
+ *  口径返回 `"public"`（与内部 reader 的 `assetOwnership` 同语义）。供守卫与诊断使用：
+ *  「资产标称归属」必须与「源码实际所在层」双向对齐，否则分层在注册表里已失真。 */
+export function helpAssetOwnership(name) {
+  return assetOwnership(name);
+}
+/** 合法资产名：小写字母/数字起头，只含 `[a-z0-9.-]`，`.md` 结尾。 */
+const HELP_ASSET_NAME_RE = /^[a-z0-9][a-z0-9.-]*\.md$/;
+
+/**
+ * 纯函数：把请求 URL 解析为「白名单资产名」或一个可上报的拒绝结论。
+ * 不触碰文件系统（只做 URL 归一化 + 白名单判定），故可被单测直接驱动。
+ * @returns {{status: 200, name: string} | {status: 400|404, reason: string}}
+ */
+export function resolveHelpAssetRequest(rawUrl) {
+  let pathname;
+  try {
+    pathname = new URL(String(rawUrl ?? ""), "http://localhost").pathname;
+  } catch {
+    return { status: 400, reason: "malformed-url" };
+  }
+  if (pathname === HELP_ASSET_ROUTE) return { status: 404, reason: "name-required" };
+  if (!pathname.startsWith(HELP_ASSET_ROUTE + "/")) return { status: 404, reason: "not-a-help-asset" };
+  const name = pathname.slice(HELP_ASSET_ROUTE.length + 1);
+  if (!HELP_ASSET_NAME_RE.test(name) || name.includes("..")) return { status: 400, reason: "illegal-name" };
+  if (!HELP_PROMPT_ASSETS.includes(name)) return { status: 404, reason: "unknown-asset" };
+  return { status: 200, name };
+}
+
+/** g-481：帮助目录端点 —— 客户端「工具清单 / 提示词模板」两个页签的**服务端唯一真源**。
+ *  工具名与说明取自**注册真源**（`apply` 内的 `tools` 数组 + lib/server-i18n.js 的 `tool.*` 键，
+ *  zh/en 成对），资产清单取自上方白名单常量 ⇒ 引擎增删工具或资产改名时客户端清单自动跟随，
+ *  客户端**不硬编码任何工具名/资产名**。只读投影，无参数、无写路径。 */
+export const HELP_CATALOG_ROUTE = "/api/dsh-graph/help/catalog";
+
+/** g-498：提示词资产的**语义分类键**（顺序即分组展示顺序；标签 zh/en 成对取自 server-i18n）。
+ *  分类本身是**注册元数据**（`HELP_ASSET_REGISTRY` 每条目的 `category`）⇒ 客户端不新增文件清单，
+ *  只按本表顺序把目录投影分组；未登记分类的条目落进「未分类」并**仍然可见**。 */
+export const HELP_PROMPT_CATEGORY_KEYS = Object.freeze(["supervisor", "execution", "reporting", "subagents", "gui", "help"]);
+
+/** g-498：提示词资产的分类投影（顺序即展示顺序；标签 zh/en 成对取自 server-i18n）。 */
+export function helpPromptCategoryEntries() {
+  return HELP_PROMPT_CATEGORY_KEYS.map((key) => ({
+    key,
+    label: { zh: sT(`promptCategory.${key}`, "zh"), en: sT(`promptCategory.${key}`, "en") },
+  }));
+}
+
+/** 纯函数：某个资产条目的分类键 —— **未登记/未注册**时回退为空串（客户端据此归入「未分类」）。 */
+export function helpPromptCategoryOf(base) {
+  const hit = HELP_ASSET_REGISTRY.find((e) => e.name.startsWith(`${base}.`));
+  return (hit && typeof hit.category === "string" && HELP_PROMPT_CATEGORY_KEYS.includes(hit.category)) ? hit.category : "";
+}
+
+/** 纯函数：白名单资产名 → `{name, base, lang, category}` 清单。
+ *  `base` 供客户端配 i18n 展示标签（也是**选中的稳定身份**：切语言时基名不变）；
+ *  `category` 是注册元数据投影，供客户端按语义分组（`""` = 未分类，仍须可见）。 */
+export function helpPromptAssetEntries() {
+  return HELP_PROMPT_ASSETS.map((name) => {
+    const m = /^([a-z0-9][a-z0-9.-]*)\.(zh|en)\.md$/.exec(name);
+    const base = m ? m[1] : name;
+    return { name, base, lang: m ? m[2] : "zh", category: helpPromptCategoryOf(base) };
+  });
+}
+
+/** g-489：工具清单的**分类**投影（顺序即展示顺序；标签 zh/en 成对取自 server-i18n）。 */
+export function helpToolCategoryEntries() {
+  return TOOL_CATEGORIES.map((key) => ({
+    key,
+    label: { zh: sT(`toolCategory.${key}`, "zh"), en: sT(`toolCategory.${key}`, "en") },
+  }));
+}
+
+/** g-489：工具清单条目 = 注册真源名字 + 分类表归属 + `toolShort.*` 简称 + `tool.*` 用途。
+ *  客户端只按这份投影渲染，**不硬编码任何工具名/分类名**（新增工具自动出现；漏配则被结构守卫判红）。 */
+export function helpToolCatalogEntries(names) {
+  return (Array.isArray(names) ? names : []).map((name) => ({
+    name,
+    category: TOOL_TAXONOMY[name] ?? "",
+    short: { zh: sT(`toolShort.${name}`, "zh"), en: sT(`toolShort.${name}`, "en") },
+    description: { zh: sT(`tool.${name}`, "zh"), en: sT(`tool.${name}`, "en") },
+  }));
 }
 
 /** 超限时停止累积（pause/unpipe），但**不销毁 socket**——让 handler 能写出可读的 4xx 响应。
@@ -547,8 +744,20 @@ export function resolvePromptLanguage(override = "follow", ctx = null) {
   try {
     // 首选：DSH settings 服务的 locale.preference（服务端可读的界面语言，
     // 由 dsh-client-locale 注册命名空间 "locale"、字段 "preference"）。
-    const viaSettings = pick(ctx?.get?.("settings")?.get?.("locale")?.preference ?? ctx?.settings?.get?.("locale")?.preference);
-    if (viaSettings) return viaSettings;
+    // 兼容两代 Settings 服务：0.1.6 的 .get("locale") 与 0.2.x 的 .describe() 表单投影。
+    const svc = ctx?.get?.("settings") ?? ctx?.settings;
+    if (svc) {
+      if (typeof svc.describe === "function") {
+        try {
+          const rows = svc.describe({ redactSecrets: true });
+          const row = Array.isArray(rows) ? rows.find((r) => r?.ns === "locale") : null;
+          const pref = pick(row?.value?.preference ?? row?.user?.preference);
+          if (pref) return pref;
+        } catch { /* describe 异常降级 */ }
+      }
+      const viaGet = pick(svc.get?.("locale")?.preference);
+      if (viaGet) return viaGet;
+    }
   } catch { /* settings 服务可选 */ }
   try {
     // 次选：直接暴露的 locale 服务（部分宿主组合）。
@@ -564,12 +773,130 @@ export function resolvePromptLanguage(override = "follow", ctx = null) {
   return "zh";
 }
 
+// ===== g-496：提示词资产读取（**按所有权分目录**，无跨目录静默回落）=====
+// 负责人 2026-10-14 跨宿主资产所有权裁定，2026-10-15 返工细化：提示词按**语义归属**分层，
+// 不按「谁当前投递」划分，也**不以任何资产/目录的存在性**推断当前形态。
+//
+//   · **公共层** `<repo>/prompts/` —— 跨宿主共用正文（目标/attempt 纪律、人工 gate、证据/报告
+//     格式、Agent Teams 契约、模式策略、自动化指导、主管技能指南、通用 graph 模块说明）。
+//     适配器（本插件、未来的 Claude / pi-ai / Codex 插件、独立 MCP）都依赖它，它**不反向依赖
+//     任何宿主**。
+//   · **宿主专属层** `dsh-graph-host/prompts/` —— 仅真正绑定 DSH 会话/section/GUI 模板语义的正文。
+//
+// **形态由显式布局标记决定**（`package.json` 的 `dsh.promptAssets.layout`，无新依赖）：
+//   · `"source"`（`dsh-graph-host/package.json`，即仓库内直跑）—— 两层物理分离，按归属取根：
+//     公共资产走 `publicDir`（`../prompts`）、宿主专属走 `hostDir`（`./prompts`）；
+//   · `"merged"`（`build.sh` 生成到 `dist/package.json`）—— 两层已合并进包内单一 `dir`
+//     （`./prompts`），**所有**资产都从该根读。
+//
+// ⚠️ 两条铁律（g-496 返工核心，均由回归用例钉住）：
+//   ① **发布上下文绝不回读源码**：标记为 `merged` 时，包内缺文件、整个 `prompts/` 缺失、
+//      乃至用于判别的文件缺失，都**只**导致读取失败 ⇒ 由 `requirePromptAsset` fail-closed 抛错；
+//      绝不回落到邻接的源码树（把 `dist/` 放在仓库内时 `../prompts/` 会命中源码 ⇒ 曾把
+//      「包内漏资产」伪装成「读到了」）。
+//   ② **标记缺失或非法即明确失败**：解析不到（无清单 / 无 `dsh.promptAssets`）、`layout` 取值
+//      非 `source`/`merged`、或该形态所需目录字段缺失 —— 一律视为**发布上下文中的配置损坏**，
+//      抛错暴露，**绝不静默偷归 source**（否则删一个字段就能把发布形态降级成读源码）。
+//
+// 归属的**唯一真源**是 `HELP_ASSET_REGISTRY`（见下）—— 注册表按资产登记所有权，
+// reader / catalog / HTTP 处理器全部从它取根取路径，**不存在第二份清单**。
+
+/** 发布形态的**唯一合法资产根**（构建常量，与 `scripts/build.sh` 写出的 `dir` 一字不差）。
+ *
+ *  g-496 返工（运行态紧锁）：merged 分支**只接受这个确切值**，不做路径归一、不判定「是否在包内」、
+ *  不提供任何通用路径框架 —— 任何其它取值（尤其 `../prompts` 这类误配置）一律 `layout invalid`。
+ *  导出供守卫断言「运行时常量与构建常量一致」，避免两处漂移。 */
+export const MERGED_PROMPT_ASSET_DIR = "./prompts";
+
+/** 读取并校验布局标记；配置损坏 ⇒ 抛错（**不**静默回落 source）。
+ *
+ *  返回 `{ layout, dirs }`：`dirs` 提供**待拼接资产名的根**（相对 `import.meta.url`）。
+ *  源形态按归属分层（public/host 两层），发布形态两层同为 `MERGED_PROMPT_ASSET_DIR`。 */
+function resolvePromptAssetRoots() {
+  const manifestUrl = new URL("./package.json", import.meta.url);
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestUrl, "utf8"));
+  } catch (cause) {
+    throw new Error(`dsh-graph prompt asset layout unreadable: package.json (${manifestUrl.href})`);
+  }
+  const marker = manifest?.dsh?.promptAssets;
+  if (!marker || typeof marker !== "object") {
+    throw new Error("dsh-graph prompt asset layout marker missing: dsh.promptAssets in package.json");
+  }
+  const { layout } = marker;
+  if (layout === "merged") {
+    const dir = marker.dir;
+    // 发布形态：**唯一根必须等于构建常量 `./prompts`**（g-496 返工：运行态紧锁）。
+    // 不解析、不归一、不做「包内判定」的通用路径框架 —— 只要不等于确切常量就判非法。
+    // 理由：`dir` 是 build **写死**的包内常量，任何其它取值（尤其 `../prompts` 这类
+    // 误配置）都会把发布态引回**包外源码**，直接破坏「发布态绝不回读源码」的铁律。
+    // 因此这里不是「配置校验」，而是**发布形态的不可协商不变量**。
+    if (dir !== MERGED_PROMPT_ASSET_DIR) {
+      throw new Error(
+        `dsh-graph prompt asset layout invalid: dsh.promptAssets.dir must be exactly ${JSON.stringify(MERGED_PROMPT_ASSET_DIR)} when layout is "merged" (got ${JSON.stringify(dir)})`,
+      );
+    }
+    return { layout, dirs: { public: MERGED_PROMPT_ASSET_DIR, host: MERGED_PROMPT_ASSET_DIR } };
+  }
+  if (layout === "source") {
+    const { publicDir, hostDir } = marker;
+    if (typeof publicDir !== "string" || typeof hostDir !== "string" || !publicDir || !hostDir) {
+      throw new Error('dsh-graph prompt asset layout invalid: dsh.promptAssets.publicDir/hostDir required when layout is "source"');
+    }
+    return { layout, dirs: { public: publicDir, host: hostDir } };
+  }
+  throw new Error(`dsh-graph prompt asset layout invalid: unknown layout ${JSON.stringify(layout)}`);
+}
+
+/** 资产根解析结果（进程内缓存——布局标记是**包级常量**，运行期不会变）。
+ *  缓存使每次读取不必重解析 JSON；损坏标记仍会抛错（失败不被缓存掩盖）。 */
+let _promptAssetRootsCache = null;
+function promptAssetRoots() {
+  if (_promptAssetRootsCache === null) _promptAssetRootsCache = resolvePromptAssetRoots();
+  return _promptAssetRootsCache;
+}
+
+/** 某资产名在**当前形态**下的根目录（相对 `import.meta.url`）。
+ *
+ *  归属取自注册表（唯一真源）；未登记的名字按**公共层**处理（公共层是默认归属）。
+ *  源形态下按归属选 `publicDir` / `hostDir`；发布形态下两层同根。 */
+function promptAssetDirFor(name) {
+  const roots = promptAssetRoots();
+  if (roots.layout === "merged") return roots.dirs.public;
+  return assetOwnership(name) === "host" ? roots.dirs.host : roots.dirs.public;
+}
+
 function readPromptAsset(name, language = "zh") {
   const lang = normalizePromptLanguage(language);
-  for (const candidate of [`./prompts/${name}.${lang}.md`, `./${name}.${lang}.md`]) {
-    try { return readFileSync(new URL(candidate, import.meta.url), "utf8"); } catch { /* fallback */ }
+  // 单根、单候选：形态与归属共同决定唯一路径，**没有**「失败就换另一个根」的回落链
+  // （那正是 fail-open 的来源）。
+  const dir = promptAssetDirFor(name);
+  const rel = `${dir.replace(/\/+$/, "")}/${name}.${lang}.md`;
+  try {
+    return readFileSync(new URL(rel, import.meta.url), "utf8");
+  } catch {
+    return ""; // 由 requirePromptAsset fail-closed 抛错（含包内缺资产 / 目录缺失）
   }
-  return "";
+}
+
+/** 某资产名的**所有权**（`"public"` | `"host"`）—— 取自**唯一注册表** `HELP_ASSET_REGISTRY`。
+ *
+ *  g-496 返工：所有权不再另持第二份清单（原 `HOST_OWNED_PROMPT_ASSETS` 已删除）——
+ *  reader / catalog / HTTP 处理器与所有权**同源**，任何归属调整只改注册表一处，
+ *  不可能出现「清单说 host、注册表说 public」的分裂。
+ *
+ *  未登记的名字一律视为**公共层**资产（公共层是默认归属，新增公共资产无需登记归属；
+ *  只有真正绑定 DSH 宿主语义的资产才需要登记为 host）。
+ *
+ *  入参是资产的**基名**（不带 `.zh`/`.en` 后缀）——归属是资产的**跨语言**属性，两种语言同属一层。
+ *
+ *  当前 **host 归属 = 9 类 GUI 提示词模板**（g-496 att-007 迁入宿主专属层 `dsh-graph-host/prompts/`）：
+ *  这些正文是 DSH 会话 `session.prompt` 载荷 / 看板 GUI 动作语义专属，跨宿主插件不复用。
+ *  其余资产（含 `help`：通用 graph 模块说明，按负责人 2026-10-15 裁定）仍统一归**公共层**。 */
+function assetOwnership(name) {
+  const hit = HELP_ASSET_REGISTRY.find((e) => e.name === `${name}.zh.md` || e.name === `${name}.en.md`);
+  return hit?.ownership === "host" ? "host" : "public";
 }
 
 function requirePromptAsset(name, language = "zh") {
@@ -580,6 +907,209 @@ function requirePromptAsset(name, language = "zh") {
 
 function localizedPrompt(name, language) {
   return requirePromptAsset(name, language);
+}
+
+/** g-496：执行者纪律的**模板正文**（看板协同块 + 测试力度分级 + 证据形式）唯一真源 =
+ *  `prompts/executor-discipline.<lang>.md`（随构建拷入 `dist/prompts/`，运行期现读、无启动缓存）。
+ *  正文中的动态 id 写成 `{goal}` / `{attempt}` 占位符，由调用方回填 ⇒ 模板只有一份、两语言对偶。
+ *  读取失败 fail-closed（`requirePromptAsset` 抛错，绝不静默降级为内置文本或空串）。
+ *
+ *  ⚠️ 该资产与其对偶语言受 core/tests/prompt-i18n-parity.test.ts 的**四重相等**约束：
+ *  行数 / `##` 标题数 / **占位符多重集** / 技术 token 集合。这正是「看板协同块」（含
+ *  `graph_transition` 与 `{attempt}`）必须在**两种语言里都出现**的原因——只搬 zh 会让 en 侧缺
+ *  3 个 `{goal}`、1 个 `{attempt}` 与 `graph_transition`，parity 立刻判红；故 en 资产自带对偶的
+ *  看板协同块（英文重写）。代码只保留**标题 / 空行 / 前言**三类结构脚手架，使注入载荷的位点
+ *  恰好落在资产**边界**上（zh 落在首行之前、en 落在末行之后），不需要任何行内哨兵标记。 */
+function executorDisciplineTemplate(language = "zh") {
+  return requirePromptAsset("executor-discipline", language).replace(/\n+$/, "").split("\n");
+}
+
+/** g-496：把模板里的 `{goal}` / `{attempt}` 回填为本次 attempt 的实际 id（其余花括号原样保留，
+ *  不猜、不吞、不做通用插值）。占位符形态 `{name}` 与 parity 的识别口径同形，
+ *  故两侧占位符**多重集**可被自动逐项比对。 */
+function fillExecutorDisciplineTemplate(lines, { goal, attempt }) {
+  return lines.map((line) => line.replace(/\{goal\}/g, goal).replace(/\{attempt\}/g, attempt));
+}
+
+/** g-496：attempt 定位固定正文的唯一真源 = `prompts/attempt-instructions.<lang>.md`。
+ *
+ *  该资产以 `<!-- dsh-graph:phrase:<key> -->` 定界注释把**同一条正文**切成若干命名片段，
+ *  使代码可以**逐片段**取用（定位三行 / 覆盖声明的固定句 / 状态字段契约 / 通用纪律前言），
+ *  而不必把整段拼装顺序搬进资产、也不必在代码里留第二份中文副本。
+ *
+ *  为什么用注释定界而不是整段模板：attempt prompt 的**区块顺序与条件逻辑**（哪些段有值、
+ *  何时插入 modeStrategy / history / 骨架）是**装配逻辑**，按 brief 须留在代码；只有「措辞」
+ *  下沉。定界注释对 prompt 产物**不可见**（读取时按标记切分并丢弃标记行）。
+ *
+ *  读取失败 fail-closed（`requirePromptAsset` 抛错，绝不静默降级为内置文本）。 */
+function attemptInstructionsPhrases(language = "zh") {
+  const lang = normalizePromptLanguage(language);
+  if (_attemptInstructionPhrases[lang]) return _attemptInstructionPhrases[lang];
+  const raw = requirePromptAsset("attempt-instructions", lang).replace(/\r\n/g, "\n");
+  const phrases = {};
+  const re = /^<!--\s*dsh-graph:phrase:([A-Za-z0-9_.-]+)\s*-->\s*$/gm;
+  const marks = [...raw.matchAll(re)];
+  if (marks.length === 0) throw new Error(`attempt-instructions.${lang}.md 缺少必需 phrase marker`);
+  for (let i = 0; i < marks.length; i++) {
+    const key = marks[i][1];
+    if (Object.prototype.hasOwnProperty.call(phrases, key)) throw new Error(`attempt-instructions.${lang}.md phrase marker 重复：${key}`);
+    const start = marks[i].index + marks[i][0].length;
+    const end = i + 1 < marks.length ? marks[i + 1].index : raw.length;
+    const phrase = raw.slice(start, end).replace(/^\n+/, "").replace(/\n+$/, "");
+    if (!phrase.trim()) throw new Error(`attempt-instructions.${lang}.md 必需 phrase 为空：${key}`);
+    phrases[key] = phrase;
+  }
+  _attemptInstructionPhrases[lang] = phrases;
+  return phrases;
+}
+const _attemptInstructionPhrases = {};
+
+/** g-496：phrase 片段里的 `{{name}}` 回填（只认双花括号、不递归展开；缺键显性失败）。 */
+function fillPhrase(text, vars) {
+  if (typeof text !== "string" || !text.trim()) throw new Error("必需 attempt phrase 缺失或为空");
+  return text.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (whole, name) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) throw new Error(`attempt phrase 缺少必需变量：${name}`);
+    return String(vars[name]);
+  });
+}
+
+/** g-493 / g-495：`graph_help(topic)` 的主题抽取（纯函数，返回 null 表示该主题不存在）。
+ *  主题口径（与 prompts/*.{zh,en}.md 的章节标题同源，不做第二份目录）：
+ *   · `usage` / `使用说明`          ⇒ **整份 usage 资产全文**（含 `## 工具细则`，见下）；
+ *   · `graph_engineering` / `图工程` ⇒ 「为什么叫 dsh-graph…」章节（**跨资产**查找，见下）；
+ *   · 任一**功能模块名**            ⇒ 该模块那一行（`| <名> | … |` 表格行）。
+ *  g-495：工具名主题**已删除**（负责人 2026-10-13 选 (c)：schema 注入已提供足够信息，
+ *  没必要按工具名查）—— `topic` 只认 `usage` / `graph_engineering` / 模块名；未知名（含工具名）
+ *  ⇒ `null` ⇒ 全文 + `found=false`。模块名真源 = `HARNESS_MODULE_IDS`（core/ops.ts 单一真源，
+ *  此处不另抄一份字面量），别名走 `MODULE_TOPIC_ALIASES`。
+ *  g-495 返工（负责人 2026-10-13 裁决·出路 1）：点题段已从 agent 面向的 `help.*.md` **迁到**
+ *  按需面 `usage.*.md`（help 不再介绍项目背景与命名缘由）⇒ `graph_engineering` 分支改为
+ *  **跨资产**查找：先在 help 正文里找该章节，找不到再到 usage 正文里找。两条路径共用同一
+ *  章节判定（标题含 `dsh-graph` 且含「图工程 / Graph Engineering」），不另立第二套口径。
+ *  章节名按 `## ` 切分 ⇒ 资产改标题时必须同步本函数（守卫 core/tests/g493-help-topic.test.ts 钉住）。
+ *  `extraTexts` 为可选的**追加查找面**（缺省 `[]` 时行为与单资产版逐字一致）。
+ *
+ *  g-495 att-005 修（负责人 2026-10-15 真实 review 授权）：`usage` 主题原实现取 **help 正文**
+ *  「文首到第一个 `## `」，而 help 资产首行只有一句 `共 5 个功能模块：` ⇒ `graph_help(topic="usage")`
+ *  虽 `found:true` 却只返回 10 字符，**承诺的工具细则永远读不到**（死链）。usage 的真实面在
+ *  **按需资产 `usage.*.md`**（含 `## 工具细则` / 签名 / 证据分层）—— 故该分支改为取
+ *  **usage 资产全文**：`extraTexts[0]` 即调用方传入的 usage 正文（显式参数绑定，调用方唯一）。
+ *  语义要点：① 只认 `extraTexts[0]`，**不**在多个追加面里挑一个 —— 避免「挑到哪个面」成为隐式行为；
+ *  ② 追加面缺失/为空 ⇒ 返回 null（`found:false`，与「该面不存在」同口径，**不**回落 help 切片——
+ *  回落等于把死链重新放回来）；③ 资产**不可读**由调用方 `localizedPrompt` **抛错**表达，
+ *  本函数不 catch（fail-open 消除见 `graph_help` 的 run 与 D6）。
+ *  ④ 与 `graph_engineering` 的「help 优先、usage 兜底」**语义独立**：本分支根本不看 help 面，
+ *  故 help 首句戳不影响 usage 结果。 */
+
+/** g-495 返工项 B/C：点题章节标题判定 —— **唯一真源**，被 `helpTopicText` 的跨资产查找与
+ *  测试钩子 `_isGraphEngineeringSectionTitle` 共用（不另立第二套口径）。标题须同时含
+ *  `dsh-graph` 与「图工程 / Graph Engineering」。 */
+function isGraphEngineeringSectionTitle(title) {
+  return /dsh-graph/.test(String(title)) && /图工程|Graph Engineering/i.test(String(title));
+}
+
+function helpTopicText(text, topic, extraTexts = []) {
+  const src = typeof text === "string" ? text : "";
+  const key = String(topic || "").trim().toLowerCase();
+  if (!key) return null;
+  const usageAlias = ["usage", "使用说明", "getting started", "使用指引"];
+  const graphAlias = ["graph_engineering", "graph-engineering", "图工程", "graph engineering"];
+  if (usageAlias.includes(key)) {
+    // g-495 att-005：usage 主题 = **usage 资产全文**（含 `## 工具细则`），不再取 help 首句。
+    // 追加面 `extraTexts[0]` 是 usage 正文的唯一来源（调用方显式绑定）；缺失/空 ⇒ null。
+    const usageFace = Array.isArray(extraTexts) ? extraTexts[0] : "";
+    if (typeof usageFace !== "string" || !usageFace) return null;
+    // 返回**全文**（含各二级标题），只去尾部空白的差异 —— 不得只截到首个 `## ` 之前。
+    return usageFace.trimEnd();
+  }
+  if (graphAlias.includes(key)) {
+    // 跨资产：help 正文优先，其次各追加面（usage）。命中即返回，未命中一律 null。
+    // g-495 返工项 C：**help 优先、usage 兜底**是本分支的既定优先级语义（两面都有同形章节时
+    // 返回 help 版本）。该语义由守卫钉住，不留「未定义行为 + 无断言」。
+    const faces = [src, ...(Array.isArray(extraTexts) ? extraTexts : [])];
+    for (const face of faces) {
+      if (typeof face !== "string" || !face) continue;
+      for (const section of face.split(/\n(?=## )/)) {
+        if (!section.startsWith("## ")) continue;
+        if (isGraphEngineeringSectionTitle(section.split("\n")[0])) {
+          return section.trimEnd();
+        }
+      }
+    }
+    return null;
+  }
+  if (!src) return null;
+  // g-495：功能模块主题 —— 命中资产里该模块的表格行（含所属章节标题）。
+  // 模块名之后**没有别的分支**：`usage` / `graph_engineering` / 模块名之外的一切名
+  //（含**工具名**）一律 `null` ⇒ 调用方回落全文 + `found=false`（负责人 2026-10-13 裁定：
+  //  schema 注入时已提供足够信息，没必要按工具名查）。负向钉住见 g493 D1/D2。
+  const moduleId = helpTopicModuleId(key);
+  if (moduleId) return helpModuleTopicText(src, moduleId);
+  return null;
+}
+
+/** g-495：功能模块名 topic 的别名表（真源 = `HARNESS_MODULE_IDS`，此处只加人类可读别名）。
+ *  键为 `HARNESS_MODULE_IDS` 的成员，值为额外可命中的别名（小写比较）。
+ *  结构性约束由守卫 `core/tests/g493-help-topic.test.ts` 钉住：键集合必须**恰等于**
+ *  `HARNESS_MODULE_IDS`（引擎加模块而此处漏登记 ⇒ 必红）。 */
+const MODULE_TOPIC_ALIASES = {
+  tags: ["标签", "tag", "goal_tags", "目标标签"],
+  memory: ["记忆", "mem", "记忆管理"],
+  shared_cards: ["共享卡", "共享卡片", "shared_cards", "shared-cards", "共享池"],
+  automation_prompts: ["自动化提示词", "自动化", "automation", "automation_prompts", "automation-prompts"],
+  attachments: ["附件", "attachment", "att"],
+};
+
+/** g-495：把 topic 归一成 `HARNESS_MODULE_IDS` 成员；非模块名返回 null。 */
+function helpTopicModuleId(key) {
+  for (const id of HARNESS_MODULE_IDS) {
+    if (key === id) return id;
+    const aliases = MODULE_TOPIC_ALIASES[id] ?? [];
+    if (aliases.some((a) => String(a).toLowerCase() === key)) return id;
+  }
+  return null;
+}
+
+/** g-495：取资产里某模块的**单行**（连同所属二级章节标题与表头），供 `topic=<模块名>` 返回。
+ *  解析口径与资产结构同源：模块表在 `## ` 章节内，每行形如 `| <显示名> | … |`。
+ *  行的**定位**不依赖显示名（显示名是给人看的措辞，可能改），而依赖行内出现的
+ *  `{moduleId}` 状态占位符 —— 那是渲染期才替换的稳定标记。
+ *  只返回该模块自己的行（+ 章节标题 + 表头两行），**不**连带整张表 —— 否则 `topic=<模块>`
+ *  与整份 help 的信息量几无差别，渐进式披露退化。 */
+function helpModuleTopicText(src, moduleId) {
+  const lines = String(src || "").split("\n");
+  const rowIdx = lines.findIndex((l) => l.startsWith("|") && l.includes(`{${moduleId}}`));
+  if (rowIdx < 0) return null;
+  let headIdx = -1;
+  for (let i = rowIdx; i >= 0; i--) {
+    if (lines[i].startsWith("## ")) { headIdx = i; break; }
+  }
+  // 表头两行（`| 模块 | 作用 | 状态 |` + 分隔行）紧随章节标题。
+  const tableHead = lines.slice(headIdx + 1, headIdx + 3).filter((l) => l.startsWith("|"));
+  const title = headIdx < 0 ? [] : [lines[headIdx]];
+  return [...title, ...tableHead, lines[rowIdx]].join("\n").trimEnd();
+}
+
+/** g-495：把 help 资产里的 `{moduleId}` 占位符渲染成当前生效开关。
+ *
+ *  - 资产里每个受管模块一行，行内以 `{<moduleId>}` 标记该行的状态列 ⇒ **资产与模块表同源**，
+ *    引擎加模块而资产漏行时 `renderHelpModules` 会留下未替换的占位符（守卫据此判红）。
+ *  - `switches` 为 null / 缺该模块 ⇒ 按**开启**（fail-safe，与 `resolveModuleSwitches` 同口径）。
+ *  - 渲染结果只是文本；**不**改配置、**不**改注册面，也不删除任何数据。
+ *  - 状态词按语言取（`language`）：zh 用「开启 / 关闭」，en 用「enabled / disabled」——
+ *    与资产语言一致，避免英文资产里混入 CJK（prompt-i18n-parity 守卫会判红）。 */
+function renderHelpModules(text, switches, language = "zh") {
+  if (typeof text !== "string" || !text) return text;
+  const zh = normalizePromptLanguage(language) === "zh";
+  const onWord = zh ? "开启" : "enabled";
+  const offWord = zh ? "关闭" : "disabled";
+  let out = text;
+  for (const id of HARNESS_MODULE_IDS) {
+    const decision = switches?.switches?.[id];
+    const on = decision ? decision.on !== false : true;
+    out = out.split(`{${id}}`).join(on ? onWord : offWord);
+  }
+  return out;
 }
 
 const GUIDE = requirePromptAsset("supervisor-guide", "zh");
@@ -598,39 +1128,85 @@ const GUIDE = requirePromptAsset("supervisor-guide", "zh");
 // 范围排期与候选合入取舍，**不**等于首次 start 授权或 review verdict / delivered 授权；
 // 「开始工作」与「审核」两类 gate **没有对应键**，其既有要求（含 review→delivered 必须等
 // 负责人 verdict）原样保留。六键全 null/非法 ⇒ 渲染空串 ⇒ 该 section 输出与既有逐字一致。
-// 本块自包含（不引用外部符号），测试按 begin/end 标记原文抽取 + 变异求值。
+// g-490 补充（**弱**关系，不改变上面任何不变式、更不写成「键 = gate」）：六键中只有两键的**动作**
+// 落在既有某类人工 gate 的**范围**内——`scope_planning` 的动作落在「调整版本计划」范围内、
+// `release` 的动作落在「发布」范围内；设置弹窗在这两键**未配置**时可显示「默认：human」，
+// 但必须**同屏标注该口径来源**（见下方 `AUTOMATION_UNSET_SCOPE`），**不得**自称引擎解析默认值。
+// 其余四键**不对应任何** gate（与「开始工作」「审核」两类 gate **没有对应键**同理）⇒ 未配置一律
+// 显示「未配置：保持既有指导」。引擎侧六键仍是 `nullable` **且无 `default`**，未配置时
+// `readProjectConfig` 返回 null、本块的渲染函数**不输出该键指导行** —— 与上面逐字一致。
+// g-496：正文（header/confirm/autonomous/action/boundary/trailer）真源 = `prompts/automation-guidance.<lang>.md`，
+// 代码只留**结构与门控**（键清单、行模板、human/ai 判断、空串语义、语言回落）。故本块**引用外部符号**
+// `requirePromptAsset`（读取）与 `parseAutomationGuidanceAsset`（解析）—— 守卫据此断言「正文不在代码里」，
+// 并对**真实资产读取 + 渲染输出 + 模块开关**做行为断言（不再用 `new Function` 抽块求值）。
 const AUTOMATION_GUIDANCE_KEYS = ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"];
+
+/** g-496：把 `prompts/automation-guidance.<lang>.md` 的 `@@<字段>` 分块解析成正文表。
+ *
+ *  资产是**唯一真源**（正文不再在代码里留第二副本）；本函数只做**解析**，不含任何门控判断。
+ *  fail-closed：资产缺失由 `requirePromptAsset` 抛错；**任一必需字段缺失/重复**同样抛错
+ *  （绝不静默降级为空串 —— 否则「资产漏字段」会被伪装成「该键无指导」）。
+ *  解析规则：行首 `@@<field>` 起一块，直到下一个 `@@` 行；HTML 注释与空行天然落在块外/块内被裁剪。 */
+function parseAutomationGuidanceAsset(text, lang) {
+  const fields = new Map();
+  let current = null;
+  for (const raw of String(text).split("\n")) {
+    // 定界注释行（begin/end 标记）不是正文，遇到即结束当前块（避免尾部标记被并入最后一段）。
+    if (/^\s*<!--/.test(raw) || /^\s*-->/.test(raw)) { current = null; continue; }
+    const m = /^@@([A-Za-z0-9_.]+)\s*$/.exec(raw);
+    if (m) {
+      if (fields.has(m[1])) throw new Error(`dsh-graph automation guidance asset has duplicate field: ${m[1]} (${lang})`);
+      current = m[1];
+      fields.set(current, []);
+      continue;
+    }
+    if (current) fields.get(current).push(raw);
+  }
+  const get = (field) => {
+    const lines = fields.get(field);
+    if (!lines) throw new Error(`dsh-graph automation guidance asset is missing field: ${field} (${lang})`);
+    return lines.join("\n").trim();
+  };
+  const table = {
+    header: get("header"),
+    confirm: get("confirm"),
+    autonomous: get("autonomous"),
+    line: (key, value, action, clause, boundary) =>
+      lang === "en"
+        ? `- \`${key}\` = ${value}: ${action} — ${clause} (${boundary}).`
+        : `- \`${key}\` = ${value}：${action}，${clause}（${boundary}）。`,
+    actions: {},
+    trailer: get("trailer"),
+  };
+  for (const key of AUTOMATION_GUIDANCE_KEYS) {
+    table.actions[key] = { action: get(`action.${key}`), boundary: get(`boundary.${key}`) };
+  }
+  return table;
+}
+
 const AUTOMATION_GUIDANCE = {
-  zh: {
-    header: "⚠️ **自动化动作指导**（来自本 workspace 的 supervisor.automation 配置）：",
-    confirm: "请就此动作请求负责人确认",
-    autonomous: "在已授权范围内自主判断并留痕",
-    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}：${action}，${clause}（${boundary}）。`,
-    actions: {
-      scope_planning: { action: "**范围/排期与版本计划调整**", boundary: "不是首次 start 授权" },
-      integration_decision: { action: "**候选选择与合入取舍**", boundary: "不是 review verdict / delivered 授权" },
-      rework: { action: "**既有目标返工取舍**", boundary: "不授权首次 start、不自动批准扩大范围" },
-      memory_promotion: { action: "**记忆提炼**", boundary: "不绕 standing 特权：仍默认 on_demand，standing 仅限人类常驻指令/安全禁令且 ≤200 字" },
-      skill_proposal: { action: "**是否提出 skill 沉淀建议**", boundary: "不等于安装或发布" },
-      release: { action: "**发布决策**", boundary: "release=ai 也不能单独放行 delivered" },
-    },
-    trailer: "边界与优先级（只增不减）：human 只增加确认要求，绝不被低风险豁免覆盖；负责人明确、范围清楚的批量授权可覆盖其**列明动作**的逐项询问，笼统方向授权不构成覆盖；明确禁 push/publish/tag 永远优先；Full access 不是业务批准。四类 gate 中「开始工作」与「审核」没有对应键，其既有要求（含 review→delivered 必须等负责人 verdict）保持不变。本指导只影响提示，不改变工具权限，也不构成引擎强制。",
-  },
-  en: {
-    header: "⚠️ **Automation action guidance** (from this workspace's supervisor.automation config):",
-    confirm: "request the person in charge's confirmation for this action",
-    autonomous: "decide autonomously within the already authorized scope and leave a trace",
-    line: (key, value, action, clause, boundary) => `- \`${key}\` = ${value}: ${action} — ${clause} (${boundary}).`,
-    actions: {
-      scope_planning: { action: "**scope/scheduling and version-plan adjustments**", boundary: "it is not first-start authorization" },
-      integration_decision: { action: "**candidate selection and merge trade-offs**", boundary: "it is not a review verdict or delivered authorization" },
-      rework: { action: "**rework trade-offs for existing goals**", boundary: "it does not authorize a first start or automatically approve scope expansion" },
-      memory_promotion: { action: "**memory distillation**", boundary: "it does not bypass the standing privilege: the default stays on_demand, and standing is limited to a human standing instruction or safety prohibition with a 200-character cap" },
-      skill_proposal: { action: "**whether to propose a skill**", boundary: "it is not installation or release" },
-      release: { action: "**release decision**", boundary: "an ai setting still cannot approve delivered on its own" },
-    },
-    trailer: "Boundaries and precedence (add-only, never relaxed): human only adds confirmation requirements and is never overridden by a low-risk exemption; an explicit, clearly scoped batch authorization from the person in charge may cover item-by-item confirmation for exactly the listed actions, while a vague directional authorization does not; an explicit prohibition of push/publish/tag always takes precedence; Full access is not business approval. Among the four gates, \"start work\" and \"review\" have no corresponding key, so their existing requirements (including that review→delivered must wait for the person in charge's verdict) stay unchanged. This guidance only affects the prompt: it changes no tool permission and is not engine enforcement.",
-  },
+  zh: parseAutomationGuidanceAsset(requirePromptAsset("automation-guidance", "zh"), "zh"),
+  en: parseAutomationGuidanceAsset(requirePromptAsset("automation-guidance", "en"), "en"),
+};
+/** g-490：六键**未配置**时的**显示口径来源引用表** —— 这是「口径来源」，**不是**引擎解析默认值。
+ *  引擎事实：六键在 `core/schema.ts` 里是 `nullable` 且**无 `default`**；未配置时 `readProjectConfig`
+ *  仍返回 null、`renderAutomationGuidance` **不输出该键指导行**；权威口径是 `supervisor-guide.zh.md`
+ *  「配置化的动作指导」段的「**未配置保持既有指导**」，本表**不**改变它。
+ *  本表只登记「**某键的动作落在既有某类人工 gate 的范围之内**」这一**弱**关系（来源 =
+ *  `supervisor-guide.zh.md`「人工 gate 停轮」的四类人工 gate，逐键可对照）：
+ *    · `scope_planning` 的动作落在「调整版本计划」范围内、`release` 的动作落在「发布」范围内
+ *      ⇒ GUI 在这两键**未配置**时可显示「默认：<该 gate 的既有要求>」，但必须**同屏标注该来源**，
+ *      **不得**自称引擎解析默认值。`gate_requires` 记的是「该人工 gate 本身的要求」，不是本键的默认值。
+ *  与上文「六键与四类人工 gate **不是一一映射**」**并存、不矛盾**：本表**不**写成「键 = gate」
+ *  （字段名为 `gate_scope` = 动作所处范围，而非键的等价 gate）；「开始工作」「审核」两类 gate 仍然
+ *  **没有对应键**；其余四键（`integration_decision` / `rework` / `memory_promotion` /
+ *  `skill_proposal`）**没有**对应的 gate 范围 ⇒ **本表不含它们的任何 human/ai 值**，其未配置显示
+ *  一律为「未配置：保持既有指导」（不编默认值、也不改四类 gate）。
+ *  语义边界：本表**不**改变 `renderAutomationGuidance` 的输出（六键全未配置仍渲染空串、既有纪律文本
+ *  逐字不变），不新增任何引擎硬门禁/审批凭据，也不改四类 gate 本身。 */
+const AUTOMATION_UNSET_SCOPE = {
+  scope_planning: { gate_scope: "version_plan", gate_requires: "human" },
+  release: { gate_scope: "release", gate_requires: "human" },
 };
 /** 渲染六键动作指导：只有 human/ai 生效（其余按未配置处理）；无生效键 ⇒ 空串（保持既有文本逐字不变）。 */
 function renderAutomationGuidance(automation, language) {
@@ -646,6 +1222,36 @@ function renderAutomationGuidance(automation, language) {
   return `\n\n${table.header}\n${lines.join("\n")}\n\n${table.trailer}`;
 }
 // ==== g-439 automation guidance: extractable block end ====
+
+// ==== g-480：模块在**提示词面**的裁剪位置（描述性元数据，随 schema_hints 下发给调用方）====
+// 工具面的唯一真源是 core 的 `MODULE_TOOL_NAMES`（本表**不**重复任何工具名，避免第二份副本漂移）。
+// 取值**闭集**（g480 用例把本表与真实注册 / 真实裁剪行为对账，写错即红）：
+//   · `none` = 没有可达的提示词面（只有工具面）；
+//   · `section:<name>` = 该模块关闭时，这个我们注册的 systemPrompt section **整体**不再注入；
+//   · `section-part:<name>#<part>` = 只裁掉该 section 的**一段**（正文保留）；
+//   · `tool-name-mentions:none` = 该模块关闭时其受管工具名会被从**所有**我们注册的 section 文本里
+//     按行剔除（`stripModuleToolMentions`），且当前三个 section 的**静态**资产里没有它们的可达提及；
+//   · `tool-name-mentions:dynamic-memory` = 同上机制，但可达提及只在**动态**正文里（常驻记忆逐条文本），
+//     静态资产里没有；
+//   · `role-prompt:<role>` = 可达提及只在该**子代理角色**的档案与派发提示词里（persona 文本 /
+//     `requiredTools` / `allowedTools`）。模块关闭 ⇒ **角色档案自适应**（g-480 裁决，唯一真源
+//     `core.moduleAwareRoleProfile`）：persona 文本按行剔除受管工具名、`requiredTools`/`allowedTools`
+//     同步去掉该名，宿主再把 collector 的**派发提示词**按同一 `stripModuleToolMentions` 投影
+//     ⇒ 该角色**照常可派发**，且档案面/提示词面不再引用该工具（不再用「拒绝派发」当裁剪手段）。
+// 已知不可达（如实登记，不假装已裁）：`skills.register` 与 `prompts/*.md` 资产是 **apply 期一次性**
+// 全局面，无法按 workspace 裁剪 ⇒ help/usage 资产里对该模块的**文字**说明保留，但能力已从模型可选集移除。
+// 同类**非模型面**（如实登记，不假装已裁）：GUI 卡片抽屉的「收集提示词预览」（client 侧
+// `prompt.collect.attachments` 文案）是**人类可见的模板预览**，不是模型可见的派发提示词；
+// client bundle 是 apply 期一次性全局资产、渲染期没有 per-workspace 模块状态 ⇒ 不随开关裁剪。
+const MODULE_PROMPT_FACE = {
+  tags: "none",
+  memory: "section:dsh-graph-standing-memory",
+  shared_cards: "tool-name-mentions:dynamic-memory",
+  automation_prompts: "section-part:dsh-graph-supervisor-discipline#automation-guidance",
+  // 附件：可达提及只在 collector 角色的 persona/收集提示词与 requiredTools/allowedTools（`graph_store_attachment`）。
+  // 关闭附件 ⇒ collector 档案与派发提示词随模块自适应（不再提及该工具）⇒ 仍可派发、且不会调用不存在的工具。
+  attachments: "role-prompt:collector",
+};
 
 // g-118：dsh-graph help 内容按 locale 整体加载 prompts/help.*.md
 
@@ -701,7 +1307,7 @@ const PROMPT_MARKER_REPLACEMENTS = {
     [/## Quality criteria/g, "## in-text: Quality criteria"],
     [/## Override declaration/g, "## in-text: Override declaration"],
     [/## Historical handoff/g, "## in-text: Historical handoff"],
-    [/## Confirmed handoff from previous attempts \(rework constraints confirmed by the supervisor\/owner, not an agent's self-report\)/g, "## in-text: Confirmed handoff from previous attempts (rework constraints confirmed by the supervisor/owner, not an agent's self-report)"],
+    [/## Confirmed handoff from previous attempts \(rework constraints confirmed by the supervisor\/owner, not an agent\x27s self-report\)/g, "## in-text: Confirmed handoff from previous attempts (rework constraints confirmed by the supervisor/owner, not an agent's self-report)"],
     [/## Historical cards/g, "## in-text: Historical cards"],
     [/## Harvested context card results \(ordered by context_cards; directly usable by subagents without guessing card paths\)/g, "## in-text: Harvested context card results (ordered by context_cards; directly usable by subagents without guessing card paths)"],
     [/## Harvested context card results/g, "## in-text: Harvested context card results"],
@@ -983,10 +1589,13 @@ function historicalPromptBlock(title, section) {
 }
 
 function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection }) {
+  // g-496：本段「标题 + 空行 + 前言」的措辞唯一真源 = `prompts/attempt-instructions.zh.md`
+  //（disciplineHeading / disciplinePreface 两个短语片段）；代码不再留第二份副本。
+  const instructions = attemptInstructionsPhrases("zh");
   const lines = [
-    "## 通用执行纪律",
+    instructions.disciplineHeading,
     "",
-    "以下内容是通用纪律与环境约束，不产生本次任务 action；本次 action 只来自当前 brief/directive。",
+    instructions.disciplinePreface,
   ];
   const extra = promptText(subagentPromptSection);
   if (extra) {
@@ -997,37 +1606,16 @@ function formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptS
   if (worktree) lines.push("", protectPromptMarkers(worktree));
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
+  // g-496：纪律条目正文（看板协同块 + 分级规则 + 证据形式）唯一真源 = `prompts/executor-discipline.zh.md`，
+  // 本次只保留「标题 / 空行 / 前言」三行结构脚手架 —— 载荷注入位点落在资产**首行之前**（zh 口径：
+  // 前言之后、看板块之前），与搬迁前逐字节同位；动态 id 由模板 `{goal}`/`{attempt}` 占位符回填。
+  // 正文仍逐行过反伪装（保护强度不因搬迁减弱）。
+  // ⚠️ 后续再向纪律段新增内容，仍须在 core/tests/prompt-discipline-g239.test.ts 登记增量或做等量删减
+  //（该测试按**渲染产物**中的稳定标记剔除，与正文存放位置无关）；四个收缩阈值一律未动。
   lines.push(
     "",
-    "【看板协同与状态流转】看板列与状态摘要（status_line）由你维护，反映真实执行进展：",
-    "1. 泳道迁移（Human Gate 约束）：",
-    "   - 开工时（若当前非 in_progress）：调用 graph_transition(goal=\"" + goalValue + "\", to=\"in_progress\")；",
-    "   - 遇到阻塞：调用 graph_transition(goal=\"" + goalValue + "\", to=\"blocked\", reason=<一句话原因>)；",
-    "   - 本轮完成：调用 graph_transition(goal=\"" + goalValue + "\", to=\"review\") 停轮等待裁决；",
-    "   - 【禁区】绝不自行 graph_transition 到 \"delivered\"——delivered 是负责人/supervisor 的 human gate，最多到 review 就停。",
-    "2. 状态汇报（有限阶段触发，严禁每动作机械追加）：",
-    "   - 汇报触发点：仅在【开始开工】、【阶段转变/转向新任务】、【遇到阻塞】、【本轮完成待命】4类有限关键节点调用 graph_report_status(goal=\"" + goalValue + "\", attempt=\"" + attemptValue + "\", status=<一句话简短人话，≤20字>)；",
-    "   - 长任务节流心跳：长耗时任务（如大型构建、多步批量排查）适度按心跳汇报进展，普通轻量读取/单步调试切忌每步机械追加汇报；不再要求每个 read/bash 动作机械调用状态；",
-    "   - 迁移与状态同步：同步更新 status_line；迁移被引擎拒绝（如判据未登记）时不得继续实现，立即上报停止；",
-    // g-326 新增条目（精简版分级规则）：纪律段是分级规则的**唯一**投递渠道。
-    // 负责人去重裁决（v0.16.0）：att-001 的独立分级区块及其常量/格式化函数已一并删除——同一份 prompt
-    // 出现两份表述与 g-239 压缩 prompt 的方向相反；护栏见 core/tests/test-intensity-tiers.test.ts 的
-    // 「去重护栏」用例（全篇恰好一次且落在纪律段切片内）。
-    // 关于 g-239 收缩断言：core/tests/prompt-discipline-g239.test.ts 判据 3 的四个阈值一律未动，
-    // 本次增量为**已登记增量**——该测试在测量收缩比例前按稳定标记精确剔除本条目
-    // （见其 DISCIPLINE_INCREMENT_MARKER 与 subtractRegisteredIncrement）。
-    // ⇒ 后续再向纪律段新增内容，必须在该测试同样登记增量或做等量删减，否则它会如实变红。
-    "3. 测试力度按改动性质分级（不为不值得单测的改动凑断言）：",
-    "   - 一档｜零行为逻辑改动（文案/标签/i18n 字符串、注释、文档、纯样式）：不要求新增单测，但必须给出既有测试全绿 + 构建/语法检查通过（或真机目视）的实际证据；",
-    "   - 二档｜小幅逻辑改动（分支/数据变换/边界错误处理）：针对性单测覆盖被改分支，且原行为不回归；",
-    "   - 三档｜新增功能/契约变更/核心层重写/并发与状态机：完整单测 + 边界与负向用例，必要时做「改坏就会红」的负向对照；",
-    "   - 绝不因「轻量/文案」跳过、删改或削弱既有测试，也不降低判据门禁与人工 gate。",
-    // g-312 新增条目（断言化证据）：与真源 core/ops.ts 的 ROLE_PROFILES.executor.disciplineLines[6] 同口径
-    // （那里是 persona 侧，这里是 attempt prompt 侧投递副本，两处必须同一套口径）。
-    // ⚠️ 本条同样属于 g-239 收缩断言的**已登记增量**：core/tests/prompt-discipline-g239.test.ts 的
-    // DISCIPLINE_INCREMENT_MARKERS 已登记本条目首行；四个阈值（状态段 ≥20%/≥20%、整体 ≥8%/≥10%）
-    // 一律未动。后续再向纪律段新增内容，必须在该测试同样登记增量，否则它会如实变红。
-    "4. 证据形式：交付证据只写单行结构化概要（一套件一行、单条 ≤160 字符），格式为 `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`，并给出断言命令与结论；禁止倾倒多行 JSON、DOM dump、切片数据、原始日志与围栏代码块；运行态不变式一律沉淀为自动化断言，仅 UI 视觉层保留轻量截图核验。",
+    ...fillExecutorDisciplineTemplate(executorDisciplineTemplate("zh"), { goal: goalValue, attempt: attemptValue })
+      .map((line) => protectPromptMarkers(line)),
   );
   return lines.join("\n");
 }
@@ -1052,10 +1640,13 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, brie
   if (promptText(handoffSection)) history.push(["## Historical handoff", "[Background only; not an action source]", protectSectionBody(handoffSection, "en")].join("\n"));
   history.push(["## Historical cards", "[Background only; not an action source]", promptText(cardsSection) ? protectSectionBody(cardsSection, "en") : missing].join("\n"));
   const contextPath = promptText(goalRel) || missing;
+  // g-496：英文定位段的**固定措辞**唯一真源 = `prompts/attempt-instructions.en.md`（与中文资产互为对偶）。
+  // 本渲染器仍是**独立措辞**的英文路径（不共用中文资产的字面量），但固定正文不再内联在代码里。
+  const instructions = attemptInstructionsPhrases("en");
   const position = [
-    `## Task positioning\nThis is a ${task} task. Only the current attempt brief/directive below is an action source; history is background only.`,
-    `You are execution attempt ${promptText(attempt) || missing} for goal ${promptText(goal) || missing}.`,
-    `Goal file (workspace-relative): ${contextPath}`,
+    fillPhrase(instructions.positioningLine1, { taskTypeLabel: task }),
+    fillPhrase(instructions.positioningLine2, { goal: promptText(goal) || missing, attempt: promptText(attempt) || missing }),
+    fillPhrase(instructions.goalRelPlain, { goalRel: contextPath }),
   ].join("\n");
   const enRenderFn = (v, reason) => value(v, reason);
   const dedupedItems = dedupBriefDirective(
@@ -1065,33 +1656,39 @@ function formatAttemptPromptEnglish({ goal, attempt, goalRel, attemptBrief, brie
     { isEn: true, renderFn: enRenderFn, briefNote: briefSourceNote(briefSource, true) },
   );
   const current = [
-    "## Current attempt brief/directive",
+    instructions.briefHeading,
     "",
     ...dedupedItems,
   ].join("\n");
+  // 基线英文渲染器**没有** override 段的前言/来源声明行（那是中文资产的条目）——纯抽取不得凭空补，
+  // 故此处逐字保持基线英文形态：标题 → 字段行。
   const override = [
-    "## Override declaration",
-    "The supervisor-provided structured fields below override any historical context; never infer them from natural language.",
-    `- Task type: ${task}`,
-    `- Baseline commit: ${compact(baselineCommit)}`,
-    `- Source attempt: ${compact(sourceAttempt)}`,
-    "- Acceptance items:", items,
+    instructions.overrideHeading,
+    fillPhrase(instructions.overrideRule, {}),
+    fillPhrase(instructions.overrideTaskType, { taskTypeLabel: task }),
+    fillPhrase(instructions.overrideBaseline, { baselineFact: compact(baselineCommit) }),
+    fillPhrase(instructions.overrideSourceAttempt, { sourceAttemptFact: compact(sourceAttempt) }),
+    fillPhrase(instructions.overrideAcceptance, { acceptanceFact: items }),
   ].join("\n");
   const discipline = [
-    "## Execution discipline",
-    "Use the assigned worktree only; main is read-only. Report state with graph_report_status using state=working, blocked, done, or error.",
-    `At start migrate ${promptText(goal) || missing} to in_progress; on a blocker use blocked with a reason; when done migrate to review and stop. Never migrate to delivered.`,
-    // g-326 新增条目（精简版分级规则，与 zh 纪律条目 3 语义一致）：纪律段是分级规则的正式投递渠道。
-    "Tier test intensity by the nature of the change (never manufacture an assertion for a change that does not warrant one):",
-    "  - Tier 1 | zero behavioral-logic change (copy/labels/i18n strings, comments, docs, pure styling): no new unit tests required, but you must provide real evidence such as the full existing suite still green plus build/syntax checks passing (or real-machine visual verification);",
-    "  - Tier 2 | small logic change (branches, data transformation, boundary and error handling): targeted unit tests covering the changed branches, with the original behavior not regressing;",
-    "  - Tier 3 | new feature / contract change / core-layer rewrite / concurrency and state machines: complete unit tests plus boundary and negative cases, and a \"breaking it turns it red\" negative control when necessary;",
-    "  - Iron rule: never skip, delete, or weaken existing tests because a change is \"lightweight/copy-only\", and never lower criteria gates or human gates.",
-    // g-312 new entry (assertion-as-evidence): same standard as the Chinese entry 4 and as the single
-    // source ROLE_PROFILES.executor.disciplineLines in core/ops.ts. Keep this line CJK-free: the English
-    // render path asserts the whole prompt contains no CJK. It is also a registered g-239 increment
-    // (see DISCIPLINE_INCREMENT_MARKERS in core/tests/prompt-discipline-g239.test.ts).
-    "Evidence form: report deliverables only as a single-line structured summary (one suite per line, at most 160 characters each), formatted as `evidence: suite=<id> passed=<n> failed=<n> exit=<code> ms=<n> diff=<files>f/+<a>/-<d> commit=<sha7>`, together with the assertion command and its conclusion; never dump multi-line JSON, DOM dumps, sliced data, raw logs, or fenced code blocks; turn runtime invariants into automated assertions and keep lightweight screenshot verification only for the non-codifiable UI/visual layer.",
+    instructions.disciplineHeading,
+    // g-496: this single preamble line is the EN counterpart of the zh 前言 — the **structure scaffolding**
+    // that keeps the injected payloads at the END of this section (below). It is fed from the
+    // `disciplinePreface` phrase of `prompts/attempt-instructions.en.md`, so the wording has exactly one source.
+    instructions.disciplinePreface,
+    // g-496: the discipline template body (board coordination + tier rules + evidence form) has a single
+    // source: `prompts/executor-discipline.en.md`, held in lockstep with the Chinese asset by
+    // core/tests/prompt-i18n-parity.test.ts (line count / `##` headings / placeholder multiset /
+    // technical-token set) — which is exactly why the English asset carries its own board block.
+    // Only the heading / blank line / preamble scaffolding stays here, so the injected payloads below
+    // keep their byte position at the END of this section. Keep both assets CJK-free: this render path
+    // asserts the whole prompt contains no CJK. Still a registered g-239 increment
+    // (DISCIPLINE_INCREMENT_MARKERS — subtracted from the **rendered** discipline slice, so relocating
+    // the literal does not change the measurement).
+    ...fillExecutorDisciplineTemplate(executorDisciplineTemplate("en"), {
+      goal: promptText(goal) || missing,
+      attempt: promptText(attempt) || missing,
+    }).map((line) => protectPromptMarkers(line, "en")),
     promptText(subagentPromptSection) ? protectSectionBody(subagentPromptSection, "en") : "",
     promptText(modeStrategySection) ? protectSectionBody(modeStrategySection, "en") : "",
     promptText(worktreeBlock) ? protectSectionBody(worktreeBlock, "en") : "",
@@ -1140,12 +1737,16 @@ export function formatAttemptPrompt({
   const goalValue = promptText(goal) || ATTEMPT_PROMPT_MISSING;
   const attemptValue = promptText(attempt) || ATTEMPT_PROMPT_MISSING;
   const context = promptText(targetContext);
+  // g-496：attempt 定位段的**固定措辞**唯一真源 = `prompts/attempt-instructions.zh.md`；
+  // 代码只注入变量（任务类型标签、history 提名、目标/attempt id、goalRel 与两种尾注）。
+  const instructions = attemptInstructionsPhrases("zh");
   const positioning = [
-    "【本次任务定位】这是一次 " + taskTypeLabel + " 任务；以下仅『本次 attempt brief/directive』为唯一 action 来源；" + historyNotice + "为约束/背景，仅供理解候选设计与禁项，不产生新任务。",
-    "你是 dsh-graph 目标 " + goalValue + " 的执行 attempt " + attemptValue + "。",
-    context
-      ? "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "（目标描述与质量判据已在下方基于当前快照内联，请直接依据执行；如需历史评论/台账可按需查阅，无需无条件重读全文）。"
-      : "目标文件精确路径（工作目录相对）：" + (promptText(goalRel) || ATTEMPT_PROMPT_MISSING) + "——用 read 工具读它，不要自己猜路径。",
+    fillPhrase(instructions.positioningLine1, { taskTypeLabel, historyNotice }),
+    fillPhrase(instructions.positioningLine2, { goal: goalValue, attempt: attemptValue }),
+    fillPhrase(
+      context ? instructions.goalRelInlined : instructions.goalRelPlain,
+      { goalRel: promptText(goalRel) || ATTEMPT_PROMPT_MISSING },
+    ),
   ].join("\n");
 
   const dedupedItems = dedupBriefDirective(
@@ -1155,25 +1756,25 @@ export function formatAttemptPrompt({
     { briefNote: briefSourceNote(briefSource) },
   );
   const current = [
-    "## 本次 attempt brief/directive",
+    instructions.briefHeading,
     "",
-    "唯一 action 来源：以下两项当前数据；历史 handoff、卡片和通用纪律均不产生新任务。",
-    "brief 优先于 directive：brief 是当前任务的直接描述，directive 是目标文件中的背景指令；两者冲突以 brief 为准。",
+    instructions.briefOnlySource,
+    instructions.briefPriority,
     "",
     ...dedupedItems,
   ];
-  if (context) current.push("", "目标背景（来自当前 goal.md，仅供理解，不产生 action）", protectPromptMarkers(context));
+  if (context) current.push("", instructions.briefContextLabel, protectPromptMarkers(context));
 
   const override = [
-    "## 覆盖声明",
+    instructions.overrideHeading,
     "",
-    "覆盖声明：本段与上文 handoff 不一致处，一律以本段为准（列出覆盖点：task_type、baseline_commit、source_attempt、acceptance_items）。",
-    "- 任务类型（当前 attempt 数据）：" + taskTypeFact(taskType),
-    currentFactLine("- 权威基线 commit（当前 attempt 数据）：", baselineCommit, "baseline_commit", "没有可用基线 commit"),
-    currentFactLine("- 真正前序 attempt 身份（当前 attempt 数据）：", sourceAttempt, "source_attempt", "没有可用的候选/来源 attempt；当前 attempt 不计为前序来源"),
-    acceptanceFactLine(acceptanceItems),
-    "以上字段由 supervisor 通过独立参数直接传入；不从 brief/directive、handoff 或卡片截取/推断。",
-    "- 历史 handoff：" + (handoff ? "已提供（下方仅作背景）" : "未提供（当前目标没有已确认 handoff，故不注入历史 handoff 区块）"),
+    instructions.overrideRule,
+    fillPhrase(instructions.overrideTaskType, { taskTypeLabel: taskTypeFact(taskType) }),
+    fillPhrase(instructions.overrideBaseline, { baselineFact: factValue(currentFactLine("", baselineCommit, "baseline_commit", "没有可用基线 commit")) }),
+    fillPhrase(instructions.overrideSourceAttempt, { sourceAttemptFact: factValue(currentFactLine("", sourceAttempt, "source_attempt", "没有可用的候选/来源 attempt；当前 attempt 不计为前序来源")) }),
+    fillPhrase(instructions.overrideAcceptance, { acceptanceFact: factValue(acceptanceFactLine(acceptanceItems)) }),
+    instructions.overrideProvenance,
+    fillPhrase(instructions.overrideHandoff, { handoffState: handoff ? "已提供（下方仅作背景）" : "未提供（当前目标没有已确认 handoff，故不注入历史 handoff 区块）" }),
   ].join("\n");
 
   const history = [];
@@ -1181,11 +1782,28 @@ export function formatAttemptPrompt({
   if (handoffBlock) history.push(handoffBlock);
   history.push(historicalPromptBlock("## 历史卡片", cards));
   const discipline = formatAttemptDiscipline({ goal, attempt, worktreeBlock, subagentPromptSection });
-  const structuredStateInstruction = "【结构化状态字段】每次调用 graph_report_status 除 status 外必须传 state，且只能是 working、blocked、done、error；看板状态判定优先读取该字段，status 文本仅供展示。";
+  const structuredStateInstruction = instructions.structuredState;
   // g-374 F6：交回报文骨架 = 注入文本的**尾注**（单一真源 core/ops.ts；剥离本块后其余字节与基线全同）。
   return [positioning, current.join("\n"), modeStrategySection, override, ...history, structuredStateInstruction, discipline, ATTEMPT_PROMPT_WARNING, formatAttemptReportSkeleton("zh")]
     .filter((section) => section && section.trim())
     .join("\n\n");
+}
+
+/** g-496：把 `currentFactLine` / `acceptanceFactLine` 渲染出的「标签 + 值」块拆成**纯值块**
+ *  —— 标签措辞已下沉到资产（`{{baselineFact}}` 等占位符所在行自带标签），代码只提供事实值。
+ *  行不存在（空串）时返回空串，占位符随之留空，不产生悬空标签。
+ *
+ *  **保留换行**：这两族渲染器的产物本就可含续行（`未提供原因：…`、逐条验收项），
+ *  故只剥离首行标签、**原样保留**其余行与缩进 —— 不得压缩为单行。 */
+function factValue(line) {
+  const text = String(line ?? "");
+  if (!text) return "";
+  const nl = text.indexOf("\n");
+  const head = nl >= 0 ? text.slice(0, nl) : text;
+  const rest = nl >= 0 ? text.slice(nl + 1) : "";
+  const idx = head.indexOf("：");
+  const value = idx >= 0 ? head.slice(idx + 1) : head;
+  return rest ? value + "\n" + rest : value;
 }
 
 // g-189：只读发现当前 canonical workspace 下约定的 attempt worktree。
@@ -1406,6 +2024,19 @@ export function apply(ctx, config) {
   // 绝对 config.root 时跳过 workspace 要求（root 完全由配置决定）。
   const isAbsoluteConfig = !!(config?.root && isAbsolute(config.root));
   const sessionWorkspace = (ex) => ex?.agent?.session?.header?.cwd ?? ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null;
+  // g-480：**真裁剪能力探测**（apply 期一次判定；同一结果同时驱动「监听器是否注册」与「设置状态面下发」，
+  // 绝不两处各判一次而分歧）。语义：本版本宿主是否**同时**提供 `agent/created` 生命周期事件与
+  // `tools.restrict()` ⇒ 模块开关能否把受管工具从模型可见面真正移除。
+  //   · true  = 模块开关**真裁剪**生效（工具面 + 提示词面 + 角色档案面）；
+  //   · false = 本版本 DSH 不支持真裁剪 ⇒ 模块开关**不生效**，只把配置记录下来（GUI 在「模块」页签
+  //     如实显示一行提示）；插件绝不因此抛错、也不改注册面（51 个工具照常注册可见）。
+  const moduleTrimSupported = typeof ctx?.on === "function" && typeof ctx?.tools?.restrict === "function";
+  // g-480：派发路径（能力自检 / 工具过滤 / collector 提示词）读模块开关的入口 —— 与工具面监听器、
+  // 三个 section **读同一份** `<board root>/project.yaml`；读失败一律按「全开」
+  // （`resolveModuleSwitches(null)`），绝不因配置读取异常静默砍掉能力或提示词。
+  const readModuleSwitchesForRoot = (rootForRead) => {
+    try { return resolveModuleSwitches(readProjectConfig(rootForRead)); } catch { return resolveModuleSwitches(null); }
+  };
   // g-133 起 profile 级全局默认由宿主 settings 服务承载；g-351 起改为**能力探测分流**
   // （零版本号字面量比较），因为该服务的形态在宿主上换过代：
   //   ① 旧能力：服务暴露 namespace 注册 API `settings.register(ns, schema, { base })`，
@@ -1507,6 +2138,7 @@ export function apply(ctx, config) {
       writeFileSync(join(legacy.dir, GRAPH_LEGACY_SETTINGS_MARKER), `${new Date().toISOString()} ${trace}\n`);
     } catch { /* 标记写不进去：只是下次启动再判定一遍（值幂等 ⇒ 无重复写入） */ }
   };
+  let registerGraphSkills = () => {};
   const setupGraphSettings = async () => {
     const z = resolveSchemastery();
     if (typeof ctx.inject !== "function") return; // 无 inject 的上下文（如部分 mock）降级
@@ -1530,6 +2162,7 @@ export function apply(ctx, config) {
             base: { ...GRAPH_SETTINGS_DEFAULTS },
           });
           sctx.effect(() => () => { graphSettingsScope = null; });
+          try { registerGraphSkills(); } catch { /* 静默 */ }
           return;
         } catch (e) {
           const reason = `register: ${e?.message ?? e}`;
@@ -1548,6 +2181,15 @@ export function apply(ctx, config) {
         }
         graphSettingsScope = { get: () => readGraphSettingsFromForms(svc) };
         sctx.effect(() => () => { graphSettingsScope = null; });
+        try { registerGraphSkills(); } catch { /* 静默 */ }
+        // 监听设置文档热更新（如在线切换语言/配置），实时重新注册对应语言的 skills
+        if (typeof sctx.on === "function") {
+          try {
+            sctx.on("settings/document-updated", () => {
+              try { registerGraphSkills(); } catch { /* 静默 */ }
+            });
+          } catch { /* 事件监听失败静默 */ }
+        }
         // 迁移失败不阻断（读取侧已有同源只读兜底），故不 await、只兜住异常。
         if (legacyGraphSettings) void persistLegacyGraphSettings(svc).catch(() => {});
         return;
@@ -1742,7 +2384,9 @@ export function apply(ctx, config) {
    *  返回 `null` = 通过；否则为可读诊断文本 ⇒ **调用方不得派发**（不启动能力残缺的子代理，
    *  也不让 dsh-tools 的 `names unknown global tool` 内部错误原样外泄）。 */
   const capabilityBlock = (rootForWrite, { goal, role, mode, agentScope, label }) => {
-    const diag = diagnoseDispatchCapability(role, mode, toolCapabilityFor(agentScope));
+    // g-480：必需工具清单按**本 board root 的模块开关**自适应（模块关 ⇒ 其受管工具不再算必需，
+    // 角色随模块自适应而**不再被拒派发**）；宿主真缺工具（探针 false）的 fail-closed 语义不变。
+    const diag = diagnoseDispatchCapability(role, mode, toolCapabilityFor(agentScope), readModuleSwitchesForRoot(rootForWrite));
     if (diag.ok) return null;
     try {
       appendDispatchCapabilityMissing(rootForWrite, {
@@ -1786,7 +2430,7 @@ export function apply(ctx, config) {
     // g-473：能力自检（缺必需工具则不派发；summarizer 无 shell 槽位，白名单缺 web_* 时静默剔除）
     const summarizerCapBlock = capabilityBlock(root, { goal, role: "summarizer", mode: opts.mode, agentScope: parent, label: `${SUMMARIZER_LABEL_PREFIX}${goal}` });
     if (summarizerCapBlock) return { childId: null, error: summarizerCapBlock, digest };
-    const toolFilter = toolFilterForRole("summarizer", opts.mode, toolCapabilityFor(parent));
+    const toolFilter = toolFilterForRole("summarizer", opts.mode, toolCapabilityFor(parent), readModuleSwitchesForRoot(root));
     const request = { parent, prompt: text(prompt), ...(toolFilter ? { toolFilter } : {}) };
     const agentOptions = {};
     if (eff.provider) agentOptions.provider = eff.provider;
@@ -2118,8 +2762,10 @@ export function apply(ctx, config) {
       // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
       // g-390：**小节标题是插件内置文本**，按 promptLanguage 本地化；正文 p 是用户材料，逐字不动。
       // g-440：Agent Teams 最小契约——**默认 off**。off 时第四个实参为 null ⇒ 与 g-440 之前逐字一致
-      //（diff=0）；on 时才把 discipline 资产里定界的契约段追加进**同一**「子代理补充提示词」槽位
-      //（不新造提示词拼装通道）。降级是**诚实**的：资产缺契约块 / 宿主不支持扇出 / 已知深度 < 2
+      //（diff=0）；on 时才把**独立契约资产**里定界的契约段追加进**同一**「子代理补充提示词」槽位
+      //（不新造提示词拼装通道）。g-496：契约正文真源 = `prompts/agent-teams-contract.<lang>.md`
+      // （从 discipline 迁出，主管每 turn 注入面不再常驻该段；抽取函数与门控逻辑一字未动）。
+      // 降级是**诚实**的：资产缺契约块 / 宿主不支持扇出 / 已知深度 < 2
       // ⇒ 不注入且不报错；harness 未暴露「扇出能力 / 子代理深度」查询 ⇒ 如实传 null（未知），
       // 既不伪称支持也不伪称不支持，深度 < 2 的降级由执行者按契约文本在结果中如实登记。
       const teamsContract = (() => {
@@ -2131,7 +2777,7 @@ export function apply(ctx, config) {
         }
         const decision = resolveAgentTeamsInjection({
           enabled,
-          contract: extractAgentTeamsContract(readPromptAsset("discipline", promptLanguage)),
+          contract: extractAgentTeamsContract(readPromptAsset("agent-teams-contract", promptLanguage)),
           supportsFanout: null,
           subagentDepth: null,
         });
@@ -2290,7 +2936,7 @@ export function apply(ctx, config) {
 
     if (subagents && parentAgent && availableProvider) {
       try {
-        const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap);
+        const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap, readModuleSwitchesForRoot(root));
         const request = {
           parent: parentAgent,
           prompt: text(prompt),
@@ -2641,7 +3287,7 @@ export function apply(ctx, config) {
       if (!providerName) {
         throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
       }
-      const toolFilter = toolFilterForRole("reviewer", effMode, reviewerToolCap);
+      const toolFilter = toolFilterForRole("reviewer", effMode, reviewerToolCap, readModuleSwitchesForRoot(root));
       const request = {
         parent: parentAgent,
         prompt: text(prompt),
@@ -2936,7 +3582,7 @@ export function apply(ctx, config) {
       // 写入前用 core 的唯一 DFS 做替代环探测（host 侧不另造环检测实现）。
       def: {
         name: "graph_set_relation",
-        description: "标记/解除目标间关系（可增可删）：action=add|remove；type 限 supersedes（取代）/amends（调整）/extends（补充）/related（相关）；target 为对端目标 id。复用 g-379 既有关系写入路径，只写 goal frontmatter 的 meta.relations；幂等（重复调用不重复写事件、不改字节）。depends_on 请改用 meta.depends_on（本工具拒绝写入 relations）；会形成替代环的标记被拒绝。",
+        description: "标记/解除目标间关系：action=add|remove；type 限 supersedes/amends/extends/related；target 为对端目标 id。只写 goal frontmatter 的 meta.relations，幂等。depends_on 请改用 meta.depends_on（本工具拒绝）；会形成替代环的标记被拒绝。",
         parameters: params({ goal: str, action: str, type: str, target: str }, ["goal", "action", "type", "target"]),
       },
       run: (a, ex) => {
@@ -2993,7 +3639,7 @@ export function apply(ctx, config) {
       // 主管自己做完成摘要 ⇒ 与 F1 自动截获**同一写入器**（同格式/同路径/同覆盖策略），零 LLM 调用。
       def: {
         name: "graph_write_results",
-        description: "写入一次 attempt 的完成摘要（<goalDir>/results-att-<attempt>.md）：供主管/用户在**无子代理**的轻量改动（chore/patch、一两行修改、文档或看板数据修订）后主动补写结果，避免结果真空。与自动截获同一写入器/同一格式/同一路径；文件头标注 source（默认 manual）与写入者。零 LLM 调用（纯文本落盘）。同一 attempt 重复调用 = last-wins 覆盖同一文件（每次写入都追加 attempt.results_written 事件）。",
+        description: "写入一次 attempt 的完成摘要（<goalDir>/results-att-<attempt>.md）：主管/用户在**无子代理**的轻量改动（chore/patch、文档或看板数据修订）后主动补写，避免结果真空。与自动截获同一写入器/路径/格式，零 LLM（纯文本落盘），文件头标注 source（默认 manual）与写入者；重复调用为 last-wins 覆盖。attempt 必须真实存在。",
         parameters: params({ goal: str, attempt: str, text: str, source: str, actor: str }, ["goal", "attempt", "text"]),
       },
       run: (a, ex) => {
@@ -3024,7 +3670,7 @@ export function apply(ctx, config) {
       // g-374 F2/F3：从目标历史零 LLM 重写 results.md（旧版归档）+ 批量。UI「更新摘要」按钮走同一实现。
       def: {
         name: "graph_refresh_results",
-        description: "重写 <goalDir>/results.md（规范化完成摘要）；旧版先归档为 results-archive-YYYYMMDDTHHMMSS.md（保留历史，不删不覆盖），每次调用都重写 + 归档；写入器**自身零 LLM 调用**（LLM 正文由专用 summarizer 子代理产出后经 content 传入）。四种用法：①`llm:true` ⇒ 派发**专用摘要子代理**（role=summarizer）结合目标详情写「具体改了什么 / 影响面 / 值得注意」，落盘后 `source=llm`；以 `source_hash`（历史指纹）为缓存键，历史未变且已有 llm 摘要 ⇒ 直接命中缓存不再调用（`force:true` 强制重来）；子代理不可用/失败 ⇒ 自动降级为机器摘要并标注 `source=deterministic`；②省略 content/llm ⇒ 由目标历史（评论 / 最近指令 / attempt 与其结果文件 / 事件流 + 目标描述要点）**零 LLM 拼装**兜底正文；③传 content ⇒ 采用调用方产出的正文（source=manual：人工手写）；④支持单目标（goal）与批量（goals[]），批量逐目标报告 written/skipped/failed/pending/cached，单目标失败不中断整批。目标无评论/无指令/无 attempt 且无 content 时优雅跳过（不写空文件）。**主管自做 chore/patch 等无子代理改动后应主动调用；要 LLM 详情级摘要时传 llm:true**。",
+        description: "重写 <goalDir>/results.md 完成摘要；旧版先归档为 results-archive-*.md（保留历史，不删不覆盖）。写入器自身零 LLM：①`llm:true` 派 summarizer 子代理写正文（source=llm，按 source_hash 缓存，`force:true` 强制重来，失败降级 source=deterministic）；②省略 content/llm 则零 LLM 从目标历史拼装；③传 content 用调用方正文（source=manual）；④支持单目标 goal 或批量 goals[]。**主管自做 chore/patch 等无子代理改动后应主动调用**。细则见 help(topic=\"usage\")。",
         parameters: params({ goal: str, goals: strArr, content: str, source: str, llm: { type: "boolean" }, force: { type: "boolean" }, actor: str }, []),
       },
       run: (a, ex) => {
@@ -3144,15 +3790,50 @@ export function apply(ctx, config) {
       },
     },
     {
-      // g-118：dsh-graph help 命令——输出使用说明 + supervisor 接管（claim）指引。
+      // g-118：dsh-graph help 命令——输出**功能模块清单 + 当前开关状态** + supervisor 接管（claim）指引。
       // 与引导提示词（systemPrompt section GUIDE_HINT）呼应：提示词告知 help 命令存在，
-      // help 给出完整工具清单与换会话步骤。不含主管守则（完整守则走 skill 显式调用）。
+      // help 给出模块清单与换会话步骤。不含主管守则（完整守则走 skill 显式调用）。
+      // g-493：新增**可选** topic —— 让使用说明/图工程点题章节可被按名查询（也是可被守卫断言
+      // 的机械真源）。省略 topic 时**逐字返回整份资产**（g-347 的端到端断言不变）。
+      // g-495（负责人 2026-10-13 裁定）：help 改为 **agent 面向的渐进式披露** ——
+      //   · 删去 51 条逐工具参数速查（与 harness 注入的工具定义重复），只留①一句用途
+      //     ②功能模块清单（名/作用/**当前开关状态**）③接管指引；
+      //   · `topic` 的工具名分支**删除**（选 (c)：schema 注入已提供足够信息，没必要按工具名查），
+      //     `topic` 只认 `usage` / `graph_engineering` / **模块名**；未知名（含工具名）⇒ 全文 + `found=false`；
+      //   · 「当前开启哪些模块」取**既有只读投影** `readModuleSwitchesForRoot`（g-480 的
+      //     `resolveModuleSwitches` 单一真源），**不**另接 GUI 用的 `moduleSwitchPayload`；
+      //     读失败一律按**全开**（fail-safe，与 g-480 同口径）。
+      // 本工具仍是**只读**：开关状态只影响渲染文本，不写配置、不改注册面（51 个工具照常注册）。
       def: {
         name: "graph_help",
-        description: "输出 dsh-graph 使用说明与 supervisor 接管（claim）指引：graph_* 工具清单、graph_handoff/graph_claim_supervisor 换会话步骤。",
-        parameters: params({}, []),
+        description: "输出 dsh-graph 功能模块清单（各模块作用 + 当前开关状态）与 supervisor 接管（claim）指引（graph_handoff/graph_claim_supervisor 换会话步骤）；可选 topic 查询单个主题（usage / graph_engineering / 某个模块名）。topic=usage 返回完整使用说明（含工具细则、签名、证据分层），不只是文首一句。",
+        parameters: params({ topic: str }, []),
       },
-      run: () => ({ help: localizedPrompt("help", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }),
+      run: (a, ex) => {
+        const language = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
+        const raw = localizedPrompt("help", language);
+        // g-495：把资产里的 `{moduleId}` 占位符渲染成当前生效开关（开 / 关）。
+        // root 解析与其它工具同源（`rootFor`）；解析/读取失败一律按**全开** —— 与
+        // `readModuleSwitchesForRoot` 的 fail-safe 同口径，绝不因读配置异常谎报「关闭」。
+        let switches = null;
+        try { switches = readModuleSwitchesForRoot(rootFor(ex)); } catch { switches = null; }
+        const topic = typeof a?.topic === "string" ? a.topic.trim() : "";
+        if (!topic) return { help: renderHelpModules(raw, switches, language) };
+        // 主题抽取在**渲染前**的资产上做：模块行靠 `{moduleId}` 稳定标记定位，
+        // 渲染后该标记已被替换成「开启/关闭」而无法定位 ⇒ 顺序不可颠倒。
+        // g-495 返工（裁决·出路 1）：点题段已迁到按需面 `usage.*.md` ⇒ 把 usage 正文作为
+        // **追加查找面**传入。两处 topic 的内存各自独立（见上）：
+        //  · `graph_engineering`：help 正文优先、usage 兜底（`helpTopicText` 的 faces 顺序）；
+        //  · `usage`：**只用** usage 追加面全文（att-005 修死链；不看 help 首句）。
+        // g-495 返工项 A（**消除 fail-open**）：这里**不得** catch。`localizedPrompt` 在资产缺失/
+        // 不可读时抛错（见 `requirePromptAsset`），若在此吞掉就等价于把「资产不可读」折叠成
+        // 「该面不存在」⇒ `topic=graph_engineering` 会静默返回 `found:false`，把真实故障伪装成
+        // 「没有这个主题」。故让异常**直接上抛**，故障显性可观察（选项 (a)，最小实现）。
+        const usageRaw = localizedPrompt("usage", language);
+        const topicText = helpTopicText(raw, topic, [usageRaw]);
+        if (topicText === null) return { help: renderHelpModules(raw, switches, language), topic, found: false };
+        return { help: renderHelpModules(topicText, switches, language), topic, found: true };
+      },
     },
     {
       def: {
@@ -3271,7 +3952,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_memory_add",
-        description: "新增持久事实/记忆。\n【scope 决策铁律】：\n1. 默认法则：一切自发总结、技术经验、方案决策 100% 默认 scope=\"on_demand\"（按需记忆，不占常驻 Prompt）；\n2. 常驻特权法则：仅在「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」时，才允许设 scope=\"standing\"（硬上限 200 字符，超过拒绝；普通记忆上限 1000 字符）。\n【source_ref 幂等迁移】：可选 source_ref 是「迁移来源键」（如旧 memory/long-term/*.md 路径 + 单元标识）。提供它时同来源重复 add 幂等——同输入重试返回原 ID 且不重复追加事件；已被 replace 的条目保留后续修订、不覆盖；已被 remove 的条目明确跳过、不复活；同来源不同输入属冲突、不自动替换。引擎不读旧文档、不调 LLM、不截断拆条：摘要须由主管显式确认后作为 text 传入。kind=\"user\" 时幂等键按 owner 隔离：他人同一 source_ref 一律按无命中处理（该 actor 写入自己的新条目），绝不回显他人条目 ID 或正文。事件先行。",
+        description: "新增持久事实/记忆。scope 默认 on_demand（按需，不占常驻 Prompt）；仅「人类明确要求记为常驻/铁律」或「涉及工作区隔离/不可违背的安全禁令」才可设 standing（硬上限 200 字符，普通记忆上限 1000 字符）。可选 source_ref 是迁移来源键：提供时同来源重复 add 幂等（返回原 ID、不重复记事件）。",
         parameters: params({
           kind: { type: "string", enum: ["project", "user"] },
           scope: { type: "string", enum: ["standing", "on_demand"] },
@@ -3391,7 +4072,10 @@ export function apply(ctx, config) {
         // g-202：传 card 时统一走上下文收集派发，不创建 Goal execution attempt。
         // 先生成 prompt（同时校验 goal/card），再尝试启动；只有成功启动后才绑定卡片。
         if (a.card !== undefined && a.card !== null) {
-          const fullPrompt = formatCollectPrompt(r, a.goal, a.card, a.attempt_brief, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+          // g-480：collector 的**派发提示词面**随模块自适应——`attachments` 关闭时按行剔除
+          // `graph_store_attachment` 的提及（`stripModuleToolMentions` 无可剔时返回**同一字符串**
+          // ⇒ 未配置/全开路径逐字节不变）。注意只做**提示词投影**，`@att/` 既有资产不受影响（判据 5）。
+          const fullPrompt = stripModuleToolMentions(formatCollectPrompt(r, a.goal, a.card, a.attempt_brief, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)), readModuleSwitchesForRoot(r).disabledTools);
           const eff = resolveModelRoute(
             { provider: a.provider, model: a.model, reasoning_effort: a.reasoning_effort },
             readExecutorModel(r),
@@ -3424,7 +4108,7 @@ export function apply(ctx, config) {
             result.child_error = collectorCapBlock;
             return result;
           }
-          const collectToolFilter = toolFilterForRole("collector", a.mode, toolCapabilityFor(ex.agent));
+          const collectToolFilter = toolFilterForRole("collector", a.mode, toolCapabilityFor(ex.agent), readModuleSwitchesForRoot(r));
             const request = {
               parent: ex.agent,
               prompt: text(fullPrompt),
@@ -3513,7 +4197,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_start_review",
-        description: "为**既有执行 attempt** 派发独立评审子代理（reviewer，只读审查）。评审是附属记录：不新建 attempt、不迁移目标状态、不覆盖作者 child_id 与 results-att-*.md；复用作者既有工作树（不新建评审树）；结论按真实 reviewer child 身份在结束时独立落盘（<goalDir>/reviews/<review_id>.md）。不注入作者对话/结果/自报 PASS/评论/返工叙事。同一 attempt + 同一候选重复调用为幂等（不重复派发）。reviewer 身份不得自行 accept/force/fast_track/delivered。",
+        description: "为**既有执行 attempt** 派发独立评审子代理（reviewer，只读审查）。评审是附属记录：不新建 attempt、不迁移状态、不覆盖作者 child_id 与结果文件；复用作者工作树；结论落盘 <goalDir>/reviews/<review_id>.md。同一 attempt + 同一候选幂等。reviewer 不得自行 accept/force/fast_track/delivered。",
         parameters: params({
           goal: str,
           attempt: str,
@@ -3557,7 +4241,7 @@ export function apply(ctx, config) {
         // 注意（g-437 P3-b 措辞纠正）：注册处在 `...t.def` **之后**用 sT 取 i18n 字典值覆盖 `description`
         // ⇒ **生效面是 lib/server-i18n.js 的 tool.graph_resolve_accept（zh/en）**，本字面量只是**同步副本**
         // （可读性/兜底）。改文案必须两处同改；prompt-i18n-parity 要求「每个注册工具恰有一把 tool.* 键」⇒ 键不可删。
-        description: "主管裁决目标的接受请求（review.requested 出现后调用）。verdict=accept 通过，verdict=object 提出异议；force=true 强制接受并记录理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict）且 machine_report 四项门禁全绿——① tests（exit_code=0 且 fail=0）与 ② typecheck（exit_code=0）是**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）；③ 变更规模（产品代码增删 <150 行且无未跟踪新文件）由**引擎 Git 自算**：machine_report.attempt 必填（显式绑定执行树），引擎在该 attempt 的实际工作树采集真源并与报告逐项对账（不一致、未提交 tracked 改动、工作树缺失/已删、git 或基线不可解析一律拒绝），`machine_report.baseline_commit` 必填且必须**等于**该 attempt 的引擎锚点（派发响应回传的 `baseline_commit`；隔离 attempt 亦可与 `worktree.head` 对照，短 SHA 亦可）——锚点只取自 attempt 记录、**绝不取自报告**，缺失或不等即拒绝（错误文案给出「显式 baseline 重新派发该 attempt」或「改走普通 accept」两条出路）；且与策略层 M2 用**同一条 150 行阈值**（≥150 行先被策略层升级 strict）；④ 全部判据以 ✅已验 结尾由引擎自算。任一不满足即拒绝且零副作用，通过则记 review.fast_track 事件（含证据分层与 Git 真源）。",
+        description: "主管裁决目标的接受请求（review.requested 出现后调用）：verdict=accept 通过 / object 提出异议；force=true 强制接受并记理由。fast_track=true 走机器快速放行：须策略判定为 auto（patch/chore 派生；契约变更/跨 3 个顶层区域/≥150 行产品代码/显式 strict_required 一律升级 strict），且 ①tests（exit_code=0 且 fail=0）②typecheck（exit_code=0）为**调用方证据**（引擎不复跑，须留痕 command/collected_at/source）、③变更规模由**引擎 Git 自算**（machine_report.attempt 必填）、④全部判据以 ✅已验 结尾，四项全绿方可。详见 i18n tool.graph_resolve_accept。",
         parameters: params({
           goal: str,
           verdict: { type: "string", enum: ["accept", "object"] },
@@ -3653,7 +4337,7 @@ export function apply(ctx, config) {
       // 遗留绑定缺失 binding_token 时支持显式声明 legacy: true 并给出 reason 进行受控解绑。
       def: {
         name: "graph_unbind_goal_child",
-        description: "从目标解绑执行子代理（安全 detach）：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；仅授权主管或目标 owner 可执行；子代理不能自我解绑。解绑只清理绑定（attempt/事件/日志保留可审计），解绑后目标可暂缓/转移/重新派发；子代理仍运行（live registry）或状态不可确认时拒绝；token 未知/过期/并发冲突拒绝且不改数据；重复解绑幂等。对早期缺失 binding_token 的遗留绑定，支持显式声明 legacy: true 并给出 reason 进行受控解绑（写 attempt.detached 事件；若存在 token 则禁止用 legacy 绕过）。",
+        description: "从目标安全解绑执行子代理：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 定位；仅授权主管或目标 owner 可执行（子代理不能自我解绑）。只清理绑定，attempt/事件/日志保留可审计；幂等。遗留缺 token 的绑定可显式 legacy: true 并给 reason 受控解绑（若存在 token 则禁止绕过）。",
         parameters: params(
           { goal: str, attempt: str, child_id: str, token: str, reason: str, legacy: { type: "boolean" } },
           ["goal"],
@@ -3712,12 +4396,21 @@ export function apply(ctx, config) {
         return losslessJson({
           config,
           config_path: join(r, "project.yaml"),
+          // g-480：**宿主真裁剪能力**如实下发（与监听器注册、GUI 提示同一判定，apply 期一次探测）：
+          // true = 本版本 DSH 同时有 `agent/created` 与 `tools.restrict` ⇒ 模块开关真裁剪生效；
+          // false = 不支持 ⇒ 模块开关只记录配置、不改变工具面（GUI「模块」页签显示一行提示）。
+          trim_supported: moduleTrimSupported,
           // g-442：按当前项目目录结构的**只读**建议（绝不自动写入 project.yaml）
           review_suggested_regions: suggestedReviewRegions(r),
           schema_hints: {
             "supervisor.automation": {
               keys: ["scope_planning", "integration_decision", "rework", "memory_promotion", "skill_proposal", "release"],
               values: ["human", "ai"],
+              // g-490：**未配置时的显示口径来源引用表**（与 `automation_unset_scope` 同一真源
+              // `AUTOMATION_UNSET_SCOPE`）——**不是**解析默认值：只登记「哪两键的动作落在既有某类
+              // 人工 gate 范围内」及其来源；表外键未配置即「保持既有指导」。GUI 据此在未配置项上
+              // 显示「默认：<gate 要求>」并**同屏标注该来源**。
+              unset_scope: AUTOMATION_UNSET_SCOPE,
             },
             "executor.mode": SUBAGENT_MODES,
             // g-440：Agent Teams 最小契约开关（负责人资格判定；默认未配置/null = off）
@@ -3728,6 +4421,25 @@ export function apply(ctx, config) {
             },
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
+            },
+            // g-480：harness 模块可选开关（workspace 级单层）。未配置/null = **开启**（与改造前一致）；
+            // `tools` 与该模块绑定的受管工具名同源下发（MODULE_TOOL_NAMES 是唯一映射表，宿主不另抄）。
+            // `scope` = "workspace"，`prompt_face` 说明该模块在提示词面的裁剪位置。
+            // `roles` = 该模块关闭时**档案会自适应**的子代理角色（由 `rolesAdaptedByModule` 从真实
+            // 角色档案 diff 推出，不是第二份副本）——空数组 = 只影响工具面、无角色档案被裁。
+            "modules": {
+              type: "boolean",
+              scope: "workspace",
+              default: true,
+              values: [true, false, null],
+              keys: [...HARNESS_MODULE_IDS],
+              per_module: Object.fromEntries(
+                HARNESS_MODULE_IDS.map((id) => [id, {
+                  tools: [...MODULE_TOOL_NAMES[id]],
+                  prompt_face: MODULE_PROMPT_FACE[id],
+                  roles: rolesAdaptedByModule(id),
+                }]),
+              ),
             },
             // g-311/g-435：顶层 review 配置提示
             "review.policy": {
@@ -3751,7 +4463,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_update_settings",
         description: sT("tool.graph_update_settings"),
-        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、prompt_overrides 等" } }, ["patch"]),
+        parameters: params({ patch: { type: "object", description: "配置 patch（部分字段，未传字段保持不变）：可包含 executor、defaults、supervisor.automation、supervisor.agent_teams、modules、prompt_overrides 等" } }, ["patch"]),
       },
       run: (a, ex) => {
         const r = rootFor(ex);
@@ -3850,7 +4562,7 @@ export function apply(ctx, config) {
       // g-473：能力自检（缺必需工具则不派发；error 非空即未派发，与既有 provider 失败同口径）
       const roleOverrideCapBlock = capabilityBlock(rootForReq, { goal: null, role: effRole, mode: overrides.mode, agentScope: parent, label: `${label}/${effRole}` });
       if (roleOverrideCapBlock) return { childId: null, parentSessionId: null, error: roleOverrideCapBlock };
-      const roleToolFilter = toolFilterForRole(effRole, overrides.mode, toolCapabilityFor(parent));
+      const roleToolFilter = toolFilterForRole(effRole, overrides.mode, toolCapabilityFor(parent), readModuleSwitchesForRoot(rootForReq));
       const request = {
         parent,
         prompt: [{ type: "text", text: promptText }],
@@ -4725,6 +5437,66 @@ export function apply(ctx, config) {
         }
       },
     },
+    // g-481：使用说明弹窗的只读服务（提示词资产 md）。本插件第二条非 JSON 路由。
+    // prefix 路由：尾段由 resolveHelpAssetRequest 按白名单裁决（见模块顶部常量）。
+    // 只读 `readFileSync`，没有任何写路径；命中即内联返回。
+    // g-496：路径取自**冻结注册表**（`helpAssetRelativePath`）—— g-496 起两层提示词资产已由
+    // build.sh 合并进包内单一 `prompts/`，故注册路径统一为 `prompts/<name>`。**不拼接请求内容**，
+    // 路径只能来自注册表（未注册 ⇒ 白名单已在上一行拦掉 ⇒ 此处必非 null）。
+    {
+      kind: "prefix",
+      path: HELP_ASSET_ROUTE,
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "method not allowed" });
+          const decision = resolveHelpAssetRequest(req.url);
+          if (decision.status !== 200) return json(res, decision.status, { error: decision.reason });
+          const relativePath = helpAssetRelativePath(decision.name);
+          if (!relativePath) return json(res, 404, { error: "unknown-asset" });
+          let body;
+          try {
+            body = readFileSync(new URL(`./${relativePath}`, import.meta.url));
+          } catch {
+            // 白名单名合法但产物未随包发布（构建漏拷）⇒ 404，绝不回落到别的路径。
+            return json(res, 404, { error: "help asset not packaged" });
+          }
+          res.writeHead(200, {
+            "content-type": "text/markdown; charset=utf-8",
+            "content-length": String(body.length),
+            "cache-control": "no-cache",
+            "x-content-type-options": "nosniff",
+          });
+          if (req.method === "HEAD") { res.end(); return; }
+          res.end(body);
+        } catch (e) {
+          json(res, 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    // g-481：帮助目录（工具清单 + 提示词资产清单）—— 注册真源投影，客户端零硬编码。
+    {
+      path: HELP_CATALOG_ROUTE,
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          // 工具名从注册真源 `tools` 枚举（不硬编码），分类/简称/说明全部由 server-i18n 投影（zh/en 成对）。
+          const names = tools.map((t) => t.def.name);
+          return json(res, 200, {
+            prompt_language: resolvePromptLanguage(readGraphSettings().promptLanguage, ctx),
+            prompts: helpPromptAssetEntries(),
+            // g-498：提示词资产的语义分类投影（顺序 + zh/en 标签）——客户端分组只依据这一份
+            // 注册真源投影，不另抄文件清单；条目上的 `category` 为空串即「未分类」（仍须可见）。
+            prompt_categories: helpPromptCategoryEntries(),
+            categories: helpToolCategoryEntries(),
+            tools: helpToolCatalogEntries(names),
+            // g-489 结构守卫的**运行期**投影：分类表 ≡ 注册真源被破坏时非空，前端据此把工具清单页签判红。
+            taxonomy_problems: helpToolTaxonomyProblems(names),
+          });
+        } catch (e) {
+          return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
     {
       path: "/api/dsh-graph/attachments",
       handler: (req, res) => {
@@ -4843,7 +5615,8 @@ export function apply(ctx, config) {
           const effRoute = (effProvider || effModel) ? `${effProvider ?? "继承"}/${effModel ?? "继承"}` : null;
           // g-183 返工 F：先完整校验（resolveCard 成员关系/backlog/卡状态权限）生成提示词，
           //  再创建 attempt/子代理——校验失败不得留下 attempt/事件副作用。
-          const fullPrompt = formatCollectPrompt(rRoot, goal, card, prompt, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+          // g-480：同工具入口口径——collector 派发提示词面随模块自适应（attachments 关 ⇒ 剔除附件工具提及）
+          const fullPrompt = stripModuleToolMentions(formatCollectPrompt(rRoot, goal, card, prompt, resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)), readModuleSwitchesForRoot(rRoot).disabledTools);
           // g-388：spawn 前准入——共享卡已在 collecting 时直接拒绝，绝不启动 child（与工具入口同一判定）。
           const admissionErr = collectAdmissionBlock(rRoot, goal, card);
           if (admissionErr) {
@@ -5068,13 +5841,15 @@ export function apply(ctx, config) {
               return json(res, 400, { error: resp.error, details: resp.details });
             }
             writeProjectConfig(r, body, "human:gui");
-            return json(res, 200, { ok: true, config: readProjectConfig(r), review_suggested_regions: suggestedReviewRegions(r) });
+            return json(res, 200, { ok: true, config: readProjectConfig(r), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(r), automation_unset_scope: AUTOMATION_UNSET_SCOPE });
           }
           if (req.method === "GET") {
             // att-002：下发当前 canonical workspace 的 .dsh-graph/project.yaml 绝对路径
             //（客户端只消费服务端路径，禁止自行拼接 graphRoot）
             const meta = rootForReqMeta(req);
-            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), review_suggested_regions: suggestedReviewRegions(meta.root) });
+            // g-480：`trim_supported` = 本版本宿主是否支持真裁剪（见 apply 期能力探测注释）。
+            // GUI 据此在「模块」页签如实显示一行提示（不支持时）；支持时**不渲染该行**。
+            return json(res, 200, { ...readProjectConfig(meta.root), configFile: join(meta.root, "project.yaml"), trim_supported: moduleTrimSupported, review_suggested_regions: suggestedReviewRegions(meta.root), automation_unset_scope: AUTOMATION_UNSET_SCOPE });
           }
           return json(res, 405, { error: "method not allowed" });
         } catch (e) {
@@ -5527,11 +6302,37 @@ export function apply(ctx, config) {
     }
     // 无 sandboxPolicy 且无显式绝对 root：推迟 init，
     // 等工具/REST 端点有 session/request workspace 时再 init。
-    // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
-    const skills = ctx.get?.('skills');
-    if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: localizedPrompt("supervisor-guide", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }); } catch { /* 静默 */ } }
-    // g-113：普通 agent 的 dsh-graph 使用指引（新会话开箱即用）
-    if (skills) { try { skills.register({ name: 'dsh-graph', description: 'dsh-graph 目标看板：用 graph_* 工具管理目标/判据/卡片/执行', source: 'dsh-graph-host', content: localizedPrompt("usage", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }); } catch { /* 静默 */ } }
+    // 注册 supervisor 工作指南与使用指引为运行时技能（可选服务，缺失时静默）。
+    // 在 apply 期初次注册（确保同步上下文有值）；若 settings 就绪且 promptLanguage 发生变化，自动更新注册。
+    let unregisterSkills = [];
+    registerGraphSkills = () => {
+      const skills = ctx.get?.('skills');
+      if (!skills) return;
+      for (const unreg of unregisterSkills) {
+        try { unreg?.(); } catch { /* 静默 */ }
+      }
+      unregisterSkills = [];
+      const lang = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
+      try {
+        const unreg = skills.register({
+          name: 'dsh-graph-supervisor',
+          description: lang === "en" ? 'dsh-graph Supervisor Agent work guide' : 'dsh-graph 主管 Agent 工作指南',
+          source: 'dsh-graph-host',
+          content: localizedPrompt("supervisor-guide", lang),
+        });
+        if (typeof unreg === "function") unregisterSkills.push(unreg);
+      } catch { /* 静默 */ }
+      try {
+        const unreg = skills.register({
+          name: 'dsh-graph',
+          description: lang === "en" ? 'dsh-graph goal board: manage goals, criteria, cards, execution' : 'dsh-graph 目标看板：用 graph_* 工具管理目标/判据/卡片/执行',
+          source: 'dsh-graph-host',
+          content: localizedPrompt("usage", lang),
+        });
+        if (typeof unreg === "function") unregisterSkills.push(unreg);
+      } catch { /* 静默 */ }
+    };
+    registerGraphSkills();
 
     const toolLanguage = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
     const disposers = tools.map((t) =>
@@ -5551,6 +6352,73 @@ export function apply(ctx, config) {
         const off = ctx.on("subagent/end", captureAttemptResults);
         if (typeof off === "function") disposers.push(off);
       } catch { /* 事件名不被宿主支持 ⇒ 静默（特性探测） */ }
+    }
+
+    // ==== g-480：模块开关的**工具面真裁剪** ====
+    // 目标：关闭某模块后，该模块的受管工具**从模型可见的工具清单里真正消失**（不是 UI 隐藏）。
+    //
+    // 机制（g-482 实证，已在真实 GUI 会话上量到 82→81）：
+    //   `ctx.on("agent/created", ({ agent }) => agent.ctx.tools.restrict({ deny }))`
+    //   —— `restrict` 的语义是「限制**调用 agent scope** 继承到的 global 工具」。它**不沿 scope 链继承**
+    //   ⇒ 本插件在插件层注册一个 `agent/created` 监听即可覆盖**宿主创建的每一个会话**（含主管会话与
+    //   `dsh-subagent` 派发的每个子代理会话，因为后者也是经 `agents.create({ setup })` 建的 agent）。
+    //   量测口 = `ctx.tools.schemas(agent)`（criterion 2 的可验证面）。
+    //
+    // 三条硬约束（缺一即事故）：
+    //   ① **作用域过滤**：deny 名单里出现**祖先层（agent 平面）自有**的工具名时，restrict 会抛
+    //      `unknown global tool`；而 setup 抛错会让**整个会话创建回滚**。因此候选名必须逐个用
+    //      `tools.get(name)`（**全局视图**）与 `tools.get(name, agent)`（**该 agent 视图**）双向确认：
+    //      只有「全局存在且对该 agent 可见」的名字才放进 deny。作用域自有注册永不出现在全局视图 ⇒ 被排除。
+    //   ② **特性探测 + 静默降级**：旧宿主（或测试夹具）没有 `ctx.on` / `tools.restrict` ⇒ **不注册监听**、
+    //      不抛错、不改变任何东西（51 个工具照常注册可见）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。
+    //   ③ **注册期无条件**：apply 期 51 个 `graph_*` 工具**照常全部注册**（判据 4 的 51 红线），
+    //      裁剪只发生在**会话可见面**，绝不写成「按配置跳过注册」——否则工具计数会随配置漂移。
+    //
+    // 开关读的是**会话自己 workspace** 的 project.yaml（per-session 读，跨 workspace 不串）。
+    //   ④ **workspace 口径唯一**：一律 `agent.session.header.cwd` —— 与工具侧 `sessionWorkspace()`
+    //      （:1440）以及三个 section 的读法**同源**（g-113 会话 workspace 跟随）。无 header.cwd ⇒
+    //      **不裁剪**，也不兜底 `sandboxPolicy.workspaceRoot` / `process.cwd()`：三个 section 在渲染期
+    //      同样只认 header.cwd，兜底会造成「工具面裁了、提示词面没裁」的新分歧。实测（真机 e2e）：
+    //      `dsh-subagent` 的 `cwd` 参数只改**有效工作目录**，不改子会话 header.cwd ⇒ 子会话的开关与
+    //      其 graph_* 工具落在**同一个** board root，二者一致。
+    if (moduleTrimSupported) {
+      try {
+        const off = ctx.on("agent/created", (info) => {
+          try {
+            const agent = info?.agent ?? (info?.ctx?.tools ? info : null);
+            const at = agent?.ctx?.tools;
+            if (!agent || !at || typeof at.restrict !== "function") return;
+            // 会话 workspace：优先 session.header.cwd（其它 section 同源口径）
+            const cwd = agent?.session?.header?.cwd;
+            if (!cwd) return;
+            let switches = null;
+            try {
+              switches = resolveModuleSwitches(readProjectConfig(resolveCanonicalRoot(config, cwd).root));
+            } catch {
+              return; // 配置不可读 ⇒ 不裁剪（fail-safe：与未配置全开一致）
+            }
+            if (!switches.disabledTools.length) return; // 全开：一次 restrict 都不调（行为逐字节不变）
+            // 作用域过滤（约束①）：只保留「全局存在 且 对该 agent 可见」的名字
+            const deny = switches.disabledTools.filter((name) => {
+              try {
+                return typeof at.get === "function" && at.get(name) !== undefined && at.get(name, agent) !== undefined;
+              } catch {
+                return false;
+              }
+            });
+            if (!deny.length) return;
+            const dispose = at.restrict({ deny });
+            if (typeof dispose === "function" && typeof agent.ctx?.effect === "function") {
+              // 会话结束即撤销限制（restrict 的 disposer 精确还原，g-482 实证）
+              try { agent.ctx.effect(() => dispose); } catch { /* 无法挂载 ⇒ 由会话销毁兜底 */ }
+            }
+          } catch (e) {
+            // 绝不因裁剪失败影响会话创建（deny 名单已作用域过滤；此处兜底并留痕）
+            process.stderr.write(`[dsh-graph-host] g-480 模块裁剪跳过: ${e?.message ?? e}\n`);
+          }
+        });
+        if (typeof off === "function") disposers.push(off);
+      } catch { /* 事件名/能力不被宿主支持 ⇒ 静默降级（特性探测，51 个工具不受影响） */ }
     }
 
     // g-118：supervisor 守则自动注入（不依赖显式 skill 调用）——
@@ -5593,7 +6461,18 @@ export function apply(ctx, config) {
           name: "dsh-graph-guide-hint",
           order: 10,
           interpolate: false, // g-389：字面量 section（本地化资产），逐字保留、不参与 {{变量}} 插值
-          text: () => localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)),
+          // g-480：按会话 workspace 的模块开关做工具名剔除（无 cwd 时**原样返回**——所有会话仍照常
+          // 注入引导，g-118 的「无 agent/无 session 也渲染」语义不变）。
+          text: (context) => {
+            const hint = localizedPrompt("guide-hint", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx));
+            try {
+              const cwd = context?.agent?.session?.header?.cwd;
+              if (!cwd) return hint;
+              return moduleTrimmedText(resolveCanonicalRoot(config, cwd).root, hint);
+            } catch {
+              return hint;
+            }
+          },
         }));
         // g-238：system prompt 渲染纯读化——section.text 渲染路径绝不 init（不创建目录/文件、
         // 不追加事件、不改变 supervisor 绑定）；初始化仅保留在显式 apply/写操作路径。
@@ -5636,6 +6515,19 @@ export function apply(ctx, config) {
           }
           return out;
         };
+        // g-480：按**当前会话 workspace** 读模块开关（纯读；按 project.yaml 指纹失效缓存 ⇒ 关/开即时
+        // 生效、跨 workspace 不串）。读失败一律按「全开」（`resolveModuleSwitches(null)`）——
+        // 绝不因配置读取异常静默砍掉能力或提示词。
+        const readModuleSwitchesFor = (canonicalRoot) => cachedRender(
+          `mod:${canonicalRoot}`, canonicalRoot, ["project.yaml"],
+          () => {
+            try { return resolveModuleSwitches(readProjectConfig(canonicalRoot)); } catch { return resolveModuleSwitches(null); }
+          },
+        );
+        // 本插件自有 section 的**统一出口**：关闭模块的受管工具名按行剔除（对**动态**记忆正文里的
+        // 提及同样生效）；全开时 `stripModuleToolMentions` 原样返回**同一字符串** ⇒ diff=0。
+        const moduleTrimmedText = (canonicalRoot, text) =>
+          stripModuleToolMentions(text, readModuleSwitchesFor(canonicalRoot).disabledTools);
         // g-131：主管会话每 turn 自动注入简短纪律提醒（仅主管会话）。
         // g-149：使用 resolveCanonicalRoot 确保 worktree 会话也能正确读到主树 project.yaml
         // text(context) 里取 sessionId=context?.agent?.session?.id；
@@ -5666,8 +6558,12 @@ export function apply(ctx, config) {
                 }));
               if (!supConfig || !supConfig.supervisorId || supConfig.supervisorId !== sessionId) return "";
               const language = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
-              return "\n" + localizedPrompt("discipline", language)
-                + renderAutomationGuidance(supConfig.automation, language);
+              // g-480：`automation_prompts` 关闭 ⇒ **不追加**六键自动化指导段（纪律正文原样保留）；
+              // 全开/未配置 ⇒ 拼接方式与改造前逐字相同（diff=0）。
+              const automationOn = readModuleSwitchesFor(canonical.root).switches.automation_prompts.on !== false;
+              return moduleTrimmedText(canonical.root,
+                "\n" + localizedPrompt("discipline", language)
+                + (automationOn ? renderAutomationGuidance(supConfig.automation, language) : ""));
             } catch {
               return "";
             }
@@ -5687,12 +6583,15 @@ export function apply(ctx, config) {
               const cwd = context?.agent?.session?.header?.cwd;
               if (!cwd) return "";
               const canonical = resolveCanonicalRoot(config, cwd);
+              // g-480：`memory` 关闭 ⇒ 常驻记忆段**整段不注入**（不删任何记忆数据；`graph_memory_*`
+              // 工具同时已从模型可选集移除）。全开/未配置 ⇒ 与改造前逐字相同。
+              if (readModuleSwitchesFor(canonical.root).switches.memory.on === false) return "";
               // g-252：此路径**不传 actor**（host 侧此处无可靠会话身份）⇒ recallMemory 会过滤掉
               // 全部 kind:"user" 条目（owner 隔离）：user 常驻记忆在本路径等价「仅按需 recall」，
               // 这是有意语义。若将来要按 actor 注入，必须同时把 actor 纳入下方 cachedRender 的
               // 缓存键（现在是 `mem:${root}`），否则同一 root 的不同 actor 会拿到同一份渲染结果 ⇒ 跨 actor 泄漏。
-              return cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
-                () => formatStandingMemorySection(canonical.root) ?? "");
+              return moduleTrimmedText(canonical.root, cachedRender(`mem:${canonical.root}`, canonical.root, ["memory/memory.jsonl"],
+                () => formatStandingMemorySection(canonical.root) ?? ""));
             } catch {
               return "";
             }

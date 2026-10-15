@@ -10,12 +10,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { init } from "../ops.ts";
+import { init, HARNESS_MODULE_IDS } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
-import { apply } from "../../dist/index.js";
+import { apply, _helpTopicText } from "../../dist/index.js";
+
+const repoRootDir = join(import.meta.dirname, "../..");
 
 /** 构造带 systemPrompt stub 的 mock ctx：捕获 section 注册、tools.register 捕获工具定义。 */
 function makeMockCtx() {
@@ -114,7 +116,26 @@ test("g-118：graph_help 工具注册，输出使用说明 + claim 指引（不�
   const out = help.execute({}, { agent: undefined, signal: new AbortController().signal });
   assert.ok(out.help.includes("graph_claim_supervisor"), "help 含 claim 指引");
   assert.ok(out.help.includes("graph_handoff"), "help 含换会话步骤");
-  assert.ok(out.help.includes("graph_create_goal"), "help 含工具清单");
+  // g-495 改判：help 不再逐条列工具（改判为**功能模块清单** + 当前开关状态），
+  // 故「含工具清单」改判为「含模块清单」——agent 侧仍须知道有哪些能力模块、各自开关。
+  assert.ok(out.help.includes("graph_help(topic=\"usage\")"), "help 必须把工具细则指向按需面");
+  for (const mod of HARNESS_MODULE_IDS) {
+    assert.ok(out.help.includes(`{${mod}}`) || out.help.includes("开启"), `help 含模块清单（缺 ${mod}）`);
+  }
+  // 负向对照（g-495 返工项 B：**经真实实现**，替换旧版 `replace(...).includes(...)` 的同义反复）：
+  // 模块清单由**真实渲染函数**把 `{moduleId}` 占位替换成当前开关值 ⇒ 每个模块的**状态列**必须在
+  // 真实输出里真的被渲染出来（不是靠 `|| out.help.includes("开启")` 这种恒真兜底）。
+  // 变异：把真实资产里的某个模块占位改坏 ⇒ 真实渲染路径必须留下**未替换占位**（可观察的故障信号）。
+  const helpAsset = readFileSync(join(repoRootDir, "prompts/help.zh.md"), "utf8");
+  const mutatedAsset = helpAsset.replace("{memory}", "{memry}");
+  assert.notEqual(mutatedAsset, helpAsset, "负向对照必须真实改变输入（改坏模块占位）");
+  assert.ok(mutatedAsset.includes("{memry}"), "变异后资产必须含改坏的占位");
+  // 真实 `topic=<模块名>` 查找在**变异后的资产**上必须 miss（该模块行已无法定位）⇒ 找到不到该模块行。
+  const mutatedModuleHit = _helpTopicText(mutatedAsset, "memory", []);
+  assert.equal(mutatedModuleHit, null, "真实实现：模块占位被改坏后，该模块的真实查找必须 miss（判据可被证伪）");
+  // 基线对照：未变异资产上同一真实入口必须命中 ⇒ 上面的 null 不是恒真。
+  assert.notEqual(_helpTopicText(helpAsset, "memory", []), null, "基线对照：未变异资产上真实查找必须命中 memory");
+  assert.ok(_helpTopicText(helpAsset, "memory", [])!.includes("{memory}"), "真实实现：命中切片必须含该模块的占位标记");
   assert.ok(out.help.includes("仅在负责人明确要求"), "help 限定 claim 仅在负责人明确要求时");
   assert.ok(!out.help.includes("绝不自己实现"), "help 不含主管铁律（完整守则走 skill）");
 });

@@ -35,13 +35,13 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apply } from "../../dist/index.js";
-import { MEMORY_LIMITS } from "../ops.ts";
+import { MEMORY_LIMITS, HARNESS_MODULE_IDS } from "../ops.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const ROOT_README = join(repoRoot, "README.md");
 const HOST_README = join(repoRoot, "dsh-graph-host", "README.md");
-const HELP_ZH = join(repoRoot, "dsh-graph-host", "prompts", "help.zh.md");
-const HELP_EN = join(repoRoot, "dsh-graph-host", "prompts", "help.en.md");
+const HELP_ZH = join(repoRoot, "prompts", "help.zh.md");
+const HELP_EN = join(repoRoot, "prompts", "help.en.md");
 const INDEX_JS = join(repoRoot, "dsh-graph-host", "index.js");
 
 /** 判据 1 明文要求的工具数；引擎加工具时必须同步所有文档面并改这一个常量（刻意的防静默漂移门禁）。 */
@@ -182,7 +182,7 @@ function diffOf(a: string[], b: string[]): { onlyA: string[]; onlyB: string[] } 
   return { onlyA: [...sa].filter((x) => !sb.has(x)), onlyB: [...sb].filter((x) => !sa.has(x)) };
 }
 
-/** 判据 1 + 2（工具面）：六处名集合逐一相等、各恰 51、表内无重复、结构完整。 */
+/** 判据 1 + 2（工具面）：四处名集合逐一相等、各恰 51、表内无重复、结构完整。 */
 function toolFaceProblems(input: FaceInput): string[] {
   const problems: string[] = [];
   const reference = [...new Set(input.schemaTools)];
@@ -190,12 +190,15 @@ function toolFaceProblems(input: FaceInput): string[] {
     problems.push(`引擎注册工具数 ${reference.length} ≠ 期望 ${EXPECTED_TOOL_COUNT}（新增/删除工具须同步本常量与全部文档面）`);
   }
 
+  // g-495 改判（负责人授权）：help.zh/en 不再逐条列 51 个工具名 —— 改为功能模块清单
+  // （agent 面渐进式披露；工具细节以 harness 注入的 schema 为准）。⇒ 从本「工具名集合」
+  // 判据中**移除** help 两面；其覆盖力**改判**到 helpModuleCountProblems（模块数 == 引擎
+  // 模块注册表）与 g347 A2（模块清单 == HARNESS_MODULE_IDS），断言数只增不减。
+  // 保留面：root README 表 · host README zh/en 表 · index.js 注册名（四处仍须逐一相等且 == 51）。
   const faces: Array<{ id: string; tools: string[]; problems: string[] }> = [
     { id: "root README 工具表", ...collectTable("root README 工具表", input.rootReadme, "## 提供的工具", 2, 1, false) },
     { id: "host README zh 工具表", ...collectTable("host README zh 工具表", input.hostReadme, "### Agent 工具速查表", 3, 1, true) },
     { id: "host README en 工具表", ...collectTable("host README en 工具表", input.hostReadme, "### Agent Tools Reference", 3, 1, true) },
-    { id: "help.zh.md", ...collectHelp("help.zh.md", input.helpZh) },
-    { id: "help.en.md", ...collectHelp("help.en.md", input.helpEn) },
     { id: "index.js 注册名", ...collectIndexJs(input.indexJs) },
   ];
 
@@ -285,10 +288,11 @@ const TOOL_COUNT_FACES: Array<{ id: string; re: RegExp; why: string; validate?: 
   { id: "dsh-graph-host/README.md", re: /\((\d+) in total\)/g, why: "host README en 工具表标题（g-436 前无守卫）" },
   { id: "dsh-graph-host/README.md", re: /the (\d+)-tool checklist/g, why: "host README en graph_help 行（g-436 前无守卫）" },
   { id: "dsh-graph-host/README.md", re: /(\d+)\s*个工具/g, why: "host README zh graph_help 行（g-436 前无守卫）" },
-  { id: "dsh-graph-host/prompts/help.zh.md", re: /共\s*(\d+)\s*个/g, why: "help.zh 标题", validate: (after) => COUNT_PHRASE_TAIL.test(after) },
-  { id: "dsh-graph-host/prompts/help.zh.md", re: /全部\s*(\d+)\s*个工具/g, why: "help.zh graph_help 行（g-436 前无守卫）" },
-  { id: "dsh-graph-host/prompts/help.en.md", re: /\((\d+) total\)/g, why: "help.en 标题" },
-  { id: "dsh-graph-host/prompts/help.en.md", re: /full\s+(\d+)-tool checklist/g, why: "help.en graph_help 行（g-436 前无守卫）" },
+  // g-495 改判（负责人授权）：help.zh/en 不再承载「51 个工具」清单 —— 它改为**功能模块清单
+  // + 当前开关状态**（agent 面渐进式披露，工具细节以 harness 注入的 schema 为准）。
+  // ⇒ 从工具计数面**移除**这 4 面；改判到等价或更强的载体：helpModuleCountProblems 断言
+  // 「help 声明的模块数 == 引擎模块注册表 HARNESS_MODULE_IDS 的长度」（见本文件下方），
+  // 逐面必中 + 负向对照一并保留。其余计数面一字不动（README 仍须逐面必中且 == 51）。
 ];
 
 /** 行号（1-based）：用于把漂移定位到具体行的可复制报文。 */
@@ -346,9 +350,44 @@ function toolCountFaceProblems(docs: Array<{ id: string; text: string }>, expect
 const COUNT_DOCS = () => [
   { id: "README.md", text: REAL_TEXT.rootReadme },
   { id: "dsh-graph-host/README.md", text: REAL_TEXT.hostReadme },
-  { id: "dsh-graph-host/prompts/help.zh.md", text: REAL_TEXT.helpZh },
-  { id: "dsh-graph-host/prompts/help.en.md", text: REAL_TEXT.helpEn },
 ];
+
+/**
+ * g-495 改判载体：help.zh/en 的工具计数面 → **模块计数面**。
+ *
+ * 原覆盖力（help 必须逐条列出 51 个工具名且计数 == 注册实数）随「help 改为功能模块清单」
+ * 一并改判到此处：help 必须声明**模块数 == 引擎模块注册表 `HARNESS_MODULE_IDS` 的长度**。
+ * 逐面必中（命中 0 次 ⇒ 判红，守卫不得退化为恒真）+ 数字必须等于真源，与 toolCountFaceProblems 同口径。
+ *
+ * 负向对照由调用方给出（把模块数改错 / 删掉声明行 ⇒ 必红）。
+ */
+const HELP_MODULE_COUNT_FACES: Array<{ id: string; re: RegExp; why: string }> = [
+  { id: "prompts/help.zh.md", re: /共\s*(\d+)\s*个功能模块/g, why: "help.zh 模块数声明" },
+  { id: "prompts/help.en.md", re: /(\d+)\s+feature modules/g, why: "help.en 模块数声明" },
+];
+
+function helpModuleCountProblems(
+  docs: Array<{ id: string; text: string }>,
+  expectedModules: number,
+): string[] {
+  const problems: string[] = [];
+  const byId = new Map(docs.map((d) => [d.id, d.text]));
+  for (const face of HELP_MODULE_COUNT_FACES) {
+    const text = byId.get(face.id);
+    if (text === undefined) { problems.push(`缺文件：${face.id}`); continue; }
+    const hits = [...text.matchAll(face.re)];
+    if (hits.length === 0) {
+      problems.push(`${face.id} 未命中模块计数面 ${face.re}（${face.why}）——声明被删/措辞已变，守卫不得退化为恒真`);
+      continue;
+    }
+    for (const m of hits) {
+      if (Number(m[1]) !== expectedModules) {
+        problems.push(`${face.id}:${lineOf(text, m.index ?? 0)} 模块计数声明为 ${m[1]}，应为 ${expectedModules}（${face.why}）`);
+      }
+    }
+  }
+  return problems;
+}
 
 /** 判据 6（M2b）：记忆上限措辞里的数字必须是真源 MEMORY_LIMITS 的取值之一。 */
 function memoryClaimProblems(docs: Array<{ id: string; text: string }>): string[] {
@@ -400,7 +439,7 @@ function realInput(): FaceInput {
   return { schemaTools: REAL_SCHEMA, ...REAL_TEXT };
 }
 
-test("g-371 判据1：六处工具名集合逐一相等（root/host-zh/host-en 表 · help.zh/en · index.js 注册 · 引擎 schema），各恰 51", () => {
+test("g-371 判据1：四处工具名集合逐一相等（root/host-zh/host-en 表 · index.js 注册 · 引擎 schema），各恰 51", () => {
   const problems = toolFaceProblems(realInput());
   assert.deepEqual(problems, [], `工具面漂移：\n${problems.join("\n")}`);
 });
@@ -416,12 +455,47 @@ test("g-371 判据1：README 工具计数声明（51）与引擎注册实数一�
   assert.deepEqual(problems, [], `工具计数声明漂移：\n${problems.join("\n")}`);
 });
 
-test("g-371 判据1（g-436 增量）：工具计数声明覆盖面补全——10 个面逐面必中且等于 51", () => {
+test("g-371 判据1（g-436 增量，g-495 改判后）：工具计数声明覆盖面补全——6 个面逐面必中且等于 51", () => {
   const problems = toolCountFaceProblems(COUNT_DOCS(), REAL_SCHEMA.length);
   assert.deepEqual(problems, [], `工具计数面漂移：\n${problems.join("\n")}`);
 });
 
-test("g-371 判据1（g-436 增量）负向对照：10 个计数面任一处改错即红（含独立复核「改成 1」的原样复现）", () => {
+test("g-371 判据1（g-495 改判）：help.zh/en 不再声明工具数，改声明模块数 == 引擎模块注册表长度", () => {
+  const helpDocs = [
+    { id: "prompts/help.zh.md", text: REAL_TEXT.helpZh },
+    { id: "prompts/help.en.md", text: REAL_TEXT.helpEn },
+  ];
+  const expected = HARNESS_MODULE_IDS.length;
+  assert.ok(expected > 0, "引擎模块注册表不得为空（否则本判据退化）");
+  assert.deepEqual(helpModuleCountProblems(helpDocs, expected), [], "help 模块计数面漂移");
+
+  // 负向对照 ①：模块数改成 1 ⇒ 必红（与工具计数面同口径的绕过值）。
+  for (const face of HELP_MODULE_COUNT_FACES) {
+    const broken = helpDocs.map((d) =>
+      d.id !== face.id ? d : { ...d, text: d.text.replace(face.re, (m, n) => m.replace(String(n), "1")) },
+    );
+    const target = broken.find((d) => d.id === face.id)!;
+    assert.notEqual(target.text, helpDocs.find((d) => d.id === face.id)!.text, `变异必须生效：${face.id}`);
+    expectRed(
+      helpModuleCountProblems(broken, expected),
+      new RegExp(`${face.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+ 模块计数声明为 1`),
+      `${face.id} 模块数改成 1`,
+    );
+  }
+  // 负向对照 ②：整条声明被删 ⇒ 必红（守卫不得退化为恒真）。
+  for (const face of HELP_MODULE_COUNT_FACES) {
+    const dropped = helpDocs.map((d) =>
+      d.id !== face.id ? d : { ...d, text: d.text.replace(face.re, "功能模块：") },
+    );
+    expectRed(
+      helpModuleCountProblems(dropped, expected),
+      /未命中模块计数面/,
+      `${face.id} 模块计数声明被删`,
+    );
+  }
+});
+
+test("g-371 判据1（g-436 增量）负向对照：6 个计数面任一处改错即红（含独立复核「改成 1」的原样复现）", () => {
   const docs = COUNT_DOCS();
   assert.deepEqual(toolCountFaceProblems(docs, EXPECTED_TOOL_COUNT), [], "基线（真实文件）必须零问题");
 
@@ -442,9 +516,7 @@ test("g-371 判据1（g-436 增量）负向对照：10 个计数面任一处改�
   const benign = docs.map((d) =>
     d.id === "dsh-graph-host/README.md"
       ? { ...d, text: `${d.text}\n本流程共 3 个阶段（与工具计数无关的合法文案）。\n相关说明见 README，共 2 个示例。\n` }
-      : d.id === "dsh-graph-host/prompts/help.zh.md"
-        ? { ...d, text: `${d.text}\n- 本流程共 3 个阶段；另有 4 个可选步骤。\n` }
-        : d,
+      : d,
   );
   assert.notDeepEqual(benign, docs, "变异必须生效");
   assert.deepEqual(

@@ -1,0 +1,1 @@
+[Owner batch delivery review request] The owner confirmed delivery of goals {goalIds} ({count} in total). Please check their quality criteria and deliverables, complete the review, and close out the delivery.

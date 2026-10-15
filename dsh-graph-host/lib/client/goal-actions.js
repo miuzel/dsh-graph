@@ -1,5 +1,6 @@
     // 质量判据 checklist（确认阶段）：每条一个勾选框（localStorage 按目标持久化，仅前端评审草稿）
-    // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）。
+    // + 「💬 反馈」按钮——展开输入框，经 session.prompt 排队送达该目标的执行会话（复用 g-107 通路）；
+    //   无活执行会话时按 g-478 回退直发主管会话（promptSessionQueue），不再丢弃反馈。
     function CriteriaChecklist(props) {
       // 与 core/model.ts criteriaItems 同源：先移除跨行 HTML 注释，再按行 trim。
       const items = String(props.crit ?? "").replace(/<!--[\s\S]*?-->/g, "").split("\n")
@@ -24,11 +25,60 @@
       const sendFb = async (criterion) => {
         const t = fbText.trim();
         if (!t) return;
-        if (!session?.prompt) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
+        // g-478（负责人 2026-10-11 钦定）：**无活执行会话时不再丢弃反馈，改回退直发主管会话**。
+        // 该分支命中的场景：目标当前没有在跑的 attempt / 执行子代理已结束·已解绑·已删除 /
+        // 任务由主管自做或由别的子代理完成 —— 此时 useBoundSession 必然为空。
+        // 三段式：①有活执行会话 → 下方原逻辑逐字不变；②无活执行会话 → 转主管（本分支）；
+        // ③主管会话也不可用/投递未获正向回执 → 明确报错，绝不谎报成功。
+        if (!session?.prompt) {
+          const rt = sessionsRt ?? appCtx?.get?.("sessions");
+          if (!rt || !props.supervisorSession) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
+          try {
+            // g-496：模板正文取自宿主只读资产（**先取模板再投递**）；读取失败 → 明确报错、保持输入，绝不发空串。
+            let text;
+            try {
+              text = await renderGuiPrompt("gui-criteria-feedback-supervisor",
+                { goalId: props.goalId, criterion, feedback: t });
+            } catch (e) {
+              console.warn("[dsh-graph-host] criteria feedback: prompt asset load failed:", e);
+              setFbNote(dgT("gui.promptAssetLoadFail"));
+              return;
+            }
+            // 投递裁决一律交给共享 helper promptSessionQueue（session-hooks.js，全仓唯一裁决点）：
+            // 能力探测（using / retain / 0.1.5 被动回退）由它内部分流，本处**绝不**写第二份探测或版本号分支。
+            const delivered = await promptSessionQueue(rt, props.supervisorSession,
+              [{ type: "text", text }],
+              "[dsh-graph-host] criteria feedback: prompt supervisorSession failed:");
+            // 仅正向回执（res.ok === true，已由 helper 收口）算送达；负回执 / 空回执 / 取不到会话一律未送达。
+            if (!delivered) { setFbNote(dgT("criteria.feedbackNotConnected")); return; }
+            setFbNote(dgT("criteria.feedbackSupervisorDelivered"));
+            setFbText("");
+            setFbIdx(-1);
+            // 与既有主管直发 UX（AcceptFeedback.openSupervisor）一致：打开主管会话并切到对话页便于跟进；
+            // 不关弹窗 —— 区分性提示需留在原地可见（g-478 与既有 g-109 关弹窗行为的差异点）。
+            openSessionTarget(props.supervisorSession,
+              typeof rt.open === "function" ? () => rt.open(props.supervisorSession) : null);
+            activateChatTab();
+            showToast(dgT("criteria.feedbackSupervisorDelivered"));
+          } catch (e) {
+            // promptSessionQueue 自身绝不抛（内部兜底）；此处仅最后一道防线：明示未送达，绝不谎报成功。
+            console.warn("[dsh-graph-host] criteria feedback: prompt supervisorSession failed:", e);
+            setFbNote(dgT("criteria.feedbackNotConnected"));
+          }
+          return;
+        }
         try {
-          // i18n-keep(category-b)：发往目标执行会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-          const res = await session.prompt(
-            [{ type: "text", text: `【${props.goalId} 判据反馈】${criterion}\n${t}` }], "queue");
+          // g-496：模板取自宿主只读资产（先取模板再投递）；失败保持输入、明确报错，绝不发空串。
+          let text;
+          try {
+            text = await renderGuiPrompt("gui-criteria-feedback-executor",
+              { goalId: props.goalId, criterion, feedback: t });
+          } catch (e) {
+            console.warn("[dsh-graph-host] criteria feedback: prompt asset load failed:", e);
+            setFbNote(dgT("gui.promptAssetLoadFail"));
+            return;
+          }
+          const res = await session.prompt([{ type: "text", text }], "queue");
           if (res?.ok) {
             // g-321：排队回执改为读真实排队状态（0.1.6 inbox 投影 / 0.1.5 快照 queue 回退），
             // 而不是直接解构 session.getSnapshot().queue——新版该字段已废弃，解构即 TypeError。
@@ -152,32 +202,33 @@
       const [note, setNote] = React.useState(null);
       const [loading, setLoading] = React.useState(false);
       const [fallback, setFallback] = React.useState(false);
+      // g-496：复制失败时的手动复制预览正文（模板改为异步取资产后，渲染期不再能同步算出它，
+      // 故用 state 承接；`request` 这个**契约名**保留给「可复制的请求正文」这一语义，
+      // 使既有的复制兜底契约（copyText(request) / value: request）逐字不变）。
+      const [request, setRequest] = React.useState("");
       const allowed = ["draft", "planning", "collecting", "ready"];
       const hasActiveAttempt = hasActiveExecutionAttempt(attempts);
       if (!allowed.includes(status) || hasActiveAttempt) return null;
-      // i18n-keep(category-b)：发给主管会话的提示词模板（非 UI 渲染文案），按 g-272 att-002 约定保留中文。
-      // g-327：措辞改为中性——直发（看板直接投递）与复制兜底两条分支下均如实，不再写死「负责人复制发送」。
-      const request = `【主管处理请求｜${goalId}｜目标定义/润色】\n\n`
-        + `请你以主管 Agent 身份处理这个目标的定义/润色请求。\n`
-        + `这条请求由看板的目标定义/润色入口发出，不是产品经理 Agent 的任务提示，\n`
-        + `也不是要求你扮演产品经理。\n\n`
-        + `请先读取目标文件，并按主管流程决定是否需要派发产品经理 Agent。\n`
-        + `如有润色建议，请由主管完成目标描述和质量判据的闭环。\n`
-        + `本次仅处理目标定义/润色，不执行代码，不推进目标状态或版本。\n\n`
-        + `目标 ID（唯一依据）：${goalId}\n`
-        + `目标文件（供读取）：\n${String(goalPath ?? "（路径未知）")}\n\n`
-        + `负责人补充意见：\n${guidance.trim() || "（无）"}`;
       const openSupervisor = async () => {
         setLoading(true); setNote(null);
         try {
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
           if (!rt) throw new Error(dgT("exec.supervisorUnavailable"));
           if (!supervisorSession) throw new Error(dgT("exec.supervisorNotConfigured"));
+          // g-496：模板正文取自宿主只读资产（宿主专属层 md），**先取模板再投递/复制**。
+          // 读取失败 → 明确报错、保持用户补充意见，绝不发送空串或半截正文。
+          // 路径未知时的「（路径未知）」占位与「（无）」占位是**插值变量**（UI 层语义，随 locale），
+          // 不进资产正文：资产只持有模板骨架。
+          const text = await renderGuiPrompt("gui-define-polish-request", {
+            goalId,
+            goalPath: String(goalPath ?? dgT("exec.goalPathUnknown")),
+            guidance: guidance.trim() || dgT("exec.guidanceNone"),
+          });
           // g-327：能直发就直发——先尝试投递恰好一条 queue 消息给主管会话。
           // 能力探测（using / retain / 0.1.5 被动回退）全部由共享 helper promptSessionQueue 内部分流，
           // 本处只按它的返回值判定，**绝不**写版本号分支、也绝不自带第二份 using/retain 探测。
           const delivered = await promptSessionQueue(rt, supervisorSession,
-            [{ type: "text", text: request }],
+            [{ type: "text", text }],
             "[dsh-graph-host] define/polish: prompt supervisorSession failed:");
           if (delivered) {
             // 直发成功：消息已投递给主管会话，不再写剪贴板（负责人要求「直接发不需要复制一份」）；
@@ -186,6 +237,8 @@
             activateChatTab();
             setMode("supervisor");
             setFallback(false);
+            // g-496：直发成功即清掉手动复制预览正文（避免上一次失败残留的旧文本被展示）。
+            setRequest("");
             showToast(dgT("exec.requestDelivered"));
             setNote(dgT("exec.requestDeliveredOpened"));
             setLoading(false);
@@ -193,13 +246,16 @@
           }
           // 投递不可用（无会话服务 / 未配置 supervisor.session / 会话取不到 / 无 prompt / 任意异常）
           // → 以下完整退回 g-168 原复制契约，逐字不变（含复制失败时的手动复制预览）。
-          const copied = await copyText(request);
+          const copied = await copyText(text);
           // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
           openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
           activateChatTab();
           if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
            setFallback(!copied);
+          // g-496：复制失败时的**手动复制预览**必须显示刚渲染出的同一份正文
+          // （模板现在异步取资产，不再是渲染期同步可读的）⇒ 存入 state 供预览读取。
+          if (!copied) setRequest(text);
           setNote(copied ? dgT("exec.requestCopiedOpened") : dgT("exec.autocopyFailedRequest"));
         } catch (e) { setNote(dgT("exec.supervisorPathFailed") + String(e?.message ?? e)); }
         setLoading(false);
@@ -304,8 +360,20 @@
           if (data.pending) {
             try {
               const rt = sessionsRt ?? appCtx?.get?.("sessions");
-              // i18n-keep(category-b)：发往主管会话的提示词模板（session.prompt 载荷），非 UI 文案，按 g-272 att-002 约定保留中文。
-              const parts = [{ type: "text", text: `【负责人交付复核请求】负责人已在看板对目标「${goalId}」确认交付。请检查其质量判据与产出物，完成复核并执行交付收口。` }];
+              // g-496：模板正文取自宿主只读资产（**先取模板再投递**）。注意：**接受本身已成功**
+              // （服务端已写 review.requested），因此模板读取失败**只**降级为「通知未送达」的可见
+              // 警告，**绝不**回滚/改判已成功的接受（与下方 pending 投递失败同一口径）。
+              let parts;
+              try {
+                const text = await renderGuiPrompt("gui-accept-review-request", { goalId });
+                parts = [{ type: "text", text }];
+              } catch (e) {
+                console.warn("[dsh-graph-host] accept: prompt asset load failed:", e);
+                if (supervisorSession) setNote(dgT("exec.acceptNotifyFail"));
+                onRefresh?.();
+                setLoading(false);
+                return;
+              }
               // g-323：与批量接受（batch-accept.js 的 notifySupervisorBatchAccept）共用同一份能力探测 helper：
               // 0.1.6 需先 retain 才借得到 binding（无 get(id)），0.1.5 保持被动 binding ?? get 回退。
               // 本处是事件回调（doAccept），绝不引入渲染期 retain；文案与 queue 模式逐字不变。

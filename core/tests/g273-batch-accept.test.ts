@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
 import {
@@ -15,6 +15,8 @@ import {
 } from "../../dsh-graph-host/lib/client/batch-accept.js";
 
 const root = join(import.meta.dirname, "../../dsh-graph-host");
+const repoRoot = join(import.meta.dirname, "../..");
+const hostIndexSource = readFileSync(join(root, "index.js"), "utf8");
 const i18nSource = readFileSync(join(root, "lib/client/i18n.js"), "utf8");
 const moduleSource = readFileSync(join(root, "lib/client/batch-accept.js"), "utf8");
 const kanbanSource = readFileSync(join(root, "lib/client/kanban.js"), "utf8");
@@ -51,6 +53,59 @@ const promptSessionQueue: any = new Function(
   `${extractFunction(hooksSource, "promptSessionQueue")}\nreturn promptSessionQueue;`,
 )();
 (globalThis as any).promptSessionQueue = promptSessionQueue;
+
+// g-496 att-007：GUI 提示词模板正文已迁入宿主只读资产，客户端靠工厂作用域共享的
+// loadGuiPromptAsset / interpolateGuiPrompt 取用。这里同样**从 helpers.js 抠出真实实现**装到
+// globalThis，并把 fetch 打到**真实资产文件**上——被测调用点消费的是真实读取+插值实现
+// （而非测试自造替身）：读取器或插值若被破坏，本文件用例会一起失败。
+const helpersSource = readFileSync(join(root, "lib/client/helpers.js"), "utf8");
+/** 真实资产正文（按 URL 末段文件名索引）——等价于宿主 /api/dsh-graph/help/asset/ 的响应体。 */
+const promptAssetBodies = new Map<string, string>();
+for (const f of readdirSync(join(repoRoot, "dsh-graph-host/prompts"))) {
+  if (f.endsWith(".md")) {
+    promptAssetBodies.set(f, readFileSync(join(repoRoot, "dsh-graph-host/prompts", f), "utf8"));
+  }
+}
+const guiPromptHelpers: any = new Function(
+  "fetch", "dgLang", "GUI_PROMPT_ASSET_URL",
+  `const guiPromptAssetCache = new Map();
+   ${extractFunction(helpersSource, "normalizeGuiPromptAsset")}
+   ${extractFunction(helpersSource, "guiPromptAssetLang")}
+   ${extractFunction(helpersSource, "loadGuiPromptAsset")}
+   ${extractFunction(helpersSource, "interpolateGuiPrompt")}
+   return { loadGuiPromptAsset, interpolateGuiPrompt };`,
+)(
+  // fetch 替身：只在测试驱动路径上按**真实资产内容**应答（404 于未登记名）。
+  async (url: string) => {
+    const name = String(url).split("/").pop() ?? "";
+    const body = promptAssetBodies.get(name);
+    return body === undefined
+      ? { ok: false, status: 404, text: async () => "" }
+      : { ok: true, status: 200, text: async () => body };
+  },
+  "zh",
+  "/api/dsh-graph/help/asset/",
+);
+(globalThis as any).loadGuiPromptAsset = guiPromptHelpers.loadGuiPromptAsset;
+(globalThis as any).interpolateGuiPrompt = guiPromptHelpers.interpolateGuiPrompt;
+
+/** g-496 att-007：批量复核通知的**行为真值**断言——模板骨架（除占位符外）逐段原样保留，
+ *  且 {goalIds}/{count} 两个语义变量已被代入（不得原样残留）。
+ *  比原先「匹配固定字面量」更贴近行为：骨架来自**真实资产**，模板改字而代码没跟上会立刻判红。 */
+function assertBatchAcceptNotification(text: string, goalList: string, count: number) {
+  const template = promptAssetBodies.get("gui-batch-accept-review-request.zh.md");
+  assert.ok(template, "前提：gui-batch-accept-review-request.zh.md 资产必须存在");
+  // 与读取器同口径归一化（只剥文件末尾那一个换行）——否则会把「文件的 POSIX 收尾换行」
+  // 误判成「骨架缺失」。
+  const normalized = template!.replace(/\r?\n$/, "");
+  const segments = normalized.replace(/\{[A-Za-z0-9_]+\}/g, "\u0000").split("\u0000").filter(Boolean);
+  for (const seg of segments) {
+    assert.ok(text.includes(seg), `模板骨架片段必须原样保留：${JSON.stringify(seg)}`);
+  }
+  assert.doesNotMatch(text, /\{[A-Za-z0-9_]+\}/, "占位符必须已代入，不得残留");
+  assert.ok(text.includes(goalList), `目标清单必须代入：${goalList}`);
+  assert.ok(text.includes(String(count)), `总数必须代入：${count}`);
+}
 
 function loadClientI18n() {
   const sandbox: any = { React: {} };
@@ -105,9 +160,28 @@ test("g-273: source contracts — non-force accept body, single aggregated notif
   const moduleCode = moduleSource.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
   assert.doesNotMatch(moduleCode, /force/, "batch-accept.js code must never reference force");
   assert.doesNotMatch(moduleCode, /delivered/, "batch-accept.js code must never write delivered directly");
-  // 聚合通知：文案构造器唯一（单条消息），queue 模式
-  const markerCount = moduleSource.split("【负责人批量交付复核请求】").length - 1;
-  assert.equal(markerCount, 1, "aggregated supervisor message template must be defined exactly once");
+  // 聚合通知：文案构造器唯一（单条消息），queue 模式。
+  // g-496 att-007：模板**正文**已迁出模块源码，唯一事实源 = 宿主专属资产（zh/en 各一份）。
+  // 故「恰当一处承载」的判据改为**跨层**核对：模块源码不得再出现正文（0 次），
+  // 正文唯一落点为两条资产，且其插值骨架、白名单登记、共享读取器三证据齐备。
+  assert.equal(moduleSource.split("【负责人批量交付复核请求】").length - 1, 0,
+    "模板正文不得再内联在模块源码（已迁入宿主专属资产）");
+  for (const lang of ["zh", "en"] as const) {
+    const assetPath = join(repoRoot, `dsh-graph-host/prompts/gui-batch-accept-review-request.${lang}.md`);
+    assert.ok(existsSync(assetPath), `宿主专属资产必须存在：${assetPath}`);
+    const body = readFileSync(assetPath, "utf8");
+    // 骨架里必须有**非递归**占位符 goalIds/count —— 这两项才是批量的语义变量。
+    assert.match(body, /\{goalIds\}/, `${lang} 资产必须含 {goalIds} 占位符`);
+    assert.match(body, /\{count\}/, `${lang} 资产必须含 {count} 占位符`);
+    // 资产名必须在宿主注册表中登记为 host 归属（白名单 ① 唯一入口）。
+    assert.ok(hostIndexSource.includes(`gui-batch-accept-review-request.${lang}.md", ownership: "host"`),
+      `gui-batch-accept-review-request.${lang}.md 必须登记为 host`);
+  }
+  // 模块必须经**共享读取器**取模板后插值（不得自造第二份读取/插值实现）。
+  assert.match(moduleCode, /loadGuiPromptAsset\("gui-batch-accept-review-request"\)/,
+    "模块必须经共享 loadGuiPromptAsset 读取模板");
+  assert.match(moduleCode, /interpolateGuiPrompt\(/,
+    "模板插值必须复用工厂作用域共享实现");
   // g-323 att-002：派发形态（session.prompt(parts, "queue")）与能力探测一起收敛到工厂作用域共享 helper
   // promptSessionQueue（session-hooks.js），故 "queue" 字面量随之迁移到 helper；本模块仍必须引用该 helper，
   // 且自身不得再出现任何 session.prompt 调用点（否则就是把分流复制成了第二份）。
@@ -136,7 +210,13 @@ test("g-273: source contracts — non-force accept body, single aggregated notif
   assert.match(moduleSource, /batchAccept\.selectGroup/);
   assert.match(moduleSource, /batchAccept\.unselectGroup/);
   assert.match(bundleSource, /function runBatchAccept\(goalIds, opts = \{\}\)/);
-  assert.ok(bundleSource.includes("【负责人批量交付复核请求】"));
+  // g-496 att-007：模板正文已迁出 bundle（不再随客户端打包）⇒ 反向断言：bundle 内**不得**再有正文，
+  // 且必须含共享读取/插值实现（否则迁移后客户端根本发不出这条通知）。
+  assert.ok(!bundleSource.includes("【负责人批量交付复核请求】"),
+    "模板正文不得再打进客户端 bundle（唯一事实源 = 宿主只读资产）");
+  assert.match(bundleSource, /async function loadGuiPromptAsset\(/, "bundle 必须含共享资产读取器");
+  assert.match(bundleSource, /function interpolateGuiPrompt\(/, "bundle 必须含共享插值实现");
+  assert.match(bundleSource, /"gui-batch-accept-review-request"/, "bundle 必须引用该资产名");
   assert.doesNotMatch(bundleSource, /export \{ batchAcceptButtonState/);
   assert.match(bundleSource, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
 });
@@ -343,9 +423,7 @@ test("g-273: notifySupervisorBatchAccept — exactly one queued message with goa
     assert.equal(prompts.length, 1, "must send exactly ONE aggregated message");
     assert.equal(prompts[0].mode, "queue");
     const text = prompts[0].parts[0].text;
-    assert.match(text, /【负责人批量交付复核请求】/);
-    assert.match(text, /g-11, g-22/);
-    assert.match(text, /共 2 个/);
+    assertBatchAcceptNotification(text, "g-11, g-22", 2);
   } finally {
     delete (globalThis as any).sessionsRt;
   }
@@ -432,9 +510,7 @@ test("g-323: notifySupervisorBatchAccept — retain 宿主（无 get）恰好一
     assert.equal(prompts.length, 1, "必须恰好一条聚合消息");
     assert.equal(prompts[0].mode, "queue");
     const text = prompts[0].parts[0].text;
-    assert.match(text, /【负责人批量交付复核请求】/);
-    assert.match(text, /g-11, g-22/);
-    assert.match(text, /共 2 个/);
+    assertBatchAcceptNotification(text, "g-11, g-22", 2);
     assert.equal(releaseCalls.n, 1, "release 必须恰好调用一次（无代际泄漏）");
     assert.equal(ref!.released(), true);
   } finally {
@@ -573,8 +649,11 @@ test("g-323 共享性：using/retain 能力探测只在共享 helper 中定义�
     'session-hooks:typeof rt?.retain === "function"',
     'session-hooks:typeof sessionsRt?.retain === "function"',
   ], "retain 探测只允许存在于 session-hooks.js（helper 能力分流 + g-321 渲染期 canRetain）");
-  // 两个通知调用点都不含探测，且都引用同一个 helper
-  assert.match(moduleSource, /function notifySupervisorBatchAccept[\s\S]{0,600}?promptSessionQueue\(rt, supervisorSession, parts/);
+  // 两个通知调用点都不含探测，且都引用同一个 helper。
+  // g-496 att-007：notifySupervisorBatchAccept 内新增了「先取模板再投递」的读取块（返回口径不变：
+  // 读取失败也返回 false），调用点与函数头之间的距离因此变长 ⇒ 窗口放宽到 1200 字符。
+  // 判据本身不变（仍是「函数体内引用共享 helper」），窗口只保证不因无关的合法代码增长而误红。
+  assert.match(moduleSource, /function notifySupervisorBatchAccept[\s\S]{0,1200}?promptSessionQueue\(rt, supervisorSession, parts/);
   assert.match(goalActionsSource, /function AcceptFeedback\(props\)[\s\S]*?promptSessionQueue\(rt, supervisorSession, parts/);
   // helper 在 build 装配顺序中早于两个调用点（工厂作用域函数声明可被后置模块引用）
   const idx = (p: string) => buildScript.indexOf(`"${p}"`);
@@ -607,10 +686,28 @@ test("g-323 共享 helper 行为：0.1.5 被动回退（binding ?? get）不 ret
   assert.equal(await promptSessionQueue(rt, "", [{ type: "text", text: "z" }]), false);
 });
 
-test("g-273: batchAcceptSupervisorMessage — list + total", () => {
-  const msg = batchAcceptSupervisorMessage(["g-a"]);
+test("g-273: batchAcceptSupervisorMessage — list + total（模板骨架由资产提供，函数只做插值）", () => {
+  const template = promptAssetBodies.get("gui-batch-accept-review-request.zh.md")!;
+  assert.ok(template, "前提：批量复核请求 zh 资产必须存在");
+  const msg = batchAcceptSupervisorMessage(["g-a"], template);
   assert.match(msg, /g-a/);
   assert.match(msg, /共 1 个/);
+  assertBatchAcceptNotification(msg, "g-a", 1);
+  // 多目标：清单以 ", " 连接，总数随之变化。
+  const msg2 = batchAcceptSupervisorMessage(["g-a", "g-b", "g-c"], template);
+  assert.match(msg2, /g-a, g-b, g-c/);
+  assert.match(msg2, /共 3 个/);
+  assertBatchAcceptNotification(msg2, "g-a, g-b, g-c", 3);
+  // 单次扫描、非递归：目标 id 里若**包含花括号形态**的文本，绝不被二次求值（防模板注入）。
+  const evil = "g-{count}";
+  const msg3 = batchAcceptSupervisorMessage([evil], template);
+  assert.ok(msg3.includes("g-{count}"), "用户输入必须原样保留，不得被二次插值");
+  // 且此时「总数」仍是真实的 1（不因注入文本而错算）。
+  assert.ok(msg3.includes("共 1 个"), "注入形态不得影响变量取值");
+  // 缺失变量：g-496 att-012 起**显性抛错并点名**，不再原样保留占位符、更不静默清空。
+  // （旧口径「保留 `{missing}` 原文」会把未替换的模板字面量发给主管会话 —— 属静默缺斤少两。）
+  assert.throws(() => batchAcceptSupervisorMessage(["g-a"], "A{missing}B"), /missing/,
+    "未提供的占位符必须显性抛错并点名，不得原样保留或静默清空");
 });
 
 // ===== 7. 弹窗行为模拟（vm + stateful React mock） =====

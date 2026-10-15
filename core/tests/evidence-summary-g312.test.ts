@@ -68,6 +68,9 @@ import { SERVER_I18N } from "../../dist/lib/server-i18n.js";
 import { formatAttemptPrompt } from "../../dist/index.js";
 
 const sourceRoot = join(import.meta.dirname, "../../dsh-graph-host");
+// g-496：提示词资产单一源码副本在**公共层** `prompts/`；发布形态是合并后的 `dist/prompts/`。
+// `sourceRoot` 仍指插件目录（`lib/server-i18n.js` 等宿主文件未移动），资产侧用下面两个根。
+const promptsSourceRoot = join(import.meta.dirname, "../../prompts");
 const shippedRoot = join(import.meta.dirname, "../../dist");
 const readAsset = (root: string, ...parts: string[]) => readFileSync(join(root, ...parts), "utf8");
 
@@ -92,6 +95,11 @@ function disciplineSlice(output: string, start: string, end: string): string {
   const endAt = output.indexOf(end);
   assert.ok(startAt >= 0 && endAt > startAt, `纪律段切片边界必须存在且有序：${start} / ${end}`);
   return output.slice(startAt, endAt);
+}
+
+/** 把字面量转义为可安全嵌入 RegExp 的形式（仅用于把资产首行签名当字面量匹配）。 */
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function countOccurrences(text: string, token: string): number {
@@ -347,7 +355,7 @@ test("g-312 判据 1：supervisor-guide 与 prompts 资产（源码 + dist 投�
     "one suite per line",
     "lightweight screenshot verification",
   ];
-  for (const [label, root] of [["源码", sourceRoot], ["投递副本 dist", shippedRoot]] as const) {
+  for (const [label, root] of [["源码", promptsSourceRoot], ["投递副本 dist", join(shippedRoot, "prompts")]] as const) {
     const zh = readAsset(root, "supervisor-guide.zh.md");
     const en = readAsset(root, "supervisor-guide.en.md");
     for (const token of zhGuideTokens) assert.ok(zh.includes(token), `${label} supervisor-guide.zh.md 缺少「${token}」`);
@@ -359,8 +367,8 @@ test("g-312 判据 1：supervisor-guide 与 prompts 资产（源码 + dist 投�
       `${label} supervisor-guide 行数必须仍相等（zh/en 成对改）`,
     );
     // 每轮注入的主管纪律提醒也含同一证据条目。
-    const zhDiscipline = readAsset(root, "prompts", "discipline.zh.md");
-    const enDiscipline = readAsset(root, "prompts", "discipline.en.md");
+    const zhDiscipline = readAsset(root, "discipline.zh.md");
+    const enDiscipline = readAsset(root, "discipline.en.md");
     assert.ok(zhDiscipline.includes("证据形式（断言化，禁长文倾倒）"), `${label} prompts/discipline.zh.md 缺少证据条目`);
     assert.ok(zhDiscipline.includes("evidence: suite=<id>"), `${label} prompts/discipline.zh.md 缺少格式样例`);
     assert.ok(enDiscipline.includes("Evidence form (assertion-based; no long-form dumping)"), `${label} prompts/discipline.en.md 缺少证据条目`);
@@ -403,28 +411,81 @@ test("g-312 判据 1：graph_report_status / graph_add_comment / graph_fill_card
   assert.doesNotMatch(Object.values(en).join("\n"), /[\u3400-\u9fff]/, "SERVER_I18N.en 必须零 CJK");
 });
 
-test("g-312 判据 1：docs/guide-auto-injection.md 的纪律副本与真源逐条一致（防再次漂移）", () => {
-  // 该副本此前已漂移（缺记忆管理纪律与测试力度分级）；本断言把它钉在真源上。
-  const source = readAsset(sourceRoot, "prompts", "discipline.zh.md").split("\n").filter((line) => line.length > 0);
+test("g-312 判据 1：g-496 起逐 turn 提示词正文只有唯一真源（docs 不再持任何副本）", () => {
+  // g-496 改判（负责人批准）：docs 里的**逐字镜像副本**全部移除——它们是第二份正文副本，正是漂移之源。
+  // 独立验证者 BLOCK 记录：最初只清了 discipline 的 SUPERVISOR_DISCIPLINE，**漏掉同文的 GUIDE_HINT 副本**
+  // （精简后文档仍持过期正文）。此处按资产清单**逐份**收口，不再靠「记得改哪一处」。
+  // 保护目的不减反增，改为**三条更强**的断言（对每份资产都施）：
+  //   ① docs 不得持任何形态的正文副本（含旧数组名 / 换名数组 / 大段逐字复制逃逸）；
+  //   ② docs 必须指向真源路径（读者仍能找到正文）；
+  //   ③ 正文完整性**直接施于真源**（原「副本含某条」等价迁移，且不再受副本同步影响）。
   const docs = readFileSync(join(import.meta.dirname, "../../docs/guide-auto-injection.md"), "utf8");
-  const block = /const SUPERVISOR_DISCIPLINE = \[([\s\S]*?)\]\.join\("\\n"\)/.exec(docs);
-  assert.ok(block, "docs/guide-auto-injection.md 应含 SUPERVISOR_DISCIPLINE 数组");
-  const mirrored = block![1]
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('"'))
-    .map((line) => line.replace(/^"/, "").replace(/",?$/, ""));
-  assert.deepEqual(
-    mirrored,
-    source,
-    "docs 副本必须与 prompts/discipline.zh.md 真源逐条一致；改了真源请同步副本（勿只补最后一条）",
-  );
-  assert.ok(mirrored.some((line) => line.includes("证据形式（断言化，禁长文倾倒）")), "docs 副本应含 g-312 证据条目");
+  const docsLines = new Set(docs.split("\n").map((l) => l.trim()));
+
+  // 逐营资产：旧数组名 + 首行签名（用于换名数组逃逸检测）+ 真源路径片段 + 承重句。
+  const assets = [
+    {
+      file: "discipline.zh.md",
+      legacyNames: ["SUPERVISOR_DISCIPLINE"],
+      firstLineSig: "⚠️ **主管纪律提醒**",
+      pathNeedle: /prompts\/discipline\./,
+      mustKeep: ["证据形式（断言化，禁长文倾倒）", "evidence: suite=<id>"],
+    },
+    {
+      file: "guide-hint.zh.md",
+      legacyNames: ["GUIDE_HINT"],
+      firstLineSig: "dsh-graph 是把工作组织成「目标看板」的插件",
+      pathNeedle: /prompts\/guide-hint\./,
+      mustKeep: ["不要自动接管 supervisor", "graph_write_results", "graph_refresh_results"],
+    },
+    {
+      file: "agent-teams-contract.zh.md",
+      legacyNames: [],
+      firstLineSig: "**Agent Teams 最小契约",
+      pathNeedle: /agent-teams-contract/,
+      mustKeep: ["扇出成员不是 attempt", "作者自报不得冒充独立验证"],
+    },
+  ] as const;
+
+  for (const a of assets) {
+    const sourceText = readAsset(promptsSourceRoot, a.file);
+
+    // ①-a 旧数组名必须消失（按名断言，挡住「原样保留」）。
+    for (const name of a.legacyNames) {
+      assert.ok(!docs.includes(name), `docs 不得再含 ${name} 数组/标识符（g-496 已移除第二份副本）`);
+    }
+    // ①-b 换名数组逃逸：任何 `const <任意名> = [` 后紧跟该资产首行签名的形态都判红。
+    const renamedArray = new RegExp(`const\\s+\\w+\\s*=\\s*\\[\\s*\\n\\s*"${escapeRegExp(a.firstLineSig)}`);
+    assert.doesNotMatch(
+      docs,
+      renamedArray,
+      `docs 不得以**换名数组**逃逸（${a.file} 首行签名被装进 const <任意名> = [...]）`,
+    );
+    // ①-c 大段逐字复制逃逸：该资产的长句不得在 docs 中逐字复现（逐行精确匹配，非全文包含）。
+    const copied = sourceText
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length >= 30 && docsLines.has(l));
+    assert.equal(
+      copied.length,
+      0,
+      `docs 不得逐字复制 ${a.file} 正文（复现 ${copied.length} 行，首行：${copied[0]?.slice(0, 40) ?? "-"}…）`,
+    );
+
+    // ② docs 必须指向该资产的真源路径（正文的唯一去向可被读者找到）。
+    assert.match(docs, a.pathNeedle, `docs 必须指向 ${a.file} 的真源路径（否则读者无从找到正文）`);
+    assert.match(docs, /唯一真源/, "docs 必须写明资产文件是唯一真源");
+
+    // ③ 正文完整性直接施于真源（原「副本含某条」的同一条语义，载体换成真源）。
+    for (const n of a.mustKeep) {
+      assert.ok(sourceText.includes(n), `${a.file} 真源应含承重句：${n}`);
+    }
+  }
 });
 
 test("g-312 判据 1 防删除反向断言：旧「详尽长文」口径不得回归，新规范任何一处删掉即红", () => {
   // 反向断言 1：结构性诱因已被改写掉——指南不得再要求「详尽的测试核验记录与证据」。
-  for (const [label, root] of [["源码", sourceRoot], ["投递副本 dist", shippedRoot]] as const) {
+  for (const [label, root] of [["源码", promptsSourceRoot], ["投递副本 dist", join(shippedRoot, "prompts")]] as const) {
     const zh = readAsset(root, "supervisor-guide.zh.md");
     const en = readAsset(root, "supervisor-guide.en.md");
     assert.doesNotMatch(zh, /追加详尽的测试核验记录与证据/, `${label} 指南仍残留「详尽测试核验记录」诱因`);

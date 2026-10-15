@@ -17,7 +17,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import vm from "node:vm";
 
@@ -44,6 +44,43 @@ function extractBalanced(source: string, marker: string): string {
   throw new Error(`${marker} 花括号无法配平`);
 }
 
+// ===== g-496 att-007：模板正文已迁入宿主只读资产 =====
+// sendReason 现在**先经 renderGuiPrompt 取模板再投递**。这里同样从 helpers.js 抠出**真实**
+// 读取+插值实现，并把 fetch 打到**真实资产文件**——被测分支消费真实实现（读取器或插值若被破坏，
+// 本文件用例会一起失败），与 g-273 的做法同源。
+const HELPERS = readClient("helpers");
+/** 真实资产正文（按文件名索引）。 */
+const promptAssets = new Map<string, string>();
+for (const f of readdirSync(join(hostRoot, "prompts"))) {
+  if (f.endsWith(".md")) promptAssets.set(f, readFileSync(join(hostRoot, "prompts", f), "utf8"));
+}
+const realRenderGuiPrompt: (base: string, vars?: Record<string, unknown>) => Promise<string> =
+  new Function(
+    "fetch", "dgLang", "GUI_PROMPT_ASSET_URL",
+    `const guiPromptAssetCache = new Map();
+     ${extractBalanced(HELPERS, "function normalizeGuiPromptAsset(")}
+     ${extractBalanced(HELPERS, "function guiPromptAssetLang(")}
+     ${extractBalanced(HELPERS, "async function loadGuiPromptAsset(")}
+     ${extractBalanced(HELPERS, "function interpolateGuiPrompt(")}
+     ${extractBalanced(HELPERS, "async function renderGuiPrompt(")}
+     return renderGuiPrompt;`,
+  )(
+    async (url: string) => {
+      const name = String(url).split("/").pop() ?? "";
+      const body = promptAssets.get(name);
+      return body === undefined
+        ? { ok: false, status: 404, text: async () => "" }
+        : { ok: true, status: 200, text: async () => body };
+    },
+    "zh",
+    "/api/dsh-graph/help/asset/",
+  );
+
+/** 期望的「回退理由」提示词正文——由**真实资产 + 真实插值**算出（不再硬编码字面量）。 */
+function expectedBackwardReason(goalId: string, reason: string): Promise<string> {
+  return realRenderGuiPrompt("gui-backward-reason", { goalId, reason });
+}
+
 // ===== 真实 sendReason：从源码抠出 + Function 求值（执行的是模块里真实的实现） =====
 interface RunOpts {
   src?: string;
@@ -51,6 +88,7 @@ interface RunOpts {
   hasChild?: boolean;
   session?: any;
   copyOk?: boolean;
+  renderGuiPrompt?: (base: string, vars?: any) => Promise<string>;
 }
 
 function runSendReason(opts: RunOpts = {}) {
@@ -77,6 +115,8 @@ function runSendReason(opts: RunOpts = {}) {
     setNote: (v: any) => { state.notes.push(v); },
     onConfirm: (v: any) => { state.confirmed.push(v); },
     dgT: (k: string) => `T:${k}`,
+    // g-496 att-007：模板读取（真实实现 + 真实资产）。opts.renderGuiPrompt 可注入失败形态。
+    renderGuiPrompt: opts.renderGuiPrompt ?? ((base: string, vars?: any) => realRenderGuiPrompt(base, vars)),
     copyText: async (t: string) => { state.copied.push(t); return opts.copyOk !== false; },
     showToast: (t: any) => { state.toasts.push(t); },
     setTimeout: (fn: any, ms: number) => { state.timers.push({ fn, ms }); return 0; },
@@ -100,7 +140,12 @@ test("g-397 判据1/2：ok:false（delivery-unavailable）不置 sent，退复�
   await run();
   assert.equal(probe.prompts.length, 1, "确实尝试过投递（恰好一次，不重复发送）");
   assert.equal(probe.prompts[0].mode, "queue", "仍以 queue 模式投递");
-  assert.equal(probe.prompts[0].parts[0].text, "【g-1 回退理由】理由文本", "提示词模板逐字不变（reason 已 trim）");
+  // g-496 att-007：正文由**真实资产 + 真实插值**给出（迁移前是内联字面量，逐字等价）。
+  assert.equal(probe.prompts[0].parts[0].text, await expectedBackwardReason("g-1", "理由文本"),
+    "提示词模板逐字不变（骨架取自资产，reason 已 trim）");
+  // 反向自证：该正文必须**真的**来自资产（而不是恰好撞上某个内联字面量）。
+  assert.ok((await expectedBackwardReason("g-1", "理由文本")).includes("理由文本"),
+    "插值必须把 reason 代入");
   assert.deepEqual(state.sent, [], "负回执绝不 setSent(true)（不虚报已投递）");
   assert.deepEqual(state.copied, ["理由文本"], "理由必须复制到剪贴板兜底（内容不丢）");
   assert.deepEqual(state.toasts, ["T:backward.reasonUnconfirmedCopied"], "必须有可见提示");

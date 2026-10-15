@@ -19,8 +19,8 @@ const repoRoot = join(import.meta.dirname, "../..");
 
 /** 指南的两个源文件；`side` 只用于失败信息里区分 zh/en。 */
 const GUIDES = [
-  { side: "zh", file: "dsh-graph-host/supervisor-guide.zh.md" },
-  { side: "en", file: "dsh-graph-host/supervisor-guide.en.md" },
+  { side: "zh", file: "prompts/supervisor-guide.zh.md" },
+  { side: "en", file: "prompts/supervisor-guide.en.md" },
 ] as const;
 
 /** 三条格式红线：`g-<数字>` 编号（占位符 `g-XXX` 不算违规）、「本次」、2–4 级标题行含版本号。 */

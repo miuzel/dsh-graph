@@ -521,6 +521,10 @@
       // g-272 att-002：定义/润色「发送给主管」路径的复制结果提示
       'exec.requestCopiedOpened': '✅ 请求已复制，已打开主管会话，请粘贴发送',
       'exec.autocopyFailedRequest': '⚠️ 自动复制失败，请手动复制下方请求',
+      // g-496：定义/润色模板的**插值占位取值**（UI 层语义，随 locale）——模板骨架在宿主资产里，
+      // 这两个占位不进资产正文，避免把界面语言相关文案固化进模板。
+      'exec.goalPathUnknown': '（路径未知）',
+      'exec.guidanceNone': '（无）',
       // g-327：能直发时的如实反馈（不得复用「已复制…请粘贴发送」）
       'exec.requestDelivered': '✅ 请求已直接发送给主管会话',
       'exec.requestDeliveredOpened': '✅ 请求已直接发送给主管会话，已打开主管会话',
@@ -658,6 +662,30 @@
       'settings.supervisorAutomation': '主管自动化指导（supervisor.automation）',
       // g-439：六键已由主管提示真实消费——如实说明消费方式（只影响提示，不改变工具权限、不构成引擎强制）
       'settings.automationHint': '影响主管提示：human 请求负责人确认、ai 在已授权范围内自主判断并留痕、未配置保持既有指导；不改变工具权限，也不构成引擎强制（不改变「开始工作」「审核」「发布」等既有 gate 要求）。',
+      // g-490：六键**未配置**时的显示口径（负责人 2026-10-12 裁决：**诚实口径、不编默认值**）。
+      // 「默认：」前缀**只**用于两键的动作落在既有某类人工 gate 范围内的情形，且**必须**紧跟
+      // `settings.automationDefaultScopeNotePrefix/Suffix` 的口径来源标注（见下方两键 + gate 名）。
+      // 键级 human/ai 取值由引擎 `AUTOMATION_UNSET_SCOPE` 经 `/api/dsh-graph/settings` 的
+      // `automation_unset_scope` 下发（**不是**解析默认值）；客户端不留 human/ai 副本。
+      'settings.automationDefaultPrefix': '默认：',
+      // g-490：其余四键（以及缺 `automation_unset_scope` 的旧服务端）的**唯一**未配置口径：
+      // 引擎未配置即返回 null 且不输出该键指导行（`supervisor-guide.zh.md`「未配置保持既有指导」）
+      // ⇒ 面板如实显示这句话，**绝不**编出 human/ai。
+      'settings.automationUnsetKeep': '未配置：保持既有指导',
+      'settings.automationDefaultScopeNotePrefix': '未配置口径：这里显示的「默认：human」并非引擎解析默认值，其依据是《主管指南》四类人工 gate「',
+      'settings.automationDefaultScopeNoteSuffix': '」——该动作仍在该人工 gate 范围内，需负责人确认；未配置亦沿用既有指导。',
+      // g-490：四类人工 gate 中**与本面板相关**的两个 gate 名（口径来源标注用；稳定 id 由引擎下发，
+      // 展示名走 i18n，避免面板内出现未本地化的中文 gate 名）。
+      'settings.gateScope.version_plan': '调整版本计划',
+      'settings.gateScope.release': '发布',
+      // g-488：六键**逐键**说明（每键一个标题右侧 `(?)`）——讲清「这一键管什么」+「human / ai 两种取值
+      // 在本键上的含义」+「未配置 = 保持既有指导」。总口径（只影响提示、不构成引擎强制）见上一行的总说明。
+      'settings.automationWhat.scope_planning': '范围规划：是否先把目标拆成执行范围与判据再开工。human = 开工前请负责人确认范围与判据；ai = 在目标描述与既有授权范围内自行拆解并留痕；未配置 = 沿用既有指导。',
+      'settings.automationWhat.integration_decision': '集成裁决：候选实现是否合入、以及合入前要不要人工放行。human = 合入决定请负责人拍板；ai = 依据已核验证据自行裁决并记入事件流；未配置 = 沿用既有指导。',
+      'settings.automationWhat.rework': '返工判定：验收不过时，是退回重做还是转人工。human = 返工前请负责人确认口径与约束；ai = 按已核验失败自行登记返工 handoff 并重派；未配置 = 沿用既有指导。',
+      'settings.automationWhat.memory_promotion': '记忆提升：把本轮经验沉淀为长期记忆、以及是否升为常驻。human = 提升/升级常驻前请负责人确认；ai = 自行按分级铁律沉淀（默认按需记忆，常驻仍受硬上限约束）；未配置 = 沿用既有指导。',
+      'settings.automationWhat.skill_proposal': '技能提案：是否把可复用的工作流整理成 skill 提案并提交。human = 提案内容与提交请负责人确认；ai = 自行起草提案并留痕待批；未配置 = 沿用既有指导。',
+      'settings.automationWhat.release': '发布：版本号、发布门禁与发布动作由谁放行。human = 发布动作必须请负责人确认；ai = 在已授权范围内完成发布前检查并留痕，最终发布仍受既有 gate 约束；未配置 = 沿用既有指导。',
       'settings.reviewPolicyLabel': '分级评审策略 (review.policy)',
       'settings.reviewPolicyAria': 'workspace 分级评审策略',
       'settings.reviewPolicyInherit': '继承（未配置，按目标类型派生）',
@@ -712,9 +740,11 @@
       'settings.projectYaml': '📄 project.yaml',
       'settings.openProjectYaml': '用系统默认编辑器打开 project.yaml',
       'settings.copyProjectPath': '复制 project.yaml 路径',
+      // g-490 增量（负责人 2026-10-12 批 2）：project.yaml 的**绝对路径全文**在设置弹窗内只经该行 `(?)`
+      // 浮层承载（浮层内另起一行），原生 title 只留短提示 —— 触屏无 hover，title 等于不可达。
+      'settings.currentPath': '当前路径：',
       'settings.openedProjectYaml': '✅ 已打开 project.yaml',
-      'settings.showAdvanced': '显示高级设置',
-      'settings.hideAdvanced': '隐藏高级设置',
+      // g-488：settings.showAdvanced / settings.hideAdvanced 已删除——折叠按钮与页签内显隐开关一并移除。
       'settings.autoRefresh': '看板数据自动刷新：',
       'settings.seconds': '秒',
       'settings.minInterval': '（下限 5 秒）',
@@ -754,7 +784,8 @@
       'settings.discardDirtyConfirm': '有未保存的修改，确认放弃？',
       'settings.saveFail': '保存失败：',
       'settings.loadFail': '加载配置失败：',
-      'settings.pkLanesError': 'pk.lanes 必须是 >=1 的整数',
+      // g-488：settings.pkLanesError 已删除——pk.lanes 输入框与其保存前整数校验一并移除
+      // （core 侧读取/规整语义未动，文件里的非法值不再永久阻断保存）。
       'settings.promptInheritHint': '（继承当前 profile 全局提示词）',
       'settings.promptDisableHint': '（全局提示词被禁用）',
       'settings.promptOverridePlaceholder': '输入覆盖文本（支持空格/引号/#/多行）…',
@@ -764,6 +795,31 @@
       'settings.defaultTooltip': '继承当前 DSH profile 全局值',
       'settings.overrideTooltip': '自定义文本覆盖全局',
       'settings.disableTooltip': '显式禁用全局提示词',
+      // g-479：设置弹窗分类页签（labels/aria）+ 「界面与刷新」页签的本地偏好如实标注
+      'settings.tabsAria': '设置分类页签',
+      'settings.tab.executor': '模型与执行',
+      'settings.tab.review': '评审与质量',
+      'settings.tab.ui': '界面与刷新',
+      'settings.tab.modules': '模块',
+      'settings.tab.advanced': '高级',
+      // g-488：settings.tab.about 已删除（「关于」页签移除，配置文件入口迁到弹窗页脚一行）。
+      'settings.tabLocalNote': '本页两项为本地偏好：只保存在浏览器 localStorage，不写入 project.yaml，也不随项目配置同步。',
+      // g-480：harness 模块可选开关（workspace 级；关闭 = 真裁剪工具面 + 相关提示词段，不删除数据）
+      'settings.modulesNote': '关闭某模块会真正裁剪该模块的能力：其工具从模型可见的工具清单中移除，相关系统提示词段也不再注入。数据不会被删除，重新开启即恢复。',
+      'settings.modulesScopeNote': '作用范围：当前 workspace（写入本项目的 project.yaml）。未配置 = 全部开启。提示：修改开关后创建的新会话（或新派发子代理）立即生效；已有活跃会话需开启新会话或重载生效。',
+      // g-480：宿主**不支持真裁剪**（无 agent/created 或 tools.restrict）时的唯一一行提示；
+      // 服务端 `trim_supported === false` 才渲染（支持时**不渲染**该行）。
+      'settings.modulesTrimUnsupported': '⚠️ 本版本 DSH 不支持真裁剪：模块开关不生效，只会记录配置（工具与提示词均不受影响）。',
+      'settings.module.tags': '目标标签',
+      'settings.module.memory': '记忆',
+      'settings.module.sharedCards': '项目知识库（共享卡片）',
+      'settings.module.automationPrompts': '自动化任务提示词',
+      'settings.module.attachments': '附件',
+      'settings.moduleHint.tags': '目标标签的读写工具（graph_set_goal_tags）',
+      'settings.moduleHint.memory': '记忆的增删改查工具与常驻记忆段（graph_memory_*）',
+      'settings.moduleHint.sharedCards': '共享卡片池的工具（graph_*_shared_card / graph_convert_card_to_*）',
+      'settings.moduleHint.automationPrompts': '主管提示词里的自动化动作指导段（supervisor.automation 六键）',
+      'settings.moduleHint.attachments': '附件的存取与删除工具（graph_store_attachment / graph_delete_attachment）',
 
       // === 判据编辑弹窗 ===
       'criteria.editTitle': '✏️ 编辑质量判据',
@@ -788,7 +844,10 @@
       'criteria.feedbackSend': '发送',
       'criteria.feedbackQueued': '✅ 反馈已排队送达执行会话',
       'criteria.feedbackQueuedDepth': '✅ 反馈已排队送达执行会话（当前队列 {n} 条）',
-      'criteria.feedbackNotConnected': '⚠️ 执行会话未接入，反馈无法送达',
+      // g-478：该键语义修订 —— 仅在「执行会话与主管会话都不可达/投递未获正向回执」时使用（原值把
+      // 「该目标当前无执行会话」误报成「未接入」，现已改为如实陈述两条通路都未送达）。
+      'criteria.feedbackNotConnected': '⚠️ 执行会话未接入，且主管会话不可达，反馈未送达',
+      'criteria.feedbackSupervisorDelivered': '✅ 已送达主管会话（该目标当前无执行会话）',
       'criteria.feedbackSendFail': '⚠️ 反馈发送失败：',
 
       // === g-462：Graph 设计哲学弹窗（入口与刷新/记忆并列） ===
@@ -865,13 +924,6 @@
       'drawer.unknownAttachmentRoot': '（附件根未知）',
       'drawer.filledBy': '填充：',
       'drawer.cardNotExist': '卡片不存在：',
-      'drawer.collectContext': '## 收集任务上下文',
-      'drawer.collectScope': '**收集范围**：',
-      'drawer.collectHint': '请收集与卡片「{title}」相关的详细上下文信息，用于填充该卡片。',
-      'drawer.canonicalAttRoot': '**canonical 附件根（绝对路径）**：',
-      'drawer.goalInfoLabel': '**目标信息**：',
-      'drawer.cardInfoLabel': '**卡片信息**：',
-      'drawer.backfillReq': '**回填要求**：',
       'drawer.collectTitle': '📝 收集提示词',
       'drawer.collectInfoTarget': '收集信息目标（可编辑）',
       'drawer.collectConstraints': '规范约束（只读）',
@@ -917,17 +969,6 @@
       'drawer.unrefSuccess': '✅ 已解除本 goal 引用',
       'drawer.convertCollecting': '收集中不可转换',
       'drawer.deleteCollecting': '收集中卡片不可删除',
-      'prompt.collect.backfillText': '1. 把正文全文写进 `text` 参数；`summary` 写一句话要点式摘要（≤100 字左右），不长文。',
-      'prompt.collect.attachments': '2. 若收集到文件附件（md/txt、图片、csv/Excel、二进制）用 `graph_store_attachment`：文本用 content、二进制/图片用 base64，写入上述 canonical 附件根；返回稳定相对引用名。',
-      'prompt.collect.reference': '3. 回调正文或 goal.md 时用 `@att/<相对引用名>` 引用附件（可含安全子目录）。',
-      'prompt.collect.finish': '4. 完成后调用以下精确命令回填结果：',
-      'prompt.collect.command': 'graph_fill_card(goal="{goalId}", card="{cardId}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)',
-      'prompt.collect.securityTitle': '**附件安全与边界**：',
-      'prompt.collect.security': '只写入上述 canonical 附件根；拒绝绝对路径、./.. 穿越、反斜杠、NUL；不得访问/引用 `.dsh-graph` 之外文件；互联网抓取仅限 http(s)，设超时/大小上限，禁 file://、localhost、内网（SSRF）。',
-      'prompt.collect.forbiddenTitle': '**禁区（严格遵守）**：',
-      'prompt.collect.forbiddenGoal': '1. 不得修改其他 goal 或 card——只能回填当前绑定的卡片 `{cardId}`',
-      'prompt.collect.forbiddenReview': '2. 不得自行调用 `graph_review_card`——完成后由 supervisor 复核',
-      'prompt.collect.forbiddenWorkspace': '3. 所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行',
 
       // === 共享面板 ===
       'shared.title': '📇 项目知识库（共享条目）',
@@ -1179,6 +1220,165 @@
       'profileSettings.promptHint': '默认为空；workspace 覆盖字段 default 继承此项，自定义文本覆盖，显式空值禁用该项全局提示词。',
       'profileSettings.saving': '保存中…',
       'profileSettings.save': '保存',
+
+      // === g-481：「使用说明」弹窗（入口在原「Graph 设计」位置；设计图成为其中第 5 个页签）===
+      // 说明：g-462 的 design.* 键**保留不动**（图页签继续复用 design.tab.* / design.openNewTab /
+      // design.notice / design.roadmap；入口文案已由 help.btn / help.title 提供，design.btn 不再被引用）。
+      // 本段为**追加**（并行开发纪律：不改动、不重排既有键）。
+      'help.btn': '📖 使用说明',
+      'help.title': '使用说明',
+      'help.tab.usage': '使用说明',
+      'help.tab.prompts': '提示词模板',
+      'help.tab.tools': '工具清单',
+      'help.tab.faq': '常见问题',
+      'help.tab.design': 'Graph 设计',
+      'help.lang.zh': '中文',
+      'help.lang.en': 'English',
+      'help.version': '当前版本：v{version}',
+      'help.usage.what': 'dsh-graph 把工作组织成「目标看板」：目标、判据、卡片与执行都在看板上管理，Agent 通过 graph_* 工具操作。',
+      'help.usage.board': '看板按版本 / 独立目标 / backlog 分区展示目标卡片，卡片上直接读状态、判据与最近一次执行。',
+      'help.usage.flow': '典型流程：先建目标并写清判据 → 排期到版本或独立目标 → 派发执行（必要时隔离到独立工作树）→ 完成后复核。',
+      'help.usage.dispatch': '每次派发会在目标上留下一条执行记录，执行输出自动写入结果文件；同一目标可以多次返工。',
+      'help.usage.review': '关键节点由你本人裁决：开始工作、接受或驳回结果、发布版本。引擎不会替你通过。',
+      'help.usage.tabs': '本弹窗其余页签：提示词模板（引擎实际投递给 Agent 的资产，只读）、工具清单（引擎当前注册的全部工具）、常见问题、Graph 设计（两张交互图）。',
+      'help.prompts.intro': '以下资产与引擎实际投递给 Agent 的提示词是同一份（只读展示，此处不可编辑）。',
+      'help.prompts.source': '内容随包发布，按语言各一份；可用右侧按钮切换语言查看对应版本。',
+      // g-498：清单按宿主注册元数据的语义分类分组（客户端不新增文件清单）；未分类项仍可见。
+      'help.prompts.orphan': '未分类',
+      // g-498：缺对应语言时透明回落 —— 如实标注实际展示的语言，不假装就是请求的那一份。
+      'help.prompts.langFallback': '（该语言暂无此模板，已回落到{lang}版）',
+      'help.prompts.loading': '读取中…',
+      'help.prompts.error': '读取失败：{error}',
+      'help.asset.usage': '使用指引',
+      'help.asset.help': '工具速查',
+      'help.asset.agent-teams-contract': 'Agent Teams 契约',
+      'help.asset.attempt-instructions': '执行定位与覆盖声明',
+      'help.asset.attempt-report-skeleton': '交回报文骨架',
+      'help.asset.automation-guidance': '自动化动作指导',
+      'help.asset.collect-task': '卡片收集任务',
+      'help.asset.discipline': '主管纪律',
+      'help.asset.executor-discipline': '执行纪律',
+      'help.asset.guide-hint': '会话引导',
+      'help.asset.minor-task': '微小改动豁免',
+      'help.asset.no-isolation': '免隔离执行指引',
+      'help.asset.pm-task': 'PM 润色与定义',
+      'help.asset.review-task': '独立复核任务',
+      'help.asset.subagent-mode': '子代理模式策略',
+      'help.asset.summary-task': '完成摘要撰写',
+      'help.asset.supervisor-guide': '主管工作指南',
+      'help.asset.worktree': '隔离执行指引',
+      // g-496：GUI 提示词模板资产标签（正文在宿主专属层 md 资产里，此处只是帮助页签的展示标签）。
+      'help.asset.gui-criteria-feedback-supervisor': '判据反馈（转主管）',
+      'help.asset.gui-criteria-feedback-executor': '判据反馈（发执行会话）',
+      'help.asset.gui-define-polish-request': '目标定义/润色请求',
+      'help.asset.gui-accept-review-request': '单目标交付复核请求',
+      'help.asset.gui-backward-reason': '泳道拖放回退理由',
+      'help.asset.gui-reexecute': '拖放重新执行通知',
+      'help.asset.gui-batch-accept-review-request': '批量交付复核请求',
+      'help.asset.gui-deliver-notice': '交付确认通知',
+      'help.asset.gui-help-takeover-example': '接管主管示例提示词',
+      'help.tools.intro': '共 {count} 个工具，清单来自引擎的当前注册（名称与说明同源，随注册变化自动跟随）。',
+      'help.tools.langHint': '说明语言：{lang}（跟随提示词语言设置）',
+      'help.tools.loading': '读取中…',
+      'help.tools.error': '读取失败：{error}',
+      'help.faq.intro': '常见问题（覆盖范围、判据、执行、模块开关与数据存放）。',
+      'help.faq.q1': '这个插件是做什么的？',
+      'help.faq.a1': '它给 Agent 一套「目标看板」工作方式：把要做的事写成目标与判据，把执行派发出去，再由你复核结果。',
+      'help.faq.q2': '目标、判据、卡片有什么区别？',
+      'help.faq.a2': '目标是「要达成什么」，判据是「怎样算达成」（先写判据再动手），卡片是执行过程中收集的上下文与结论。',
+      'help.faq.q3': '看板上的分区和状态是什么意思？',
+      'help.faq.a3': '分区（版本 / 独立目标 / backlog）表示排期归属；状态表示目标所处阶段，从草稿、规划、执行中，到待复核、已交付或已暂缓。',
+      'help.faq.q4': '执行会不会改动我的代码？',
+      'help.faq.a4': '可能改，改动范围由目标与判据界定；需要隔离时执行在独立的 git 工作树里进行，主工作区不被改动。',
+      'help.faq.q5': '为什么有些操作需要我确认？',
+      'help.faq.a5': '开始工作、接受结果、发布版本这几个节点是人工 gate：Agent 只能提交请求，通过与否由你决定。',
+      'help.faq.q6': '数据放在哪里？',
+      'help.faq.a6': '看板数据保存在当前工作区的 .dsh-graph 目录下，随工作区走；换工作区就是另一块看板。',
+      'help.faq.q7': '能不能关掉用不上的模块？',
+      'help.faq.a7': '可以。看板设置的「模块」页签里有标签、记忆、共享卡片、自动化提示词、附件五个开关，按工作区保存在 project.yaml；关掉某个模块后，对应的 graph_* 工具与投递给 Agent 的提示词段都会真实消失（不是只隐藏按钮）。',
+      // === g-489：「使用说明」弹窗 —— 入门第一步 + 九章分模块说明 + 工具清单分类表格（zh/en 必须对称）===
+      'help.entry.title': '第一步：先指定一个主管 Agent',
+      'help.entry.body': 'dsh-graph 的看板由「主管 Agent」维护：它登记目标与判据、派发执行、汇总结果。新会话里先让一个 Agent 加载 dsh-graph-supervisor 技能（完整的主管工作守则）或 dsh-graph 技能，再执行 graph_claim_supervisor() 完成接管（claim）——接管后它会读到看板现状与交接文档，后续工作都从这里开始。',
+      'help.entry.promptLabel': '可直接复制的示例提示词：',
+      // g-496：示例提示词**正文**已移出字典（唯一事实源 = 宿主专属资产 gui-help-takeover-example.*.md，
+      // 经 /api/dsh-graph/help/asset/ 只读读取）；此处只保留展示标签，杜绝第二份正文副本。
+      'gui.promptAssetLoadFail': '⚠️ 提示词资产加载失败，请重试',
+      'help.entry.copy': '复制',
+      'help.entry.copied': '已复制',
+      'help.entry.copyFail': '复制失败，请手动选择文本',
+      'help.mod.title': '分模块说明',
+      'help.mod.intro': '以下九章对应看板上的各个模块，每章三行：是什么、怎么用（界面位置或工具名）、关键操作。',
+      'help.mod.what': '是什么',
+      'help.mod.how': '怎么用',
+      'help.mod.ops': '关键操作',
+      'help.mod.board.title': '看板',
+      'help.mod.board.what': '打开插件后的主界面：按「版本 / 独立目标 / backlog」分区，把目标渲染成卡片，卡片上直接读状态、判据与最近一次执行。',
+      'help.mod.board.how': '在 DSH Web 右侧边栏点「看板」页签打开；顶部工具条依次是刷新、标签筛选、🧠 记忆、📖 使用说明、📇 项目知识库与 ⚙ 看板设置，窄宽度时这些入口收进「⋯ 工具」折叠弹层。',
+      'help.mod.board.ops': '点卡片打开目标详情；泳道头部可新建目标；视图内有 status=review 的目标时，「确认」列列头出现「批量接受」按钮（逐个走非 force 接受，语义与逐卡接受一致）。',
+      'help.mod.goal.title': '目标',
+      'help.mod.goal.what': '目标是「要达成什么」：每条目标带状态、质量判据、描述、最近指令、标签与目标间关系；状态从 draft、planning、collecting、ready、in_progress、review 到 delivered，另有 blocked。',
+      'help.mod.goal.how': '泳道头部的「新建目标」创建；点卡片进目标详情，详情里有 📋 目标描述、✅ 质量判据、🔎 信息收集与近期动态。',
+      'help.mod.goal.ops': '先写判据再动手（登记判据会自动快照规则库版本）；迁移状态（进 blocked 必须给原因）；排期到版本 / 独立目标 / backlog；归档、暂缓、重命名、打标签与标记目标间关系。',
+      'help.mod.version.title': '版本管理',
+      'help.mod.version.what': '版本是目标的分组与发布单位：每个版本在看板上占一条泳道，版本本身带 slug、状态（进行中 / 已发布）与目标计数。',
+      'help.mod.version.how': '看板网格左上角的 🏷️ 版本管理打开版本抽屉：可按名称或 slug 搜索，用「显示全部 / 仅活跃版本 / 隐藏全部」控制泳道显隐（该过滤只存在本地，不改动底层版本数据）。',
+      'help.mod.version.ops': '新建版本、重命名、删除（只允许删除空版本）；从抽屉点「详情 ↗」查看版本详情，版本详情里同样能新建目标与重命名。',
+      'help.mod.lane.title': '泳道',
+      'help.mod.lane.what': '泳道是看板里的横向分组：每个版本一条，另有「独立目标」与 backlog 两条；同一条泳道内卡片按阶段列排布——描述 / 收集 / 执行 / 确认 / 交付，阻塞目标另有对应位置。',
+      'help.mod.lane.how': '泳道标题左侧的箭头折叠或展开；折叠后只留「▸ N 目标 · 点击展开」一行，展开状态与模块开关一样按工作区保存。',
+      'help.mod.lane.ops': '拖动卡片可在阶段之间或泳道之间移动（受状态机约束：backlog 卡片只能拖到版本的「描述」列，blocked 只能解除回原状态，非法迁移会被拒绝并给出原因）；在泳道头部直接新建该版本的目标。',
+      'help.mod.sidebar.title': '侧边栏用法',
+      'help.mod.sidebar.what': '插件在 DSH Web 的右侧边栏注册一个页签（标题「看板」，说明「在这个会话里查看和操作目标看板」），看板与会话并排，不必切走当前对话。',
+      'help.mod.sidebar.how': '在右侧边栏点「看板」页签即可展开；页签标题跟随界面语言（中文「看板」/ 英文 Kanban）。',
+      'help.mod.sidebar.ops': '一个工作区一块看板（数据在 .dsh-graph 目录下，随工作区走）；宿主没有右侧边栏能力（精简 profile / 旧宿主）时插件不注册该页签，也不报错。',
+      'help.mod.cards.title': '上下文卡片与项目知识库',
+      'help.mod.cards.what': '卡片是执行过程中收集的上下文与结论（正文 + 可选的 @att/<name> 附件引用）；共享卡进入「项目知识库」，同一张卡可以挂到多个目标以复用已收集的上下文。',
+      'help.mod.cards.how': '在目标详情的 🔎 信息收集区添加与查看卡片；顶部工具条的 📇 项目知识库打开共享条目面板（标题「📇 项目知识库（共享条目）」）。',
+      'help.mod.cards.ops': '建卡 / 填卡 / 复核卡 / 删卡；自有卡与共享卡互转；挂载、解除共享卡（仅目标 owner 或主管）；附件仍被卡片引用时不允许删除；backlog 目标不能建卡，需先排期。',
+      'help.mod.memory.title': '记忆系统',
+      'help.mod.memory.what': '记忆是跨会话保留的持久事实，分「常驻」（standing，进常驻提示词，有硬上限）与「按需」（on_demand，默认档，用时才检索）。',
+      'help.mod.memory.how': '顶部工具条的 🧠 记忆打开「🧠 记忆管理」弹窗，可检索、新增、修正与删除条目。',
+      'help.mod.memory.ops': '主管在关键节点把结论沉淀为记忆（默认按需，不占常驻预算）；删除要确认过时或由负责人撤回；记忆按工作区保存在 .dsh-graph 下，随工作区走。',
+      'help.mod.subagents.title': '子代理与 agent teams',
+      'help.mod.subagents.what': '执行以一次 attempt 为单位派发给执行子代理（必要时隔离到独立 git worktree），输出自动写入 results-att-*.md；评审可另派只读的 reviewer 子代理，结论独立落盘。',
+      'help.mod.subagents.how': '主管用 graph_start_attempt 派发执行、用 graph_start_review 派发独立评审；每次派发在目标上留一条执行记录，可在卡片上跟读状态。',
+      'help.mod.subagents.ops': '返工先登记 handoff 约束再重新派发；解绑或放弃失联的子代理；「模型与执行」页签配置执行器与模型，并有一个 Agent Teams 最小契约开关（默认关闭，开启后才向派发提示词注入契约段）。',
+      'help.mod.settings.title': '常用设置',
+      'help.mod.settings.what': '看板设置弹窗分五个页签：模型与执行 / 评审与质量 / 界面与刷新 / 模块 / 高级；配置按工作区保存在 project.yaml。',
+      'help.mod.settings.how': '看板右上角的 ⚙ 打开设置弹窗（窄宽度时在「⋯ 工具」弹层里）；另有 profile 级的「看板设置」（DSH 设置里的 dsh-graph 分组）配置子代理 provider / 模型 / 推理档 / 模式与提示词语言。',
+      'help.mod.settings.ops': '「模块」页签有标签、记忆、共享卡片、自动化提示词、附件五个开关，关掉后对应工具与投递提示词段真实消失（宿主不支持真裁剪时页内会提示开关不生效）；「评审与质量」配置 review.policy；「高级」放主管自动化指导六键与子代理补充提示词覆盖。',
+      'help.tools.colShort': '简称',
+      'help.tools.colName': '工具名',
+      'help.tools.colUse': '用途',
+      'help.tools.orphan': '未归类',
+      'help.tools.problems': '⚠️ 结构守卫未通过：分类表与注册真源不一致（请补齐分类表或简称）',
+
+      // === g-493：「使用说明」开篇点题 —— 为什么叫 dsh-graph：图工程与看板视图 ===
+      // 负责人 2026-10-12 原话口径的逐条落地（九个子项）。本段为**追加**（不改动、不重排既有键），
+      // 但「为什么叫 dsh-graph」是开篇章节 ⇒ 由客户端 HELP_USAGE_TOPIC_KEYS 驱动、渲染在既有段落之前。
+      'help.topic.section.naming': '命名与定义',
+      'help.topic.section.mechanism': '当前工作机制',
+      'help.topic.section.board': '看板定位',
+      'help.topic.section.roadmap': '未来路线图',
+      'help.topic.section.more': '其他',
+      'help.topic.title': '为什么叫 dsh-graph：图工程与看板视图',
+      'help.topic.naming': 'dsh-graph 这个名字取自**Graph Engineering（图工程）**的启发：把多智能体系统设计成一张显式的**图**，而不是依赖单个智能体跑单条循环。',
+      'help.topic.definition': '> mcp.so 上《Graph Engineering（图工程）的理解》一文把它定义为：「Graph Engineering（图工程）就是把多智能体系统设计成一张显式的图——节点（各自只负责一件事的智能体或步骤）、边（顺序、条件或并行的路由）、共享状态——而不是依赖单个智能体跑单条循环」。',
+      'help.topic.definitionSource': '以上为逐字引用，来源：mcp.so（《Graph Engineering（图工程）的理解》）。',
+      'help.topic.stateMachine': '落到实现上，这个插件其实是一套**任务 / 目标状态机**的维护系统：对 AI 来说，它像一套**简易的 Jira + Confluence**（换个熟悉的说法，也可以理解成禅道）——我把要做的事写成目标与判据，AI 去执行、我来裁决，过程和结论都留在同一处。',
+      'help.topic.roles': '在这套状态机里，角色不是预先分配好的岗位，而是**自然形成**的：主管（supervisor）负责登记目标与判据、派发与裁决，worker（子代理）干具体的活，reviewer（评审）独立复核结果，definer（定义者）把需求说清楚成目标，collector（收集者）先把上下文查明白，user（用户，也就是你）守人工关口。约束它们的只有两样东西：**主管工作指南**（技能 dsh-graph-supervisor）与**目标状态机**自身——谁在什么时候能做什么，由状态与指南决定，而不是由人在会话里临时指派。',
+      'help.topic.lifecycle': '一次工作顺着一条生命周期链推进：new request → define goal and criteria → collect → implement → review → verdict → deliver。它有两个回路：**返工**会从 verdict 回到 implement，**分支出新目标**则从需要拆开的那一步分出一条新的 goal 链，各自独立推进。',
+      'help.topic.core': '这条状态机由 **dsh-graph core**（core/ 目录）定义并组织：状态迁移、判据门禁、派发与裁决的规则都在 core 里。本插件是这套 core 之上**这种图分工下的监控管理看板视图**。等它足够稳定好用、也足够简洁之后，同一套 core 还可以产出别的视图——比如 dsh TUI，或 pi-ai 的插件。',
+      'help.topic.kanbanIsView': '所以有个问题值得先问自己：**你真的需要一直看到这张图么？需要很多张不一样的图么？需要为每个任务定制一张图么？**看板只是这张图的一个视图。真正的核心是三件事：AI 工作的**全过程约束**、智能体之间的**分工**，以及从用户到主管再到 worker 的**逐层审批控制**。',
+      'help.topic.programmable': '图工程的意义在于让智能体的组织方式**可编程**。但这种编程**不是**用一个 DSL 去规定节点和边——它更像一种软件工程实践：人类和 AI、Agent 和 Agent 之间怎么合作干活。把它说清楚就够了，用自然语言告诉自己和 Agent，这种「编程」就完成了。',
+      'help.topic.stateOfMind': '**重要的是用户心中有图，而不是界面上有一张固定的图。**这张图不是固定图：它随任务变化，不预先固定，也不需要你为每个任务去定制。当你和 AI 合作开发进入心流，闭上眼睛你会看到这张图：谁在做什么、走到哪一步、哪里可能需要返工。这也正是插件名字的用意——它同时提醒我（负责人）和 AI：看板只是视图。',
+      'help.topic.solves': '那看板在这里解决什么？主要是两件事。一是**全过程直观**：让你一眼看懂智能体在做什么、任务怎么被拆开、阶段怎么推进、哪里回退或返工、哪里分支出新的需求与新目标。二是**随时插嘴**：你可以在任何一个细节上介入，也可以随时跟主管 Agent 讨论方向、方法、目标变化与版本计划——这些讨论会被登记进目标，而不是散在对话里。',
+      'help.topic.roadmap': '路线图如实说明：**图的自定义功能将在后续版本陆续开放**（图语义调整、可视化自定义等）；**当前版本以过程可视化 + 任务状态机机制为主**，本弹窗里的图是随包发布的固定图，暂时不可调整。',
+      'help.topic.faqQ': '看板就是那张「图」吗？',
+      'help.topic.faqA': '不是。看板只是那张图的一个**视图**：它把状态机当前的样子画给你看。图本身在协作过程中形成——节点是各司其职的 Agent 或步骤，边是顺序、条件或并行的路由，共享状态就是目标、判据、卡片与记忆。它随任务变化，不需要你为每个任务定制一张固定图，也不需要你一直盯着它。真正的核心是全过程约束、智能体分工与逐层审批控制；看板负责把这一切变直观，并给你留好随时插嘴的入口。图的自定义功能会在后续版本陆续开放。',
+      'help.topic.designCrossref': '命名与「看板只是视图」的完整说明见「使用说明」页签开篇的《为什么叫 dsh-graph：图工程与看板视图》一节；本页签只讲设计哲学的落地形态——下面这两张图就是这套图分工在**当前版本**的固定画法。',
+      'help.toolTopic.graph_help': '显示本帮助；按 topic 查询单个主题（usage / graph_engineering / 某个模块名）。',
+      'help.toolTopic.list': '只读列出可用于查看的帮助主题（使用说明、图工程点题章节与各工具名）。',
     };
 
     // --- 英文字典 ---
@@ -1698,6 +1898,9 @@
       // g-272 att-002: copy-result hints for the define/polish "send to supervisor" path
       'exec.requestCopiedOpened': '✅ Request copied, supervisor session opened — paste to send',
       'exec.autocopyFailedRequest': '⚠️ Auto-copy failed, please copy the request below manually',
+      // g-496: placeholder values for the define/polish template (UI-level, follows locale).
+      'exec.goalPathUnknown': '(path unknown)',
+      'exec.guidanceNone': '(none)',
       // g-327: honest feedback when the request is delivered straight to the supervisor session
       'exec.requestDelivered': '✅ Request sent directly to the supervisor session',
       'exec.requestDeliveredOpened': '✅ Request sent directly to the supervisor session — session opened',
@@ -1835,6 +2038,31 @@
       'settings.supervisorAutomation': 'Supervisor automation guidance (supervisor.automation)',
       // g-439: the six keys are genuinely consumed by the supervisor prompt — state how, truthfully
       'settings.automationHint': 'Affects the supervisor prompt: human asks the person in charge for confirmation, ai decides autonomously within the already authorized scope and leaves a trace, and unset keeps the existing guidance; it changes no tool permission and is not engine enforcement (it changes no existing gate such as start work, review, or release).',
+      // g-490: unset display wording (owner ruling 2026-10-12: honest wording, never invent a default).
+      // The "Default:" prefix applies ONLY to the two keys whose action falls inside an existing human
+      // gate's scope, and it must always be accompanied by the source note below. The per-key human/ai
+      // value comes from the engine's AUTOMATION_UNSET_SCOPE via automation_unset_scope (it is NOT a
+      // resolved default); the client keeps no human/ai copy.
+      'settings.automationDefaultPrefix': 'Default: ',
+      // g-490: the ONLY unset wording for the other four keys (and for older servers lacking
+      // automation_unset_scope): the engine returns null and emits no guidance line for that key
+      // ("unset keeps the existing guidance" in supervisor-guide.zh.md) — so say exactly that.
+      'settings.automationUnsetKeep': 'Unset: keeps the existing guidance',
+      'settings.automationDefaultScopeNotePrefix': 'Unset wording: the "Default: human" shown here is not an engine-resolved default; it is grounded in one of the four human gates in the Supervisor Guide — "',
+      'settings.automationDefaultScopeNoteSuffix': '" — the action still sits inside that human gate and needs the owner\'s confirmation; when unset it keeps the existing guidance.',
+      // g-490: display names of the two gates relevant to this panel (the stable id is sent by the
+      // engine; the name is localized here so the panel never shows an untranslated gate name).
+      'settings.gateScope.version_plan': 'adjusting the version plan',
+      'settings.gateScope.release': 'release',
+      // g-488: per-key explanations for the six automation keys (one title-row `(?)` each): what the key
+      // governs + what human / ai mean for it + unset keeps the existing guidance. The cross-key caveat
+      // (prompt-only, no engine enforcement) lives in settings.automationHint above.
+      'settings.automationWhat.scope_planning': 'Scope planning: whether the goal is broken into execution scope and criteria before work starts. human = confirm scope and criteria with the owner first; ai = split it autonomously within the goal description and existing authorization, leaving a trace; unset = keep the existing guidance.',
+      'settings.automationWhat.integration_decision': 'Integration decision: whether a candidate implementation is merged, and whether a human must approve it first. human = the owner makes the merge call; ai = decide from verified evidence and record it in the event stream; unset = keep the existing guidance.',
+      'settings.automationWhat.rework': 'Rework: when acceptance fails, send it back for another attempt or escalate to a human. human = confirm the criteria and constraints with the owner first; ai = register the rework handoff from verified failures and dispatch again; unset = keep the existing guidance.',
+      'settings.automationWhat.memory_promotion': 'Memory promotion: turn this round experience into long-term memory, and whether it becomes standing. human = confirm promotion or standing status with the owner; ai = persist it by the tiering rules (on-demand by default; standing still obeys the hard cap); unset = keep the existing guidance.',
+      'settings.automationWhat.skill_proposal': 'Skill proposal: whether a reusable workflow is written up as a skill proposal and submitted. human = confirm the content and submission with the owner; ai = draft the proposal and leave it pending approval; unset = keep the existing guidance.',
+      'settings.automationWhat.release': 'Release: who clears the version number, the release gate, and the release action. human = the owner must confirm the release action; ai = complete pre-release checks within the authorized scope and leave a trace, while the final release still obeys the existing gates; unset = keep the existing guidance.',
       'settings.reviewPolicyLabel': 'Graded review policy (review.policy)',
       'settings.reviewPolicyAria': 'Workspace graded review policy',
       'settings.reviewPolicyInherit': 'Inherit (unset; derived from goal type)',
@@ -1889,9 +2117,11 @@
       'settings.projectYaml': '📄 project.yaml',
       'settings.openProjectYaml': 'Open project.yaml with system editor',
       'settings.copyProjectPath': 'Copy project.yaml path',
+      // g-490 increment (owner 2026-10-12, round 2): the full absolute path is carried **only** by this
+      // row's `(?)` popover (as its own line); the native title keeps a short hint — touch has no hover.
+      'settings.currentPath': 'Current path:',
       'settings.openedProjectYaml': '✅ Opened project.yaml',
-      'settings.showAdvanced': 'Show advanced settings',
-      'settings.hideAdvanced': 'Hide advanced settings',
+      // g-488: settings.showAdvanced / settings.hideAdvanced removed together with the toggle button.
       'settings.autoRefresh': 'Board auto-refresh interval:',
       'settings.seconds': 's',
       'settings.minInterval': '(min 5s)',
@@ -1931,7 +2161,7 @@
       'settings.discardDirtyConfirm': 'You have unsaved changes. Discard them?',
       'settings.saveFail': 'Save failed: ',
       'settings.loadFail': 'Failed to load config: ',
-      'settings.pkLanesError': 'pk.lanes must be an integer >= 1',
+      // g-488: settings.pkLanesError removed together with the pk.lanes input and its pre-save check.
       'settings.promptInheritHint': '(Inherits current profile global prompt)',
       'settings.promptDisableHint': '(Global prompt disabled)',
       'settings.promptOverridePlaceholder': 'Enter override text (supports spaces/quotes/#/multiline)…',
@@ -1941,6 +2171,32 @@
       'settings.defaultTooltip': 'Inherit from current DSH profile global value',
       'settings.overrideTooltip': 'Custom text overrides global',
       'settings.disableTooltip': 'Explicitly disable global prompt',
+      // g-479：settings modal category tabs (labels/aria) + the local-preference note of the UI tab
+      'settings.tabsAria': 'Settings category tabs',
+      'settings.tab.executor': 'Model & execution',
+      'settings.tab.review': 'Review & quality',
+      'settings.tab.ui': 'UI & refresh',
+      'settings.tab.modules': 'Modules',
+      'settings.tab.advanced': 'Advanced',
+      // g-488: settings.tab.about removed (About tab gone; config file entry moved to one footer line).
+      'settings.tabLocalNote': 'Both items on this tab are local preferences: stored in browser localStorage only, never written to project.yaml and never synced with project config.',
+      // g-480: optional harness module switches (workspace level; off = real trimming of the tool face
+      // plus the related prompt sections, and never any data deletion)
+      'settings.modulesNote': 'Turning a module off really trims its capability: its tools are removed from the tool list the model can see, and the related system prompt sections are no longer injected. No data is deleted; turning it back on restores everything.',
+      'settings.modulesScopeNote': 'Scope: the current workspace (written to this project\'s project.yaml). Unconfigured means all modules on. Note: changes take effect immediately for new sessions and newly dispatched subagents; existing live sessions require a new session or reload.',
+      // g-480: single hint line rendered only when the host reports `trim_supported === false`
+      // (no agent/created event or no tools.restrict); never rendered on supporting hosts.
+      'settings.modulesTrimUnsupported': '⚠️ This DSH version does not support real trimming: module switches have no effect and are recorded only (tools and prompts stay unchanged).',
+      'settings.module.tags': 'Goal tags',
+      'settings.module.memory': 'Memory',
+      'settings.module.sharedCards': 'Project knowledge base (shared cards)',
+      'settings.module.automationPrompts': 'Automation task guidance',
+      'settings.module.attachments': 'Attachments',
+      'settings.moduleHint.tags': 'Read/write tools for goal tags (graph_set_goal_tags)',
+      'settings.moduleHint.memory': 'Create/replace/remove/recall tools plus the standing-memory section (graph_memory_*)',
+      'settings.moduleHint.sharedCards': 'Shared card pool tools (graph_*_shared_card / graph_convert_card_to_*)',
+      'settings.moduleHint.automationPrompts': 'The automation action guidance section in the supervisor prompt (the six supervisor.automation keys)',
+      'settings.moduleHint.attachments': 'Tools to store and delete attachments (graph_store_attachment / graph_delete_attachment)',
 
       // === Criteria modal ===
       'criteria.editTitle': '✏️ Edit Quality Criteria',
@@ -1965,7 +2221,10 @@
       'criteria.feedbackSend': 'Send',
       'criteria.feedbackQueued': '✅ Feedback queued for execution session',
       'criteria.feedbackQueuedDepth': '✅ Feedback queued for execution session ({n} in queue)',
-      'criteria.feedbackNotConnected': '⚠️ Execution session not connected, feedback cannot be delivered',
+      // g-478: meaning revised — used only when neither the execution session nor the supervisor
+      // session is reachable (the old wording misreported "no execution session" as "not connected").
+      'criteria.feedbackNotConnected': '⚠️ Execution session not connected and supervisor session unreachable; feedback was not delivered',
+      'criteria.feedbackSupervisorDelivered': '✅ Delivered to the supervisor session (this goal has no active execution session)',
       'criteria.feedbackSendFail': '⚠️ Feedback send failed: ',
 
       // === g-462: Graph design philosophy modal ===
@@ -2042,13 +2301,6 @@
       'drawer.unknownAttachmentRoot': '(Attachment root unknown)',
       'drawer.filledBy': 'Filled by: ',
       'drawer.cardNotExist': 'Card does not exist: ',
-      'drawer.collectContext': '## Collection Task Context',
-      'drawer.collectScope': '**Collection scope**:',
-      'drawer.collectHint': 'Collect detailed context information related to card "{title}" to fill this card.',
-      'drawer.canonicalAttRoot': '**Canonical attachment root (absolute path)**:',
-      'drawer.goalInfoLabel': '**Goal info**:',
-      'drawer.cardInfoLabel': '**Card info**:',
-      'drawer.backfillReq': '**Backfill requirements**:',
       'drawer.collectTitle': '📝 Collection Prompt',
       'drawer.collectInfoTarget': 'Collection info target (editable)',
       'drawer.collectConstraints': 'Constraints (read-only)',
@@ -2094,17 +2346,6 @@
       'drawer.unrefSuccess': '✅ Unreferenced this goal',
       'drawer.convertCollecting': 'Cannot convert during collection',
       'drawer.deleteCollecting': 'Cannot delete card during collection',
-      'prompt.collect.backfillText': '1. Write the full body to the `text` parameter; write a concise key-point summary in `summary` (≤100 characters).',
-      'prompt.collect.attachments': '2. For file attachments (md/txt, images, csv/Excel, binaries), use `graph_store_attachment`: content for text, base64 for binary/images, under the canonical attachment root; return the stable relative reference.',
-      'prompt.collect.reference': '3. Reference attachments with `@att/<relative-name>` when filling the card body or goal.md (safe subdirectories allowed).',
-      'prompt.collect.finish': '4. When finished, call the exact command below to fill the result:',
-      'prompt.collect.command': 'graph_fill_card(goal="{goalId}", card="{cardId}", text=<full text, may include @att/<name>>, summary=<summary ≤100 chars>)',
-      'prompt.collect.securityTitle': '**Attachment safety and boundaries**:',
-      'prompt.collect.security': 'Write only under the canonical attachment root; reject absolute paths, ./.. traversal, backslashes, and NUL; do not access or reference files outside `.dsh-graph`; internet fetches are limited to http(s) with timeout/size limits, never file://, localhost, or private networks (SSRF).',
-      'prompt.collect.forbiddenTitle': '**Forbidden actions (strict)**:',
-      'prompt.collect.forbiddenGoal': '1. Do not modify other goals or cards—only fill the currently bound card `{cardId}`',
-      'prompt.collect.forbiddenReview': '2. Do not call `graph_review_card` yourself—the supervisor reviews after completion',
-      'prompt.collect.forbiddenWorkspace': '3. Run all graph tool operations in the assigned worktree/current working directory',
 
       // === Shared panel ===
       'shared.title': '📇 Project Knowledge Base (Shared Entries)',
@@ -2356,6 +2597,163 @@
       'profileSettings.promptHint': 'Default empty; workspace field default inherits this, custom text overrides, explicit empty disables global prompt.',
       'profileSettings.saving': 'Saving…',
       'profileSettings.save': 'Save',
+
+      // === g-481: Help dialog (the entry replaces the former Graph design entry; the design
+      // diagrams became its fifth tab). Appended only: existing keys are untouched. ===
+      'help.btn': '📖 Help',
+      'help.title': 'Help',
+      'help.tab.usage': 'Getting started',
+      'help.tab.prompts': 'Prompt templates',
+      'help.tab.tools': 'Tools',
+      'help.tab.faq': 'FAQ',
+      'help.tab.design': 'Graph design',
+      'help.lang.zh': 'Chinese',
+      'help.lang.en': 'English',
+      'help.version': 'Current version: v{version}',
+      'help.usage.what': 'dsh-graph organizes work as a "goal board": goals, criteria, cards and executions are all managed on the board, and agents operate it through the graph_* tools.',
+      'help.usage.board': 'The board groups goal cards by version / standalone goal / backlog, and each card shows its status, criteria and latest execution.',
+      'help.usage.flow': 'Typical flow: create a goal and write its criteria → schedule it into a version or as a standalone goal → dispatch an execution (isolated in its own worktree when needed) → review the result.',
+      'help.usage.dispatch': 'Every dispatch leaves an execution record on the goal and writes its output to a result file; the same goal can be reworked as many times as needed.',
+      'help.usage.review': 'You decide the key gates: starting work, accepting or rejecting a result, and releasing a version. The engine never passes them for you.',
+      'help.usage.tabs': 'Other tabs in this dialog: prompt templates (the assets actually delivered to agents, read-only), tools (everything currently registered), FAQ, and graph design (two interactive diagrams).',
+      'help.prompts.intro': 'These assets are the very same ones delivered to agents (read-only here; not editable).',
+      'help.prompts.source': 'Shipped with the package, one copy per language; use the buttons above to switch languages.',
+      // g-498: grouped by the host registry metadata (the client keeps no file list of its own).
+      'help.prompts.orphan': 'Uncategorised',
+      // g-498: transparent fallback when the requested language is missing (the label says which one is shown).
+      'help.prompts.langFallback': ' (not available in this language yet; showing the {lang} version)',
+      'help.prompts.loading': 'Loading…',
+      'help.prompts.error': 'Failed to load: {error}',
+      'help.asset.usage': 'Usage guide',
+      'help.asset.help': 'Tool cheat sheet',
+      'help.asset.agent-teams-contract': 'Agent Teams contract',
+      'help.asset.attempt-instructions': 'Task positioning and overrides',
+      'help.asset.attempt-report-skeleton': 'Hand-back report skeleton',
+      'help.asset.automation-guidance': 'Automation action guidance',
+      'help.asset.collect-task': 'Card collection task',
+      'help.asset.discipline': 'Supervisor discipline',
+      'help.asset.executor-discipline': 'Execution discipline',
+      'help.asset.guide-hint': 'Session hint',
+      'help.asset.minor-task': 'Minor-change exemption',
+      'help.asset.no-isolation': 'Non-isolated execution guide',
+      'help.asset.pm-task': 'PM polish and definition',
+      'help.asset.review-task': 'Independent review task',
+      'help.asset.subagent-mode': 'Subagent mode strategy',
+      'help.asset.summary-task': 'Completion summary writing',
+      'help.asset.supervisor-guide': 'Supervisor guide',
+      'help.asset.worktree': 'Isolated execution guide',
+      // g-496: GUI prompt-template asset labels (body lives in the host-owned md assets).
+      'help.asset.gui-criteria-feedback-supervisor': 'Criteria feedback (to supervisor)',
+      'help.asset.gui-criteria-feedback-executor': 'Criteria feedback (to executor)',
+      'help.asset.gui-define-polish-request': 'Goal definition/polish request',
+      'help.asset.gui-accept-review-request': 'Single-goal delivery review request',
+      'help.asset.gui-backward-reason': 'Lane drag-back reason',
+      'help.asset.gui-reexecute': 'Drag re-execution notice',
+      'help.asset.gui-batch-accept-review-request': 'Batch delivery review request',
+      'help.asset.gui-deliver-notice': 'Delivery confirmation notice',
+      'help.asset.gui-help-takeover-example': 'Supervisor takeover example prompt',
+      'help.tools.intro': '{count} tools in total; the list comes from what the engine currently registers (names and descriptions share one source and follow it automatically).',
+      'help.tools.langHint': 'Description language: {lang} (follows the prompt language setting)',
+      'help.tools.loading': 'Loading…',
+      'help.tools.error': 'Failed to load: {error}',
+      'help.faq.intro': 'Frequently asked questions (scope, criteria, execution, module switches, and where data lives).',
+      'help.faq.q1': 'What does this plugin do?',
+      'help.faq.a1': 'It gives agents a "goal board" way of working: you write down what to achieve and how it will be judged, dispatch the work, then review the outcome.',
+      'help.faq.q2': 'How do goals, criteria and cards differ?',
+      'help.faq.a2': 'A goal is what to achieve; criteria define what counts as achieved (written before work starts); cards collect the context and conclusions produced along the way.',
+      'help.faq.q3': 'What do the board sections and statuses mean?',
+      'help.faq.a3': 'Sections (version / standalone goal / backlog) show scheduling; statuses show the stage a goal is in, from draft and planning through in progress to awaiting review, delivered or postponed.',
+      'help.faq.q4': 'Will an execution change my code?',
+      'help.faq.a4': 'It may, within the scope defined by the goal and its criteria; when isolation is needed the work happens in a separate git worktree and your main working copy stays untouched.',
+      'help.faq.q5': 'Why do some actions need my confirmation?',
+      'help.faq.a5': 'Starting work, accepting a result and releasing a version are human gates: the agent can only ask, and you decide whether it passes.',
+      'help.faq.q6': 'Where is the data stored?',
+      'help.faq.a6': 'Board data lives in the .dsh-graph directory of the current workspace, so it travels with that workspace; a different workspace is a different board.',
+      'help.faq.q7': 'Can I turn off modules I do not use?',
+      'help.faq.a7': 'Yes. The "Modules" tab of the board settings has five switches — tags, memory, shared cards, automation prompts and attachments — stored per workspace in project.yaml. Turning a module off really removes the matching graph_* tools and the prompt sections delivered to agents (it does not merely hide buttons).',
+      // === g-489: Help dialog - entry step + nine module chapters + tools classification table (zh/en must stay symmetric) ===
+      'help.entry.title': 'Step 1: pick a supervisor agent first',
+      'help.entry.body': 'The dsh-graph board is maintained by a supervisor agent: it records goals and criteria, dispatches executions and collects results. In a new session, have one agent load the dsh-graph-supervisor skill (the full supervisor playbook) or the dsh-graph skill, then run graph_claim_supervisor() to take over (claim) - the agent then reads the current board state and the handoff document, and all further work starts there.',
+      'help.entry.promptLabel': 'Example prompt you can copy:',
+      // g-496: the example prompt body moved out of the dictionary (single source of truth =
+      // host-owned asset gui-help-takeover-example.*.md, read via /api/dsh-graph/help/asset/).
+      'gui.promptAssetLoadFail': '⚠️ Failed to load the prompt asset, please retry',
+      'help.entry.copy': 'Copy',
+      'help.entry.copied': 'Copied',
+      'help.entry.copyFail': 'Copy failed - please select the text manually',
+      'help.mod.title': 'Module chapters',
+      'help.mod.intro': 'The nine chapters below cover the modules of the board; each has three lines: what it is, how to use it (UI location or tool name) and key operations.',
+      'help.mod.what': 'What it is',
+      'help.mod.how': 'How to use',
+      'help.mod.ops': 'Key operations',
+      'help.mod.board.title': 'Board',
+      'help.mod.board.what': 'The main view after opening the plugin: goals are grouped into versions / standalone / backlog and rendered as cards that show status, criteria and the latest execution at a glance.',
+      'help.mod.board.how': 'Open it from the Kanban tab in the DSH Web right sidebar; the top toolbar holds refresh, tag filter, Memory, Help, Project knowledge base and Kanban settings, and on narrow widths those entries collapse into the overflow menu.',
+      'help.mod.board.ops': 'Click a card to open the goal detail; create goals from a lane header; when the view contains status=review goals, the Confirm column header shows a Batch accept button (it accepts one by one without force, with the same semantics as accepting a single card).',
+      'help.mod.goal.title': 'Goals',
+      'help.mod.goal.what': 'A goal is what must be achieved: each one carries a status, quality criteria, description, latest directive, tags and relations. Status runs draft, planning, collecting, ready, in_progress, review, delivered, plus blocked.',
+      'help.mod.goal.how': 'Create it from the lane header; click a card for the goal detail with Goal Description, Quality Criteria, Information Collection and recent activity.',
+      'help.mod.goal.ops': 'Write the criteria before working (registering criteria snapshots the rule-library version); transition status (entering blocked requires a reason); schedule into a version / standalone / backlog; archive, postpone, rename, tag and relate goals.',
+      'help.mod.version.title': 'Version management',
+      'help.mod.version.what': 'A version groups goals and is the release unit: each version owns one lane on the board and carries a slug, a status (active / released) and a goal count.',
+      'help.mod.version.how': 'The Version management entry at the top-left of the board grid opens the version drawer: search by name or slug and use show all / active only / hide all to control lane visibility (that filter is stored locally and never changes version data).',
+      'help.mod.version.ops': 'Create, rename and delete versions (only empty versions can be deleted); use the Details link in the drawer for the version detail, which can also create and rename goals.',
+      'help.mod.lane.title': 'Lanes',
+      'help.mod.lane.what': 'A lane is a horizontal group on the board: one per version plus Standalone and backlog; inside a lane, cards are laid out in stage columns - Describe, Collect, Execute, Confirm, Deliver, with a separate place for blocked goals.',
+      'help.mod.lane.how': 'The arrow left of a lane title collapses or expands it; a collapsed lane shows a single row with its goal count, and the collapsed state is stored per workspace.',
+      'help.mod.lane.ops': 'Drag cards between stages or lanes (the state machine constrains this: a backlog card may only go to the Describe column of a version, a blocked goal may only be released back to its original status, and an illegal move is rejected with a reason); create a goal for that version straight from the lane header.',
+      'help.mod.sidebar.title': 'Using the sidebar',
+      'help.mod.sidebar.what': 'The plugin registers a tab in the DSH Web right sidebar (titled Kanban, described as viewing and managing the goal board in this session) so the board sits next to the conversation.',
+      'help.mod.sidebar.how': 'Click the Kanban tab in the right sidebar; the tab title follows the UI language.',
+      'help.mod.sidebar.ops': 'One board per workspace (data lives in the .dsh-graph directory and travels with the workspace); when the host has no right-sidebar capability (minimal profile / older host) the plugin simply does not register the tab and reports no error.',
+      'help.mod.cards.title': 'Context cards and the project knowledge base',
+      'help.mod.cards.what': 'Cards hold the context and conclusions collected while working (body text plus optional @att/<name> attachment references); shared cards live in the project knowledge base and one card can be attached to several goals to reuse its context.',
+      'help.mod.cards.how': 'Add and read cards in the Information Collection section of the goal detail; the Project knowledge base entry in the top toolbar opens the shared-entries panel.',
+      'help.mod.cards.ops': 'Create, fill, review and delete cards; convert an owned card into a shared card and back; attach and detach shared cards (goal owner or supervisor only); an attachment still referenced by a card cannot be deleted; a backlog goal cannot own cards, schedule it first.',
+      'help.mod.memory.title': 'Memory',
+      'help.mod.memory.what': 'Memory stores durable facts across sessions in two scopes: standing (injected into the resident prompt, with a hard cap) and on_demand (the default, retrieved only when needed).',
+      'help.mod.memory.how': 'The Memory entry in the top toolbar opens the Memory Management dialog, where entries can be searched, added, revised and removed.',
+      'help.mod.memory.ops': 'The supervisor distills conclusions into memory at key points (on_demand by default, so it costs no resident budget); removal requires the entry to be outdated or explicitly retracted by the owner; memory is stored per workspace under .dsh-graph.',
+      'help.mod.subagents.title': 'Subagents and agent teams',
+      'help.mod.subagents.what': 'Execution is dispatched to a subagent one attempt at a time (isolated into its own git worktree when needed) and its output is written to results-att-*.md; review can be dispatched separately to a read-only reviewer whose verdict is stored independently.',
+      'help.mod.subagents.how': 'The supervisor dispatches execution with graph_start_attempt and an independent review with graph_start_review; every dispatch leaves an execution record on the goal whose status can be followed on the card.',
+      'help.mod.subagents.ops': 'Record the rework handoff constraints before dispatching again; unbind or abandon a lost subagent; the Model & execution tab configures the executor and model and carries the Agent Teams minimal-contract switch (off by default; only when it is on is the contract block injected into dispatch prompts).',
+      'help.mod.settings.title': 'Common settings',
+      'help.mod.settings.what': 'The board settings dialog has five tabs: Model & execution / Review & quality / UI & refresh / Modules / Advanced; the configuration is stored per workspace in project.yaml.',
+      'help.mod.settings.how': 'Open it from the gear button at the top-right of the board (inside the overflow menu on narrow widths); a separate profile-level section in the DSH settings configures the subagent provider, model, reasoning effort, mode and prompt language.',
+      'help.mod.settings.ops': 'The Modules tab has five switches - tags, memory, shared cards, automation prompts and attachments - and turning one off really removes the matching tools and delivered prompt sections (the tab warns when the host does not support real trimming); Review & quality configures review.policy; Advanced holds the six supervisor automation switches and the subagent prompt override.',
+      'help.tools.colShort': 'Short',
+      'help.tools.colName': 'Tool',
+      'help.tools.colUse': 'Purpose',
+      'help.tools.orphan': 'Unclassified',
+      'help.tools.problems': 'Structure guard failed: the classification table and the registration source disagree (add the missing category or short name)',
+
+      // === g-493: opening "why the name" chapter of the Help dialog - Graph Engineering and the board as a view ===
+      // Mirrors the zh block key by key (zh/en must stay symmetric). The quoted Graph Engineering definition is
+      // reproduced verbatim in zh; English readers get the source term and the same quoted structure.
+      'help.topic.section.naming': 'Naming and definition',
+      'help.topic.section.mechanism': 'How it works today',
+      'help.topic.section.board': 'What the board is for',
+      'help.topic.section.roadmap': 'Roadmap',
+      'help.topic.section.more': 'More',
+      'help.topic.title': 'Why it is called dsh-graph: Graph Engineering and the board as a view',
+      'help.topic.naming': 'The name dsh-graph comes from **Graph Engineering**: designing a multi-agent system as an explicit **graph**, instead of relying on a single agent running one loop.',
+      'help.topic.definition': '> An article on mcp.so defining Graph Engineering puts it this way: "Graph Engineering means designing a multi-agent system as an explicit graph - nodes (agents or steps that each do exactly one thing), edges (sequential, conditional or parallel routing) and shared state - rather than relying on a single agent running one loop".',
+      'help.topic.definitionSource': 'The Chinese text above is quoted verbatim from the original; this English rendering is a translation. Source: mcp.so (the article on Graph Engineering).',
+      'help.topic.stateMachine': 'Concretely, this plugin is a **task / goal state machine** maintenance system: for an AI it works like a **lightweight Jira + Confluence** (or, if you prefer, a ZenTao-style tracker) - I write down what to achieve and how it will be judged, the AI executes it, I decide the verdict, and both the process and the conclusions stay in one place.',
+      'help.topic.roles': 'Inside that state machine the roles are not pre-assigned positions; they **emerge naturally**: the supervisor records goals and criteria and dispatches and rules on them, workers (subagents) do the actual work, reviewers check results independently, definers turn a request into a clear goal, collectors gather the context first, and the user (you) holds the human gates. Only two things constrain them: the **supervisor guide** (the dsh-graph-supervisor skill) and the **goal state machine** itself - what may happen when is decided by the state and the guide, not by someone handing out assignments mid-conversation.',
+      'help.topic.lifecycle': 'A piece of work moves along one lifecycle chain: new request → define goal and criteria → collect → implement → review → verdict → deliver. It has two loops: **rework** goes from verdict back to implement, and **branching out a new goal** splits a fresh goal chain off the step that needs to be broken up, each progressing on its own.',
+      'help.topic.core': 'That state machine is defined and organized by **dsh-graph core** (the core/ directory): transitions, criteria gates, dispatch and verdict rules all live there. This plugin is the **monitoring board view** of that division of labour. Once the core is stable, pleasant to use and simple enough, the same core can produce other views - a dsh TUI, or a pi-ai plugin, for instance.',
+      'help.topic.kanbanIsView': 'So one question is worth asking first: **do you really need to see this graph all the time? Do you need many different graphs? Do you need to customize one graph per task?** The board is only one view of that graph. The real core is three things: the constraint on the AI\'s whole process, the division of labour between agents, and the layered approval control that runs from user to supervisor to worker.',
+      'help.topic.programmable': 'What Graph Engineering adds is making the organization of agents **programmable**. But that programming is **not** about specifying nodes and edges in a DSL - it is closer to a software engineering practice: how humans and AIs, and agents and agents, work together. Describing it clearly is enough; tell yourself and the agent in natural language and the "programming" is done.',
+      'help.topic.stateOfMind': '**What matters is that you hold the graph in your head, not that the UI shows one fixed graph.** Once you and the AI are in flow, you can close your eyes and see it: who is doing what, how far along it is, where rework may be needed. It changes with the task, it is not fixed in advance, and you never have to customize one per task. That is also what the plugin name is there for - it reminds both me (the owner) and the AI that the board is only a view.',
+      'help.topic.solves': 'So what does the board solve here? Mainly two things. First, **making the whole process visible**: at a glance you can tell what the agents are doing, how the task was broken up, how stages advance, where it fell back or was reworked, and where new requirements and new goals branched off. Second, **letting you cut in at any time**: you can step into any detail, or discuss direction, method, goal changes and version plans with the supervisor agent whenever you like - and those discussions are recorded on the goal instead of being scattered across the conversation.',
+      'help.topic.roadmap': 'The roadmap, stated honestly: **graph customization will open up in later versions** (graph semantics tuning, visual customization and so on), while **the current version focuses on process visualization plus the task state machine**. The diagrams in this dialog are the fixed ones shipped with the package and cannot be adjusted yet.',
+      'help.topic.faqQ': 'Is the board that "graph"?',
+      'help.topic.faqA': 'No. The board is only one **view** of that graph: it draws the current state of the state machine for you. The graph itself takes shape while you work together - its nodes are the agents or steps that each do one job, its edges are sequential, conditional or parallel routing, and its shared state is the goals, criteria, cards and memory. It changes with the task, so you never have to customize one fixed graph per task, and you do not have to watch it all the time. The real core is the whole-process constraint, the division of labour between agents and the layered approval control; the board makes all of that visible and keeps an entry point ready for you to cut in. Graph customization will open up in later versions.',
+      'help.topic.designCrossref': 'For the naming and the full "the board is only a view" explanation, see the opening chapter of the Getting started tab, "Why it is called dsh-graph: Graph Engineering and the board as a view"; this tab covers only how the design philosophy lands in practice - the two diagrams below are the fixed rendering of that division of labour in the **current version**.',
+      'help.toolTopic.graph_help': 'Display this help; query one topic by name (usage / graph_engineering / a module name).',
+      'help.toolTopic.list': 'Read-only: list the help topics available for lookup (the usage guide, the Graph Engineering chapter and each tool name).',
     };
 
     // --- locale 集成辅助函数 ---
@@ -2389,6 +2787,21 @@
         const template = (zh[key] !== undefined) ? zh[key] : key;
         return applyParams(template, params);
       };
+    }
+
+    /** g-496：**界面生效语言**（`"zh"` | `"en"`）——供 GUI 提示词模板资产按语言取正文。
+     *
+     *  复用既有 locale 服务口径（`preference` / 活跃语言），**不新建第二套语言状态**：
+     *  locale 服务缺席或读值异常时按既有降级语义回 **zh**（与 `createTranslator` 无 locale
+     *  时"直接用中文字典"完全一致）。只读，绝不写 locale。 */
+    function resolveInterfaceLanguage(localeService) {
+      try {
+        const pref = localeService?.preference ?? localeService?.locale ?? localeService?.active;
+        const raw = String(pref ?? "").trim().toLowerCase();
+        return raw.startsWith("en") ? "en" : "zh";
+      } catch {
+        return "zh";
+      }
     }
 
     /** 注册 dsh-graph 命名空间到 DSH locale 服务。在 plugin apply 阶段调用。

@@ -166,6 +166,19 @@ function collectText(tree: any): string {
   rec(tree);
   return out.join(" | ");
 }
+/** g-488：说明文字 tooltip 化后的**说明通道**收集器——只收 `(?)` 图标上的 title / aria-label。
+ *  与 `collectText`（正文通道）**刻意分开、互不替代**：正文收集器看不到 tooltip ⇒「状态读数必须留在
+ *  正文」（如 reviewUnsetHint）不会因为换了承载方式而变成永真；说明通道收集器则保证搬进 tooltip 的
+ *  说明**确实渲染**、不是只存在于字典里。 */
+function collectHintText(tree: any): string {
+  const out: string[] = [];
+  walk(tree, (n) => {
+    if (!n || typeof n !== "object") return;
+    if (!String(n.props?.className ?? "").includes("dg-settings-hint")) return;
+    out.push(String(n.props?.title ?? ""), String(n.props?.["aria-label"] ?? ""));
+  });
+  return out.join(" | ");
+}
 function nodesOfType(tree: any, type: string): any[] {
   const out: any[] = [];
   walk(tree, (n) => { if (n.type === type) out.push(n); });
@@ -960,8 +973,8 @@ test("g-442 验收7：i18n 变量占位符与错误渲染自洽（{field}/{index
 
 test("g-442 验收7：与 g-435 指南「项目校准流程」口径一致（指南真源交叉核对）", () => {
   const { zh, en } = loadClientI18n();
-  const guideZh = readFileSync(join(repoRoot, "dsh-graph-host/supervisor-guide.zh.md"), "utf8");
-  const guideEn = readFileSync(join(repoRoot, "dsh-graph-host/supervisor-guide.en.md"), "utf8");
+  const guideZh = readFileSync(join(repoRoot, "prompts/supervisor-guide.zh.md"), "utf8");
+  const guideEn = readFileSync(join(repoRoot, "prompts/supervisor-guide.en.md"), "utf8");
   // 指南真源确实存在该小节（不是 UI 自造的说法）
   assert.ok(guideZh.includes("### Review 严格度校准（项目专属）"), "zh 指南含校准小节");
   assert.ok(guideEn.includes("### Review Strictness Calibration (Project-Specific)"), "en 指南含校准小节");
@@ -975,12 +988,17 @@ test("g-442 验收7：与 g-435 指南「项目校准流程」口径一致（指
   assert.ok(zh["settings.reviewCalibrationGuide"].includes("graph_update_settings"), "zh UI 给出 graph_update_settings");
   assert.ok(en["settings.reviewCalibrationGuide"].includes("Review Strictness Calibration (Project-Specific)"), "en UI 指向同一小节");
   assert.ok(en["settings.reviewCalibrationGuide"].includes("graph_get_settings"), "en UI 给出 graph_get_settings");
-  // 渲染树里确实出现（真实渲染，不是仅字典里存在）
+  // 渲染树里确实出现（真实渲染，不是仅字典里存在）——g-488：这两段**说明**已 tooltip 化（`(?)`），
+  // 故改由说明通道断言；同时反证它们**不再残留在正文**（避免同一说明出现两份、正文反而变啰嗦）。
   const { root } = setupInstance();
   writeFileSync(join(root, "project.yaml"), RICH_YAML, "utf8");
-  const text = collectText(renderSettingsModal(readModal(), snapshotOf(root), zh));
-  assert.ok(text.includes(zh["settings.reviewCalibrationGuide"]), "渲染树含指南指向文案");
-  assert.ok(text.includes(zh["settings.reviewConditionsHint"]), "「主管按项目目录结构设置」说明仍在");
+  const tree = renderSettingsModal(readModal(), snapshotOf(root), zh);
+  const body = collectText(tree);
+  const hints = collectHintText(tree);
+  assert.ok(hints.includes(zh["settings.reviewCalibrationGuide"]), "渲染树含指南指向文案（`(?)` tooltip 承载）");
+  assert.ok(hints.includes(zh["settings.reviewConditionsHint"]), "「主管按项目目录结构设置」说明仍在（`(?)` tooltip 承载）");
+  assert.equal(body.includes(zh["settings.reviewCalibrationGuide"]), false, "指南指向文案不得同时残留在正文（信息双份）");
+  assert.equal(body.includes(zh["settings.reviewConditionsHint"]), false, "字段说明不得同时残留在正文（信息双份）");
   assert.match(zh["settings.reviewConditionsHint"], /主管按项目目录结构设置/, "字段说明逐字保留");
 });
 

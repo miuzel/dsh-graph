@@ -36,3 +36,6 @@ handoffs/
 # g-142：worktree 目录不入 git——避免误提交 .worktrees/** 污染
 .worktrees/
 .pnpm-store/
+
+# 构建/测试临时产物（worktree 内私有，不入版本控制）
+tmp/

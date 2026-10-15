@@ -196,7 +196,7 @@ test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与�
   const excluded = [
     "core/tests/g311-review-policy.test.ts",
     "README.md",
-    "dsh-graph-host/supervisor-guide.zh.md",
+    "prompts/supervisor-guide.zh.md",
     "docs/design.md",
     "dist/core/ops.js",
     "core-dist/ops.js",
@@ -209,14 +209,14 @@ test("g-311 判据 2③：产品代码口径（排除 core/tests/**、*.md 与�
   const numstat = [
     "10\t2\tcore/ops.ts",
     "3\t0\tcore/tests/g311-review-policy.test.ts",
-    "5\t1\tdsh-graph-host/supervisor-guide.zh.md",
+    "5\t1\tprompts/supervisor-guide.zh.md",
     "-\t-\tassets/logo.png",
     "7\t7\tdsh-graph-host/index.js",
   ].join("\n");
   const counted = countProductChangedLines(numstat, repoPrefixes);
   assert.equal(counted.lines, 10 + 2 + 0 + 7 + 7, "仅产品代码行数计入（含二进制 0 行）");
   assert.deepEqual(counted.files, ["core/ops.ts", "assets/logo.png", "dsh-graph-host/index.js"]);
-  assert.deepEqual(counted.skipped, ["core/tests/g311-review-policy.test.ts", "dsh-graph-host/supervisor-guide.zh.md"]);
+  assert.deepEqual(counted.skipped, ["core/tests/g311-review-policy.test.ts", "prompts/supervisor-guide.zh.md"]);
 });
 
 test("g-311 判据 2④：判据「✅已验」判定（allCriteriaVerified / verifiedCriteriaItems）", () => {
@@ -282,7 +282,7 @@ test("g-311 判据 4：契约路径 / 跨 ≥3 顶层区域 / 显式 strict_requ
   // 保持真实的完整前缀登记，精准保留原 dsh-graph-host/lib/client/board.js 样本
   const explicitRepoConfig = {
     contractPaths: ["core/schema.ts", "schema/SCHEMA.md"],
-    regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "dsh-graph-host/prompts", "scripts"],
+    regions: ["core", "dsh-graph-host", "dsh-graph-host/lib/client", "prompts", "scripts"],
     nonProductPrefixes: ["core/tests", "dist", "core-dist", "node_modules", ".worktrees"],
   } as const;
   const base = { policy: "auto", type: "patch", ...explicitRepoConfig } as const;
@@ -328,7 +328,7 @@ test("g-311 判据 4 自洽：用本目标的真实属性解析，结果必须�
       "core/model.ts",
       "dsh-graph-host/index.js",
       "dsh-graph-host/lib/server-i18n.js",
-      "dsh-graph-host/supervisor-guide.zh.md",
+      "prompts/supervisor-guide.zh.md",
     ],
     productChangedLines: 120,
   });
@@ -476,8 +476,8 @@ test("g-311 判据 3 默认路径逐字不变：不带 fast_track 时行为与�
 // 判据 4：指南约束（zh/en 等价）
 // ---------------------------------------------------------------------------
 
-const ZH_GUIDE = join(repoRoot, "dsh-graph-host", "supervisor-guide.zh.md");
-const EN_GUIDE = join(repoRoot, "dsh-graph-host", "supervisor-guide.en.md");
+const ZH_GUIDE = join(repoRoot, "prompts", "supervisor-guide.zh.md");
+const EN_GUIDE = join(repoRoot, "prompts", "supervisor-guide.en.md");
 
 const ZH_TOKENS = [
   "#### 分级评审与机器快速放行",

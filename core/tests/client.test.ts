@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -33,6 +33,10 @@ function loadSettingsModalPayload(modal: string): any {
 }
 /** vm 沙箱对象与测试 realm prototype 不同：断言前 JSON 往返。 */
 const plainJson = (x: any): any => JSON.parse(JSON.stringify(x));
+
+/** 去掉 `//` 行注释后的**可执行代码**面（g-490 判据 3 收口）：源码注释里说明性地提到旧式样
+ *  （如「旧式只钳 `vw - 16` …」）不得被误判成回退；只有代码里真的复活旧式样才算回退。 */
+const stripLineComments = (src: string): string => src.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
 
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
@@ -205,10 +209,80 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.match(modal, /method: "POST"/);
   assert.match(modal, /"default", "override", "disable"/);
   assert.match(modal, /dgT\("settings\.editHint"\)/);
-  assert.match(modal, /dgT\("settings\.showAdvanced"\)/);
-  assert.match(modal, /display: showAdvanced \? "flex" : "none"/);
-  assert.match(modal, /display: showAdvanced \? "grid" : "none"/);
-  assert.match(modal, /h\("hr", \{ style: \{ display: showAdvanced \? "block" : "none"/);
+  // g-488：原「显示高级设置」折叠按钮 + `showAdvanced` 派生显示开关已删除（高级设置本身即页签，
+  // 页签内不再有第二层显隐开关）⇒ 原三条正向锚点换成**等价负向断言**（键/表达式/按钮 class 都不得
+  // 再出现），并补上等价的**正向**结构锚点（页签集合真源里没有 about、页签栏仍按真源渲染）。
+  assert.doesNotMatch(modal, /settings\.showAdvanced/);
+  assert.doesNotMatch(modal, /settings\.hideAdvanced/);
+  assert.doesNotMatch(modal, /showAdvanced \?/);
+  assert.doesNotMatch(modal, /dg-settings-advanced-toggle/);
+  assert.doesNotMatch(modal, /tabPanel\("about", \[/);
+  assert.match(modal, /const SETTINGS_TAB_KEYS = \["executor", "review", "ui", "modules", "advanced"\]/);
+  assert.match(modal, /\.\.\.SETTINGS_TAB_KEYS\.map\(\(k\) => tabButton\(k\)\)/);
+  // g-490：`(?)` 说明由**原生 title** 改为**自绘浮层**。原「title 属性」正向断言换成**逐条等价**的
+  // 浮层契约断言（悬停即时显示 / 点击·触屏切换 / 键盘可达 / 读屏语义 / 至多一个 / 不被裁剪 /
+  // 边界翻转 / 四条关闭路径），并补**负向**断言（回退 title、删浮层即必红）。断言只增不减。
+  assert.match(modal, /const settingsHintIdFor = \(text\) => \{/);
+  assert.match(modal, /const settingsHintIcon = \(text\) => \{/);
+  assert.match(modal, /className: "dg-settings-hint"/);
+  assert.match(modal, /role: "img",\n\s+tabIndex: 0,\n\s+"aria-label": text,\n\s+"aria-describedby": open \? tipId : undefined,/);
+  // 悬停即时显示 / 离开关闭
+  assert.match(modal, /onMouseEnter: \(e\) => \{ hintLastEnterRef\.current = Date\.now\(\); openHintAt\(tipId, e\.currentTarget\); \}/);
+  assert.match(modal, /onMouseLeave: \(\) => closeHintIf\(tipId\)/);
+  // 点击 / 触屏切换（含 emulated mouseenter→click 抑制）
+  assert.match(modal, /onClick: \(e\) => \{\n\s+e\.stopPropagation\(\);/);
+  assert.match(modal, /if \(open && Date\.now\(\) - \(hintLastEnterRef\.current \|\| 0\) < 700\) return;/);
+  // 键盘：Tab 聚焦即显示；Esc 关闭
+  assert.match(modal, /onFocus: \(e\) => openHintAt\(tipId, e\.currentTarget\)/);
+  assert.match(modal, /onBlur: \(\) => closeHintIf\(tipId\)/);
+  assert.match(modal, /onKeyDown: \(e\) => \{ if \(e\.key === "Escape"\) setOpenHint\(null\); \}/);
+  // 语义关联：浮层 role="tooltip" + 稳定 id；被 aria-describedby 引用
+  assert.match(modal, /role: "tooltip",\n\s+id: tipId,/);
+  assert.match(modal, /aria-describedby": open \? tipId : undefined/);
+  // 至多一个浮层：唯一 `openHint` 状态（同一时刻只能有一个 id）
+  assert.match(modal, /const \[openHint, setOpenHint\] = React\.useState\(null\)/);
+  // 不被弹窗裁剪：fixed 定位 + 触发器矩形 + 视口边界翻转
+  assert.match(modal, /position: "fixed", zIndex: 100001, left, maxWidth: HINT_MAX_WIDTH/);
+  assert.match(modal, /const above = geom \? \(geom\.top > 180 \|\| vh === 0\) : true;/);
+  // g-490（判据 3 收口，负责人 2026-10-12 裁决「现在就补」）：左右边界必须按**浮层自身宽度**钳位 ——
+  // 旧式只钳 `vw - 16`（未计浮层宽 ≤320）在窄视口（≲1240px）下右缘被视口裁掉。此处把
+  // 「浮层宽上界 + 两侧 8px 安全边距」的算式与 CSS `maxWidth` 的**同一份数字来源**逐条钉住
+  // （同位置改判、语义更强；旧算式一旦回退即被下方负向断言逮住）。
+  assert.match(modal, /const HINT_MAX_WIDTH = 320;/);
+  assert.match(modal, /return Math\.max\(8, n - 8 - HINT_MAX_WIDTH\);/);
+  assert.match(modal, /const left = Math\.max\(8, Math\.min\(rect\.left, hintMaxLeftFor\(vw\)\)\);/);
+  // 判定只看**可执行代码**（去 `//` 行注释）：源码注释里说明性地提到旧式 `vw - 16` 不算回退，
+  // 只有代码里真的复活旧式样才判红。
+  assert.doesNotMatch(stripLineComments(modal), /vw - 16/, "浮层左边界不得再只钳到 vw-16（忽略浮层宽度 ⇒ 窄视口右缘被裁）");
+  // 关闭路径：浮层外点击 / 滚动
+  assert.match(modal, /t\.closest\("\.dg-settings-tip"\)/);
+  assert.match(modal, /window\.addEventListener\("scroll", onScroll, true\)/);
+  // 负向（回退即必红）：`(?)` 构造点与整份 modal **都不得**再输出原生 `title` 说明。
+  const hintFnStart = modal.indexOf("const settingsHintIcon = (text) => {");
+  const hintFnEnd = modal.indexOf("React.useEffect(", hintFnStart);
+  assert.ok(hintFnStart > 0 && hintFnEnd > hintFnStart, "必须能定位 settingsHintIcon 函数体");
+  const hintFnSrc = modal.slice(hintFnStart, hintFnEnd);
+  assert.doesNotMatch(hintFnSrc, /\btitle:/, "`(?)` 浮层构造点不得回退原生 title");
+  assert.doesNotMatch(modal, /"aria-label": text,\n\s+title: text,/, "旧的 aria-label+title 同文锚点必须消失");
+  assert.doesNotMatch(hintFnSrc, /createPortal/, "不引入 portal（不需要 ReactDOM 依赖即可不裁剪）");
+  // g-488：六键自动化**逐键**说明（每键一条，讲清「管什么 + human/ai 含义」）
+  assert.match(modal, /settingsHintIcon\(dgT\(AUTOMATION_HINT_KEYS\[k\]\)\)/);
+  assert.match(modal, /const AUTOMATION_HINT_KEYS = \{/);
+  // g-490（判据 6，负责人 2026-10-12 裁决「诚实口径、不编默认值」）：六键未配置时的显示口径**只能**
+  // 来自服务端下发的 `automation_unset_scope`（口径来源引用表，**不是**解析默认值）：
+  // 两键可显示「默认：<该 gate 既有要求>」但必须同屏标注来源；其余四键唯一显示「未配置：保持既有指导」。
+  assert.match(modal, /dgT\("settings\.automationDefaultPrefix"\) \+ unsetScope\.gate_requires/);
+  assert.match(modal, /const automationUnsetScope = form\.automation_unset_scope \?\? \{\}/);
+  assert.match(modal, /automationOptions\(auto\[k\], automationUnsetScope\[k\] \?\? null\)/);
+  assert.match(modal, /dgT\("settings\.automationUnsetKeep"\)/, "无 gate 范围的键必须有「未配置：保持既有指导」文案");
+  assert.match(modal, /automationUnsetScope\[k\] \? automationUnsetScopeNote\(automationUnsetScope\[k\]\) : null/, "出现具体 human/ai 时必须同屏渲染口径来源标注");
+  assert.match(modal, /dgT\("settings\.automationDefaultScopeNotePrefix"\)/, "口径来源标注必须走 i18n（可本地化、可审计）");
+  assert.doesNotMatch(modal, /automation_defaults|AUTOMATION_DEFAULTS/, "旧的「解析默认值」命名必须从客户端彻底消失");
+  // g-488：四项默认值键只从界面移除，配置读兼容（归一/稀疏 patch 叶子清单）必须保留
+  assert.doesNotMatch(modal, /set\(\["defaults", "review", "reviewer"\]/);
+  assert.doesNotMatch(modal, /set\(\["defaults", "pk", "lanes"\]/);
+  assert.match(modal, /leaf\(\["defaults", "review", "reviewer"\]\);/);
+  assert.match(modal, /leaf\(\["defaults", "pk", "lanes"\]\);/);
   assert.match(modal, /if \(!cur\[path\[i\]\].*typeof cur\[path\[i\]\] !== "object"/s);
   assert.doesNotMatch(modal, /主管补充提示词/);
   assert.doesNotMatch(modal, /prompt_overrides.*supervisor/);
@@ -232,9 +306,79 @@ test("g-132 源契约：gear 入口 + SettingsModal 渲染 + 三态提示词 + �
   assert.ok((modal.match(/copyText\(configFile\)/g) || []).length >= 2, "打开回退 + 复制按钮均应复制绝对路径");
   assert.match(modal, /dgT\("settings\.projectYaml"\)/);
   assert.match(modal, /title: dgT\("settings\.openConfigTooltip"\)/);
-  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\)/);
+  // 改判 2（负责人 2026-10-12 批 2）：「不要用 title……延时和触屏不友好」⇒ 路径**不得**再挂原生
+  // title（触屏无 hover ⇒ 等于不可达），title 回到**不含路径的短形式**（与「打开」同形）；
+  // 全文改由该行 `(?)` 浮层内另起一行承载（正向锚点在下方 editHint 折叠块内）。
+  assert.match(modal, /title: dgT\("settings\.copyProjectPath"\),/, "复制路径按钮 title 必须是不含路径的短形式");
+  assert.doesNotMatch(modal, /title: dgT\("settings\.copyProjectPath"\) \+ "：" \+ configFile/, "绝对路径不得再挂原生 title（触屏不可达 ⇒ 回退即红）");
   assert.match(modal, /\}, dgT\("tab\.openFile"\)\)/);
   assert.match(modal, /\}, dgT\("tab\.copyPath"\)\)/);
+  // g-490（判据 7）：project.yaml 行从**页脚**迁到**标题栏右侧（关闭按钮左边）**——位置断言 +
+  // 「页脚不得留第二份」负向断言（双份即红）；窄宽度保护（flexWrap + 关闭按钮让位）。
+  // 改判（负责人 2026-10-12 现场反馈）：绝对路径**不再平铺**（「反正可以点击复制」）⇒ 旧
+  // 「break-all 长路径折行」断言改为**负向**（不得回退平铺形态）+ 正向（全文经该行 `(?)` 浮层可达，
+  // 见下方 editHint 折叠块；改判 2 起不再经按钮 title）。
+  assert.doesNotMatch(modal, /wordBreak: "break-all", minWidth: 0 \}/, "绝对路径不得再平铺正文（负责人反馈：可点击复制即可；回退平铺即红）");
+  assert.equal(
+    (modal.match(/className: "dg-settings-configfile"/g) || []).length,
+    1,
+    "project.yaml 行必须恰好一处（迁移而非复制）",
+  );
+  const titleBarIdx = modal.indexOf('{ ...S.modalH, marginBottom: 0, flex: "0 0 auto" } }, dgT("settings.title")');
+  const cfgRowIdx = modal.indexOf("projectYamlRow)");
+  assert.ok(titleBarIdx > 0 && cfgRowIdx > titleBarIdx, "标题栏 = 标题 + 右端 project.yaml 行（关闭按钮左侧）");
+  // g-490（判据 7 扩写 + 改判 2）：editHint 说明由「标题下方常驻一行」**折叠进该行内的 `(?)`** ——
+  // 正向锚点（恰好一处、经唯一构造点 `settingsHintIcon` 承载）+ 负向锚点（常驻平铺形状必须消失）。
+  // 改判 2 起该调用带**第二段**（`"\n" + settings.currentPath + configFile`：浮层内另起一行的路径全文）
+  // ⇒ 锚点由「整调用字面量」放宽为「调用前缀」，同时新增**路径必须在浮层内**的正向锚点（断言只增不减）。
+  assert.equal(
+    (modal.match(/settingsHintIcon\(dgT\("settings\.editHint"\)/g) || []).length,
+    1,
+    "editHint 必须恰好经 `(?)` 承载一次（零丢失且不重复）",
+  );
+  assert.match(
+    modal,
+    /settingsHintIcon\(dgT\("settings\.editHint"\) \+ "\\n" \+ dgT\("settings\.currentPath"\) \+ configFile\)/,
+    "绝对路径全文必须在本行 `(?)` 浮层内另起一行（改判 2：不得平铺正文、也不得只挂原生 title）",
+  );
+  assert.doesNotMatch(modal, /h\("div", \{ style: S\.meta \}, dgT\("settings\.editHint"\)\)/, "editHint 不得再作为常驻平铺行渲染（回退即红）");
+  assert.doesNotMatch(modal, /,\s*dgT\("settings\.editHint"\)\)/, "editHint 不得作为 h(...) 子节点实参常驻正文（须仅在 `(?)` 浮层内）");
+  assert.doesNotMatch(modal, /[?:]\s*dgT\("settings\.editHint"\)/, "editHint 不得作为三元分支常驻正文（须仅在 `(?)` 浮层内）");
+  const editHintRowIdx = modal.indexOf("const projectYamlRow = configFile");
+  const editHintRowEndIdx = modal.indexOf(": null;", editHintRowIdx);
+  const editHintIconIdx = modal.indexOf('settingsHintIcon(dgT("settings.editHint")');
+  assert.ok(
+    editHintRowIdx > 0 && editHintRowEndIdx > editHintRowIdx && editHintIconIdx > editHintRowIdx && editHintIconIdx < editHintRowEndIdx,
+    "editHint 的 `(?)` 必须挂在 project.yaml 行内（该行已含 打开/复制路径）",
+  );
+  // g-490（判据 7 扩写）：目录来源长句（catalogReady）同样折叠进「执行模式」标签右侧 `(?)`，且**状态门控**
+  // （非就绪态不渲染该 `(?)`，加载中/不可用读数仍留正文）——负向：改回常驻平铺即红。
+  assert.equal(
+    (modal.match(/settingsHintIcon\(dgT\("settings\.catalogReady"\)\)/g) || []).length,
+    1,
+    "目录就绪说明必须恰好经 `(?)` 承载一次",
+  );
+  assert.match(modal, /catReady \? settingsHintIcon\(dgT\("settings\.catalogReady"\)\) : null/, "目录就绪说明的 `(?)` 必须状态门控（仅就绪态渲染）");
+  assert.doesNotMatch(modal, /[?:]\s*dgT\("settings\.catalogReady"\)/, "目录就绪说明不得再平铺正文（回退即红）");
+  assert.match(modal, /catalog\.status === "loading" \? dgT\("settings\.catalogLoadingMsg"\) : dgT\("settings\.catalogUnavailableMsg"\)/, "瞬态/降级读数仍留正文（一眼可见）");
+  assert.match(modal, /gap: 8, flexWrap: "wrap", paddingRight: 34 \}/, "标题栏为绝对定位的关闭按钮留出 34px");
+  assert.match(modal, /justifyContent: "flex-end", marginLeft: "auto", minWidth: 0 \}/, "配置行顶到右端且可收缩（窄宽度不撑破）");
+  // 页脚第二份已删除：页脚行之后不得再出现 projectYaml 行（负向：搬回去/留双份即红）
+  const footerIdx = modal.indexOf('h("button", { style: { ...S.btn, padding: "6px 12px", fontSize: 12 }, className: "dg-btn", onClick: requestClose }, dgT("settings.closeBtn"))');
+  assert.ok(footerIdx > 0 && footerIdx > cfgRowIdx, "页脚关闭按钮行在标题栏之后");
+  assert.doesNotMatch(
+    modal.slice(footerIdx),
+    /settings\.projectYaml/,
+    "页脚不得再有 project.yaml 行（信息零丢失但不得双份）",
+  );
+  // g-490（判据 6，改判后）：引擎**口径来源引用表**单一真源 + 设置接口下发（客户端只消费，不留副本）；
+  // 该表**不是**解析默认值（六键在 schema 里 nullable 且无 default），故不得再出现「默认值」命名。
+  assert.match(host, /const AUTOMATION_UNSET_SCOPE = \{/);
+  assert.match(host, /unset_scope: AUTOMATION_UNSET_SCOPE,/);
+  assert.match(host, /automation_unset_scope: AUTOMATION_UNSET_SCOPE/);
+  assert.doesNotMatch(host, /AUTOMATION_DEFAULTS|automation_defaults/, "「解析默认值」命名必须整体消失（含 schema_hints 与两个 settings 响应）");
+  assert.doesNotMatch(modal, /scope_planning: "human"/, "客户端不得硬编码键级 human/ai 副本（必须来自服务端）");
+  assert.doesNotMatch(modal, /AUTOMATION_DEFAULTS|automation_defaults/, "客户端不得再消费「解析默认值」字段");
   const bundle = readFileSync(join(process.cwd(), "dist/lib/client.js"), "utf8");
   assert.match(bundle, /⚠️ GENERATED FILE — DO NOT EDIT DIRECTLY/);
   assert.match(bundle, /function SettingsModal/);
@@ -1920,7 +2064,7 @@ test("g-179 生成 bundle 契约：client.js 标题同步为 🔎 信息收集�
 // ===== g-181：父级 overlay backdrop 误关保护（内容起点文本选择/拖拽到弹窗外松开不误关）=====
 
 // 五个受影响模块 + g-183 共享面板（shared-panel.js）+ g-273 批量接受弹窗（batch-accept.js）
-// + g-462 Graph 设计哲学弹窗（design-modal.js）的 guard 接入预期
+// + g-462 设计哲学图 / g-481 「使用说明」弹窗（help-modal.js）的 guard 接入预期
 // （每处 style: S.overlay 都必须走 useBackdropClose guard，禁止裸 style: S.overlay, onClick:；panel stopPropagation 保留）。
 const G181_MODULES: Record<string, number> = {
   "goal-modal.js": 1,
@@ -1930,7 +2074,7 @@ const G181_MODULES: Record<string, number> = {
   "kanban.js": 6,
   "shared-panel.js": 1,
   "batch-accept.js": 1,
-  "design-modal.js": 1,
+  "help-modal.js": 1,
 };
 const G181_TOTAL = Object.values(G181_MODULES).reduce((a, b) => a + b, 0); // 20
 
@@ -3082,11 +3226,16 @@ test("g-186 review 接受交付入口：单一状态提示、不含‘裁决’�
   assert.match(actions, /"✅ 交付已生效"/);
   assert.match(actions, /confirm\(/);
   assert.match(actions, /session\.prompt/);
-  assert.match(actions, /【负责人交付复核请求】/);
+  // g-496 att-007：模板正文迁入宿主只读资产 ⇒ 源码/bundle 面改判「经共享读取器引用该资产名」，
+  // 正文面由 g-323 的行为断言（真实资产 + 真实插值）承担。
+  assert.match(actions, /renderGuiPrompt\(\s*"gui-accept-review-request"/);
   assert.match(actions, /"queue"/);
   assert.match(constants, /get "review\.requested"\(\) \{ return dgT\('event\.reviewRequested'\); \}/);
   assert.match(constants, /get "review\.objected"\(\) \{ return dgT\('event\.reviewObjected'\); \}/);
-  assert.match(bundle, /【负责人交付复核请求】/);
+  assert.match(bundle, /"gui-accept-review-request"/);
+  // 反向：正文不得再内联在源码或 bundle 中（唯一事实源 = 资产）。
+  assert.doesNotMatch(actions, /【负责人交付复核请求】/);
+  assert.doesNotMatch(bundle, /【负责人交付复核请求】/);
   assert.doesNotMatch(bundle, /等待主管裁决/);
 });
 
@@ -3855,10 +4004,15 @@ test("g-259 源契约：settings-modal.js 与 client.js 将 setRefreshInterval �
   assert.ok(okIndex > postIndex, "save 内存在 if (!r.ok) 校验");
   assert.ok(setRefreshIndex > okIndex, "setRefreshInterval 必须在 if (!r.ok) 成功分支内调用（后置生效）");
 
-  // 前置校验（lanes 检查）必须在 fetch 之前且在此之前不得调用 setRefreshInterval
-  const precheckIndex = saveCode.indexOf("settings.pkLanesError");
+  // 前置校验必须在 fetch 之前且在此之前不得调用 setRefreshInterval。
+  // g-488：原 `defaults.pk.lanes` 整数前置校验随该输入框一并删除（校验对象已不存在）⇒ 锚点改指
+  // **仍然存在**的评审条件前置校验（`collectReviewListErrors`）：同一位置、同一「拒绝提交 + 零副作用」
+  // 语义，断言强度不变；并**追加**负向断言钉住 lanes 前置校验确实已随 UI 移除。
+  const precheckIndex = saveCode.indexOf("collectReviewListErrors(form)");
   assert.ok(precheckIndex > 0 && precheckIndex < postIndex, "前置校验位于 fetch 之前");
   assert.ok(setRefreshIndex > precheckIndex, "setRefreshInterval 必须位于前置校验之后");
+  assert.equal(saveCode.includes("settings.pkLanesError"), false, "pk.lanes 前置校验已随输入框移除");
+  assert.equal(saveCode.includes("defaults?.pk?.lanes"), false, "save 不再读取已下架的 lanes 输入");
 
   // 确保在 fetch 之前的代码段内没有任何 setRefreshInterval 调用
   const preFetchCode = saveCode.slice(0, postIndex);
@@ -4013,7 +4167,29 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
     assert.equal(h.harness.getBaseline().refreshInterval, "5");
   }
 
-  // 判据 3：前置校验拦截时零副作用——pk lanes 等非法值被拦截并提示错误、不发起 POST，localStorage 与广播事件均未触发
+  // 判据 3：前置校验拦截时零副作用——评审条件非法值被拦截并提示错误、不发起 POST，localStorage 与广播事件均未触发
+  // g-488：原用例注入 `defaults.pk.lanes = -1`（该输入框与它的整数前置校验已随判据 3 一并下架）⇒ 改用
+  // **仍然存在**的前置校验对象：`regions: []`（显式空列表被 core 写侧拒收）——同一「拒绝提交 + 零副作用」
+  // 语义，断言强度不变；并另加一个子用例钉住 lanes 下架后的新语义（不再阻断保存）。
+  {
+    const h = createHarness({
+      initialInterval: 10,
+      refreshIntervalInput: "30",
+      form: { review: { regions: [] } },
+    });
+    await h.harness.save();
+    assert.equal(h.calls.fetch.length, 0, "前置校验失败未发起 fetch");
+    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "localStorage 保持原值 10 完全不变");
+    assert.equal(h.events.length, 0, "未触发任何广播事件");
+    assert.equal(h.calls.onClose, 0, "弹窗未关闭");
+    assert.ok(
+      h.calls.setNote.some((n: any) => n?.kind === "err" && String(n?.text).includes("settings.reviewEmptyForbidden")),
+      "提示评审条件错误（regions 显式空列表被拒收）",
+    );
+  }
+
+  // 判据 3 补充（g-488）：`defaults.pk.lanes` 已从界面下架 ⇒ 文件里既有的非法值**不再永久阻断保存**
+  // （否则一个手改坏的 project.yaml 会让整个设置面板只读）；core 侧读取/规整语义未动。
   {
     const h = createHarness({
       initialInterval: 10,
@@ -4021,11 +4197,11 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
       form: { defaults: { pk: { lanes: -1 } } },
     });
     await h.harness.save();
-    assert.equal(h.calls.fetch.length, 0, "前置校验失败未发起 fetch");
-    assert.equal(h.store.get("dsh-graph.refresh-interval"), "10", "localStorage 保持原值 10 完全不变");
-    assert.equal(h.events.length, 0, "未触发任何广播事件");
-    assert.equal(h.calls.onClose, 0, "弹窗未关闭");
-    assert.ok(h.calls.setNote.some((n: any) => n?.kind === "err" && n?.text === "settings.pkLanesError"), "提示 pkLanesError");
+    assert.equal(h.calls.fetch.length, 1, "lanes 非法值不再构成前置校验，保存照常发起 fetch");
+    assert.ok(
+      h.calls.setNote.every((n: any) => !String(n?.text ?? "").includes("settings.pkLanesError")),
+      "不再出现 pkLanesError（该键与其校验路径均已移除）",
+    );
   }
 
   // 判据 2：POST 非 2xx (如 500) 时零副作用——弹窗提示保存失败且不关闭，localStorage 保持原值完全不变，不广播事件
@@ -4138,6 +4314,42 @@ function loadPromptSessionQueueHelper(): any {
   return helper;
 }
 
+// ===== g-496 att-007：GUI 提示词模板正文已迁入宿主只读资产 =====
+// doAccept 现在**先经 renderGuiPrompt 取模板再投递**。这里从 helpers.js 抠出**真实**读取+插值实现，
+// 并把 fetch 打到**真实资产文件**——被测闭包消费真实实现（读取器/插值若被破坏，本文件用例一起失败）。
+const helpersClientSrc = () => readFileSync(join(process.cwd(), "dsh-graph-host/lib/client/helpers.js"), "utf8");
+const guiPromptAssets = new Map<string, string>();
+{
+  const dir = join(process.cwd(), "dsh-graph-host/prompts");
+  for (const f of readdirSync(dir)) {
+    if (f.endsWith(".md")) guiPromptAssets.set(f, readFileSync(join(dir, f), "utf8"));
+  }
+}
+const realRenderGuiPrompt: (base: string, vars?: Record<string, unknown>) => Promise<string> =
+  new Function(
+    "fetch", "dgLang", "GUI_PROMPT_ASSET_URL",
+    `const guiPromptAssetCache = new Map();
+     ${extractBalanced(helpersClientSrc(), "function normalizeGuiPromptAsset(")}
+     ${extractBalanced(helpersClientSrc(), "function guiPromptAssetLang(")}
+     ${extractBalanced(helpersClientSrc(), "async function loadGuiPromptAsset(")}
+     ${extractBalanced(helpersClientSrc(), "function interpolateGuiPrompt(")}
+     ${extractBalanced(helpersClientSrc(), "async function renderGuiPrompt(")}
+     return renderGuiPrompt;`,
+  )(
+    async (url: string) => {
+      const name = String(url).split("/").pop() ?? "";
+      const body = guiPromptAssets.get(name);
+      return body === undefined
+        ? { ok: false, status: 404, text: async () => "" }
+        : { ok: true, status: 200, text: async () => body };
+    },
+    "zh",
+    "/api/dsh-graph/help/asset/",
+  );
+
+/** 单卡接受通知的期望正文（真实资产 + 真实插值）。 */
+const expectedAcceptReview = (goalId: string) => realRenderGuiPrompt("gui-accept-review-request", { goalId });
+
 /** 真实 doAccept：抠出箭头函数并把闭包自由变量做成形参注入，返回可直接 await 的调用器。 */
 function makeDoAcceptRunner(rt: any, supervisorSession: any, goalId: string, jsonResult: any, onRefresh?: () => void) {
   const src = goalActionsClientSrc();
@@ -4146,12 +4358,14 @@ function makeDoAcceptRunner(rt: any, supervisorSession: any, goalId: string, jso
   const make = new Function(
     "confirm", "dgT", "goalId", "setLoading", "setNote", "fetch", "graphUrl",
     "onRefresh", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "console",
+    "renderGuiPrompt",
     `return ${arrow};`,
   );
   return make(
     () => true, (k: string) => k, goalId, () => {}, () => {},
     async () => ({ json: async () => jsonResult }), (p: string) => p,
     onRefresh ?? (() => {}), rt, null, supervisorSession, loadPromptSessionQueueHelper(), console,
+    (base: string, vars?: any) => realRenderGuiPrompt(base, vars),
   ) as () => Promise<void>;
 }
 
@@ -4178,7 +4392,10 @@ function makeDsh016RetainHost(session: any, record: { releases: number; retains:
 test("g-323 单卡接受：0.1.6 retain 宿主（无 get）下 doAccept 发出恰好一条 queue 主管通知且 release 配平", async () => {
   const arrow = extractBalanced(goalActionsClientSrc(), "const doAccept = ");
   assert.match(arrow, /promptSessionQueue\(rt, supervisorSession, parts,/, "doAccept 必须消费共享 helper");
-  assert.match(arrow, /【负责人交付复核请求】/, "单卡文案逐字不变");
+  // g-496 att-007：正文已迁入宿主只读资产 ⇒ 源码面判据改为「经共享读取器取模板」，
+  // 正文面的「逐字不变」由下方行为断言（真实资产 + 真实插值）承担，判据强度只增不减。
+  assert.match(arrow, /renderGuiPrompt\(\s*"gui-accept-review-request"/, "doAccept 必须经共享读取器取模板");
+  assert.doesNotMatch(arrow, /【负责人交付复核请求】/, "正文不得再内联在 doAccept 内");
   assert.doesNotMatch(arrow, /typeof\s+\w+\??\.\s*(using|retain)\s*===/, "doAccept 不得自带能力探测");
 
   const prompts: any[] = [];
@@ -4192,9 +4409,10 @@ test("g-323 单卡接受：0.1.6 retain 宿主（无 get）下 doAccept 发出�
   assert.equal(prompts.length, 1, "单卡接受必须恰好一条主管通知（不得 0 条，也不得 N 条）");
   assert.equal(prompts[0].mode, "queue");
   const text = String(prompts[0].parts[0].text);
-  assert.match(text, /【负责人交付复核请求】/);
+  // g-496 att-007：正文由**真实资产 + 真实插值**给出（迁移前是内联字面量，逐字等价）。
+  assert.equal(text, await expectedAcceptReview("g-1"), "单卡文案与资产骨架逐字一致（含 id 代入）");
   assert.match(text, /「g-1」/, "文案含被接受的目标 id");
-  assert.doesNotMatch(text, /【负责人批量交付复核请求】/, "单卡不得误用批量文案");
+  assert.doesNotMatch(text, /「g-9」/, "不得混入其它目标 id");
   assert.equal(record.releases, 1, "release 必须恰好配平一次（无代际泄漏）");
 });
 
@@ -4206,7 +4424,8 @@ test("g-323 单卡接受：0.1.5 被动回退（只有 binding、无 retain/get�
   await doAccept();
   assert.equal(prompts.length, 1, "0.1.5 被动回退仍须恰好一条 queue 主管通知");
   assert.equal(prompts[0].mode, "queue");
-  assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
+  assert.equal(String(prompts[0].parts[0].text), await expectedAcceptReview("g-9"),
+    "0.1.5 被动回退下文案同样取自资产骨架");
   assert.match(String(prompts[0].parts[0].text), /「g-9」/);
 });
 
@@ -4270,7 +4489,8 @@ test("g-323 单卡接受：0.1.6 有 using 的宿主优先走 using，恰好一�
   assert.equal(retainCalls.length, 0, "using 可用时不得再自行 retain");
   assert.equal(prompts.length, 1, "单卡接受恰好一条 queue 主管通知");
   assert.equal(prompts[0].mode, "queue");
-  assert.match(String(prompts[0].parts[0].text), /【负责人交付复核请求】/);
+  assert.equal(String(prompts[0].parts[0].text), await expectedAcceptReview("g-7"),
+    "using 路径下文案同样取自资产骨架");
   assert.match(String(prompts[0].parts[0].text), /「g-7」/);
   assert.equal(record.releases, 1, "release 必须恰好一次（无代际泄漏）");
 });
@@ -4298,21 +4518,26 @@ function makeOpenSupervisorRunner(opts: {
   rt: any; supervisorSession: any; request: string;
   copyText?: (text: string) => boolean | Promise<boolean>;
   appCtx?: any;
+  renderGuiPrompt?: (base: string, vars?: Record<string, unknown>) => Promise<string>;
 }) {
   const arrow = extractBalanced(goalActionsClientSrc(), "const openSupervisor = ").slice("const openSupervisor = ".length).trim();
   assert.match(arrow, /^async \(\) => \{/, "抠到的确实是 openSupervisor 箭头函数");
   const state = {
     loading: [] as boolean[], notes: [] as any[], modes: [] as any[], fallbacks: [] as any[],
     toasts: [] as string[], opened: [] as any[], activated: 0, copied: [] as string[],
+    requests: [] as string[],
   };
   const make = new Function(
-    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue", "request",
+    "dgT", "sessionsRt", "appCtx", "supervisorSession", "promptSessionQueue",
     "copyText", "openSessionTarget", "activateChatTab", "showToast",
-    "setLoading", "setMode", "setNote", "setFallback",
+    "setLoading", "setMode", "setNote", "setFallback", "setRequest", "renderGuiPrompt",
+    // g-496 att-007：模板改为由 renderGuiPrompt 插值 ⇒ `goalId`/`goalPath`/`guidance`
+    // 成为 openSupervisor 求值插值变量时的闭包自由变量，必须一并注入（否则在读模板处 ReferenceError）。
+    "goalId", "goalPath", "guidance",
     `return ${arrow};`,
   );
   const run = make(
-    goalActionsI18n().dgT, opts.rt, opts.appCtx ?? null, opts.supervisorSession, loadPromptSessionQueueHelper(), opts.request,
+    goalActionsI18n().dgT, opts.rt, opts.appCtx ?? null, opts.supervisorSession, loadPromptSessionQueueHelper(),
     // 记录每一次调用：直发成功分支若也走剪贴板，state.copied 会立刻非空（强负向对照）
     async (text: string) => { state.copied.push(text); return opts.copyText ? await opts.copyText(text) : false; },
     (...args: any[]) => { state.opened.push(args); },
@@ -4322,6 +4547,11 @@ function makeOpenSupervisorRunner(opts: {
     (v: any) => { state.modes.push(v); },
     (v: any) => { state.notes.push(v); },
     (v: any) => { state.fallbacks.push(v); },
+    // g-496 att-007：模板改为异步取资产后，复制失败的手动预览正文由 state 承接。
+    (v: string) => { state.requests.push(v); },
+    // 真实读取器 + 真实资产（opts.request 作为「资产渲染结果」的可注入替身，便于故障注入用例）。
+    opts.renderGuiPrompt ?? (async () => opts.request),
+    "g-7", "/tmp/g-7", "",
   ) as () => Promise<void>;
   return { run, state };
 }
@@ -4358,7 +4588,7 @@ test("g-327 直发契约（源码）：先投递后复制、直发成功分支�
 
   // 顺序：投递尝试必须先于剪贴板复制（复制只是投递失败后的兜底）
   const deliverAt = code.indexOf("promptSessionQueue(");
-  const copyAt = code.indexOf("copyText(request)");
+  const copyAt = code.indexOf("copyText(text)");
   assert.ok(deliverAt >= 0, "存在直发调用");
   assert.ok(copyAt > deliverAt, "必须先尝试直发，copyText 只能是投递失败后的兜底");
 
@@ -4374,7 +4604,7 @@ test("g-327 直发契约（源码）：先投递后复制、直发成功分支�
   assert.match(deliveredBody, /activateChatTab\(\)/);
 
   // 兜底复制契约逐字保留（copyText / openSessionTarget / activateChatTab / setFallback 仍被真实调用）
-  assert.match(code, /const copied = await copyText\(request\);/);
+  assert.match(code, /const copied = await copyText\(text\);/);
   assert.match(code, /if \(copied\) showToast\(dgT\("exec\.requestCopied"\)\);/);
   assert.match(code, /setFallback\(!copied\)/);
   assert.match(code, /setNote\(copied \? dgT\("exec\.requestCopiedOpened"\) : dgT\("exec\.autocopyFailedRequest"\)\);/);

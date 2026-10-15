@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { init, createGoal, findGoalFile, loadGoal, formatCollectPrompt, getCardMeta, fillCard, bindCardChild } from "../ops.ts";
+import { init, createGoal, findGoalFile, loadGoal, formatCollectPrompt, getCardMeta, fillCard, bindCardChild, readCorePromptAsset, fillPromptTemplate } from "../ops.ts";
 import { readEvents } from "../events.ts";
 
 function setup() {
@@ -54,12 +54,38 @@ test("formatCollectPrompt 生成完整的收集提示词", () => {
   assert.ok(prompt.includes(`graph_fill_card(goal="${goalId}", card="${cardId}", text=<全文可含 @att/<name>>, summary=<≤100字摘要>)`), "应包含精确回填模板");
   assert.ok(prompt.includes("**附件安全与边界（严格遵守）**"), "应包含附件安全边界");
   assert.ok(prompt.includes("**禁区（严格遵守）**"), "应包含禁区说明");
-  assert.ok(prompt.includes("@att/<相对引用名>"), "应包含 @att 引用规则");
+  assert.ok(prompt.includes("@att/<name>"), "应包含 @att 引用规则");
   assert.ok(prompt.includes("不得修改其他 goal 或 card"), "应包含修改范围限制");
   assert.ok(prompt.includes("不得自行调用 `graph_review_card`"), "应包含 review 限制");
   assert.ok(prompt.includes("所有 graph 工具操作必须在当前分配的 worktree/当前工作目录下运行"), "应包含工作目录运行要求");
   assert.ok(prompt.includes("**用户附加要求**"), "应包含用户附加要求");
   assert.ok(prompt.includes("附加要求：请重点关注技术细节"), "应包含用户提供的附加要求内容");
+
+  // g-496：固定正文已抽入 `prompts/collect-task.zh.md` —— 断言**锚定资产**而非代码字面量：
+  // ①资产正文与产物逐字一致（措辞真源在 .md，代码不留第二副本）；
+  // ②产物中无未替换的 `{{…}}` 占位符残留（插值完整）；
+  // ③英文资产同样可用且零 CJK（双语对偶，产物不再依赖硬编码 en 分支）。
+  const asset = readCorePromptAsset("collect-task", "zh");
+  assert.ok(asset.length > 0, "collect-task.zh.md 资产必须存在且非空");
+  for (const marker of ["@att/<name>", "**附件安全与边界（严格遵守）**", "**禁区（严格遵守）**", "**回填要求**："]) {
+    assert.ok(asset.includes(marker), `资产正文必须含固定措辞：${marker}`);
+    assert.ok(prompt.includes(marker), `产物必须原样保留资产措辞：${marker}`);
+  }
+  assert.equal(prompt.includes("{{"), false, "产物不得残留未替换占位符");
+  assert.equal(prompt.includes("}}"), false, "产物不得残留未替换占位符");
+  const enPrompt = formatCollectPrompt(root, goalId, cardId, undefined, "en");
+  // g-496（att-009 返工）：英文基线的回引措辞是 `@att/<relative-name>`（逐字抽取，不得改写为
+  // 中文侧的 `@att/<name>`）；断言同时钉住**资产**与**产物**，防止英文侧再被翻译式改写。
+  assert.ok(
+    readCorePromptAsset("collect-task", "en").includes("@att/<relative-name>"),
+    "英文资产必须逐字保留基线的 @att 回引规则",
+  );
+  assert.ok(enPrompt.includes("@att/<relative-name>"), "英文产物应含 @att 引用规则");
+  assert.ok(
+    !readCorePromptAsset("collect-task", "en").includes("**Attachment safety"),
+    "英文资产不得夹带中文基线独有的「附件安全与边界」整节（未授权扩写）",
+  );
+  assert.equal(/[\u3400-\u9fff]/.test(readCorePromptAsset("collect-task", "en")), false, "英文资产不得含 CJK");
 });
 
 test("formatCollectPrompt 无用户附加要求时省略该部分", () => {
@@ -125,6 +151,12 @@ test("getCardMeta 返回正确的卡片元数据", () => {
   assert.equal(meta.title, "测试卡片标题", "应返回正确的卡片标题");
   assert.equal(meta.kind, "image", "应返回正确的卡片类型");
   assert.equal(meta.goalTitle, "测试目标", "应返回正确的目标标题");
+});
+
+test("fillPromptTemplate 缺失必需变量显性失败，显式空值与用户花括号原样可用", () => {
+  assert.throws(() => fillPromptTemplate("{{required}}", {}), /缺少必需变量：required/);
+  assert.equal(fillPromptTemplate("{{required}}/{{optional}}", { required: "", optional: "" }), "/");
+  assert.equal(fillPromptTemplate("{{required}}", { required: "用户字面 {{nested}}" }), "用户字面 {{nested}}");
 });
 
 test("formatCollectPrompt 处理不存在的卡片", () => {

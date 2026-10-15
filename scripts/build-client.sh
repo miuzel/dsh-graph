@@ -40,11 +40,11 @@ PARTS=(
   "goal-actions"
   "goal-modal"
   "criteria-modal"
-  # g-462：Graph 设计哲学弹窗（内嵌 lifecycle/workflow 两张随包发布的交互图）。
+  # g-481：使用说明弹窗（五个页签，含并入的 lifecycle/workflow 两张随包发布交互图）。
   # 与 criteria-modal 同理必须在 drag-prompts 之前（工厂作用域），否则会变成
   # KanbanView 内部的嵌套组件：每次渲染产生新的组件身份 ⇒ 弹窗子树（含 iframe）被卸载重建，
   # 图会在父级每次重渲染时重新加载。
-  "design-modal"
+  "help-modal"
   # g-255：搜索临时可见性状态机纯函数模块，kanban.js 依赖其导出函数；
   # 必须排在 drag-prompts 之前（drag-prompts 打开 KanbanView 函数体，之后的代码
   # 在 KanbanView 局部作用域内；search-state 函数需在工厂作用域定义以被 KanbanView 引用）
@@ -76,6 +76,17 @@ PARTS=(
   # （工厂作用域），与 version-drawer 同理——夹在 drag-prompts 与 kanban 之间会变成
   # KanbanView 内部嵌套函数，每次渲染产生新组件身份导致 React 卸载重建弹窗子树。
   "batch-accept"
+  # g-494：模块开关的界面呈现裁剪纯函数模块（入口是否渲染的唯一实现）。
+  # 与 search-state、board-retain、narrow-width、search-groups 同理必须在 drag-prompts 之前
+  # （工厂作用域），否则会变成 KanbanView 内部的嵌套函数——每次渲染产生新身份，
+  # 且 goal-modal / card-drawer 等更早的模块无法引用。
+  # ⚠️ 顺序前提（rev-att-004-01 残余风险，非阻塞）：goal-modal 在 PARTS 中更早，会引用本模块的
+  #    moduleEnabled。当前安全，是因为它以**函数声明**导出（声明提升 ⇒ 工厂入口即可见），且
+  #    goal-modal 只在**组件体内**（渲染期）取用、不在模块求值期取用。
+  #    若将来把它改成 `const moduleEnabled = () => …`（箭头函数无提升），或让更早的模块在
+  #    **模块求值期**（顶层）就取用该符号，将触发 TDZ（Cannot access before initialization）。
+  #    届时请把本模块**上移**到所有引用方之前，或同步调整取用时机。
+  "module-gate"
   "drag-prompts"
   "kanban"
   "shared-panel"

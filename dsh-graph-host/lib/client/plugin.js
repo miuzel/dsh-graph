@@ -291,6 +291,8 @@
         const localeService = optionalService(ctx, "locale");
         const localeBind = registerI18n({ locale: localeService });
         dgT = createTranslator(localeBind);
+        // g-496：模板语言与 dgT **同源同时更新**（guiPromptAssetLang 只读该变量，不自行探测语言）。
+        dgLang = localeService ? resolveInterfaceLanguage(localeService) : "zh";
         // 记录「字典已注册在哪个服务实例上」：同一实例只注册一次（locale.register 对同一 ns+locale 会抛
         // `already has locale`），而服务实例更换（provider 重启/重放）时必须**重新注册**——否则新实例上
         // 命名空间缺失，翻译会退回本地中文字典（语言又不跟随了）。
@@ -307,6 +309,8 @@
         const refreshLocale = (svc) => {
           // bind 返回稳定引用、按当前活跃语言求值；语言切换后必须重新取一次翻译函数。
           try { dgT = createTranslator(svc.bind("dsh-graph")); } catch { return; }
+          // g-496：模板语言跟随界面语言切换（同一处、同一真源，避免两处判定漂移）。
+          dgLang = resolveInterfaceLanguage(svc);
           // 通知已挂载的看板组件重渲染（useLocaleRevision 订阅本事件）；无 DOM 环境静默降级。
           if (typeof window !== "undefined") {
             try { window.dispatchEvent(new CustomEvent('dsh-graph:locale-changed')); } catch { /* 静默 */ }
@@ -427,6 +431,20 @@
           console.warn("[dsh-graph-host] sidebarRight deferred inject 失败（右侧栏无该页签）", e);
         }
         console.log("[dsh-graph-host] client apply: kanban view registered (i18n enabled)");
+      },
+      // g-498：**仅供回归测试**的渲染/翻译入口（`core/tests/g498-help-ui-regression.test.ts`）。
+      // 它让测试渲染**真实组件**（而不是对源码文本做正则），从而能断言交互与渲染语义：
+      // 切换语言后选择是否保持、星号是否真的变成 `strong` 节点、分组是否守恒。
+      // 运行时零影响：宿主只读取 `name` / `inject` / `apply`，本字段不被消费、不改变任何行为。
+      __test: {
+        HelpUsageTab,
+        HelpPromptsTab,
+        HelpRichText,
+        helpTopicSections,
+        helpPromptGroups,
+        helpAssetNameOf,
+        helpPromptAssetRows,
+        helpAssetLangOrder,
       },
     };
   },

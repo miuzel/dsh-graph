@@ -4,7 +4,7 @@
 //  · 源码注释可以有内部编号/内部路径（豁免）；**给用户 supervisor 的提示词**与**运行期文案**
 //    不得假设能获取本仓库特有目录结构 / 脚本 / 分支模型 / 文件（含 `.dsh-graph` 内部文件名）。
 //  · A) 资产扫描（仅模型可读面，**每个预期资产都有粒度下限，防 fail-open**）：
-//      ① `dsh-graph-host/prompts/*.md` 与 `dsh-graph-host/supervisor-guide.{zh,en}.md`（源码 + dist 投递副本）；
+//      ① **公共层** `prompts/*.md`（含 `supervisor-guide.{zh,en}.md`）（源码 + dist 合并投递副本）；
 //      ② `dsh-graph-host/lib/server-i18n.js` 的**字符串值**（导入模块取 value ⇒ 键名/注释天然不计）；
 //      ③ `dsh-graph-host/lib/client/i18n.js`（GUI 可见文案）与 `dist/lib/client.js` 的
 //         **全部字符串字面量**（`'…'` / `"…"` / 反引号，含数组元素、赋值右侧、键名；拼接片段不可导入，
@@ -55,13 +55,40 @@ import {
 
 const repoRoot = join(import.meta.dirname, "../..");
 const HOST = join(repoRoot, "dsh-graph-host");
+// g-496：提示词资产（含 supervisor-guide）已归**公共层** `prompts/`；`HOST` 仍指插件自身目录
+// （`lib/client/i18n.js` 等未移动）。资产扫描必须以公共层为源侧根。
+const PUBLIC_PROMPTS = join(repoRoot, "prompts");
+// g-496 att-007：宿主专属层（GUI 模板注入载荷）的源侧根；dist 侧仍为合并后的 `dist/prompts/`。
+const HOST_PROMPTS = join(HOST, "prompts");
 const DIST = join(repoRoot, "dist");
 const CLIENT_I18N_SRC = join(HOST, "lib", "client", "i18n.js");
 const CLIENT_BUNDLE_DIST = join(DIST, "lib", "client.js");
 
 /** 每个资产的粒度下限（防「清空任一资产仍绿」的 fail-open）。 */
 const MD_MIN_LINES = 1;
+/** g-496 att-007：宿主专属层的 GUI **注入载荷**天然短（如回退理由只有一行模板）。
+ *  原先一刀切的 100 字节是为公共层帮助文档写的，改为**按层分级**：
+ *  公共层仍 100；宿主层默认也回到 100 —— 仍能拦住「清空/截断成空文件」，
+ *  且「禁用 token 0 命中」判据对两层一视同仁（本判据的保护目标不变）。 */
 const MD_MIN_BYTES = 100;
+/** g-496 att-012（终局复核 BLOCK 收口）：短载荷豁免**只**发给当前真实存在的 GUI 基名，
+ *  **不**按「宿主层」这把过于宽泛的尺子发放 —— 否则公共层之外的任何未来宿主资产
+ *  （错误文案、帮助片段、任意新模板）都会自动获得 20 字节下限，等于把 100→20 泛化到未来。
+ *  这 9 类即 `dsh-graph-host/prompts/gui-*.md` 的全集；新增宿主资产默认 100 字节。 */
+const SHORT_GUI_ASSET_BASES = new Set([
+  "gui-accept-review-request",
+  "gui-backward-reason",
+  "gui-batch-accept-review-request",
+  "gui-criteria-feedback-executor",
+  "gui-criteria-feedback-supervisor",
+  "gui-define-polish-request",
+  "gui-deliver-notice",
+  "gui-help-takeover-example",
+  "gui-reexecute",
+]);
+const MD_MIN_BYTES_SHORT_GUI = 20;
+/** 该资产名是否属于「既有 9 类短 GUI 模板」（按基名判定，语言后缀不计）。 */
+const isShortGuiAsset = (n: string) => SHORT_GUI_ASSET_BASES.has(n.replace(/\.(zh|en)\.md$/, ""));
 const MARKER_LINE_CAP = 2;
 const SERVER_I18N_MIN_PER_SIDE = 40;
 /** 客户端 i18n 字面量分辨率下限（实测源码 3962 / dist 10485）。 */
@@ -436,17 +463,34 @@ function scanClientI18n(): string[] {
   return out;
 }
 
-/** 收集源码与投递副本两侧的 markdown 资产（含粒度下限与豁免行数上限）。 */
-function markdownAssets(): { label: string; text: string; maxMarkerLines: number }[] {
-  const out: { label: string; text: string; maxMarkerLines: number }[] = [];
-  for (const [label, dir] of [["源", HOST], ["dist", DIST]] as const) {
-    const promptsDir = join(dir, "prompts");
+/** 收集源码与投递副本两侧的 markdown 资产（含粒度下限与豁免行数上限）。
+ *  g-496 att-007：源侧现有**两层**（公共层 `prompts/` + 宿主专属层 `dsh-graph-host/prompts/`），
+ *  dist 侧是二者合并后的 `dist/prompts/`。故源侧按层分别读取（各自带该层的字节下限），
+ *  dist 侧按合并目录读取（用公共层下限 —— 已含所有公共层资产）。 */
+function markdownAssets(): { label: string; text: string; maxMarkerLines: number; minBytes: number }[] {
+  const out: { label: string; text: string; maxMarkerLines: number; minBytes: number }[] = [];
+  const isGuide = (n: string) => n === "supervisor-guide.zh.md" || n === "supervisor-guide.en.md";
+  // supervisor-guide 两语言仍享「本项目示例」标记行豁免（口径不变，仅位置变了）。
+  const cap = (n: string) => (isGuide(n) ? MARKER_LINE_CAP : 0);
+  // g-496 att-012：字节下限**只按资产身份**判定（既有 9 类短 GUI 模板 → 20，其余 → 100），
+  // 不按所在层 —— 宿主层不再是「一律宽松」的通行证。
+  const floor = (n: string) => (isShortGuiAsset(n) ? MD_MIN_BYTES_SHORT_GUI : MD_MIN_BYTES);
+  for (const [label, promptsDir] of [
+    ["源", PUBLIC_PROMPTS],
+    ["源", HOST_PROMPTS],
+  ] as const) {
     for (const name of readdirSync(promptsDir).filter((n) => n.endsWith(".md")).sort()) {
-      out.push({ label: `${label}/prompts/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: 0 });
+      out.push({ label: `${label}/${name}`, text: readFileSync(join(promptsDir, name), "utf8"), maxMarkerLines: cap(name), minBytes: floor(name) });
     }
-    for (const name of ["supervisor-guide.zh.md", "supervisor-guide.en.md"]) {
-      out.push({ label: `${label}/${name}`, text: readFileSync(join(dir, name), "utf8"), maxMarkerLines: MARKER_LINE_CAP });
-    }
+  }
+  // dist 侧与源侧同口径：同一资产名在任何一侧都享同一阈值（复制不改变身份）。
+  for (const name of readdirSync(join(DIST, "prompts")).filter((n) => n.endsWith(".md")).sort()) {
+    out.push({
+      label: `dist/prompts/${name}`,
+      text: readFileSync(join(DIST, "prompts", name), "utf8"),
+      maxMarkerLines: cap(name),
+      minBytes: floor(name),
+    });
   }
   return out;
 }
@@ -457,7 +501,7 @@ async function scanAllAssets(): Promise<string[]> {
   let scannedLines = 0;
   for (const asset of markdownAssets()) {
     out.push(...scanText(asset.label, asset.text, {
-      minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES, maxMarkerLines: asset.maxMarkerLines,
+      minLines: MD_MIN_LINES, minBytes: asset.minBytes, maxMarkerLines: asset.maxMarkerLines,
     }));
     scannedLines += asset.text.split("\n").length;
   }
@@ -480,7 +524,19 @@ async function scanAllAssets(): Promise<string[]> {
 test("g-444 判据3：模型可读资产（源码 + dist 投递副本）不含本仓库特有路径/命令/文件", async () => {
   const assets = markdownAssets();
   // 非恒真护栏：资产必须真被读到（清空/删减任一资产由每资产下限与文件枚举兜住）。
-  assert.equal(assets.length, 32, `应扫到 14 个 prompts × 2 侧 + 2 份指南 × 2 侧（实得 ${assets.length}）`);
+  // g-496 att-007：源侧两层（公共层 prompts/ + 宿主专属层 dsh-graph-host/prompts/）合并投递为
+  // `dist/prompts/`。故原「源一层 ≡ dist」改判为**更强的三方等价**：
+  // `公共层 ∪ 宿主层 ≡ dist ≡ 被扫资产（去重按 dist 计数）` —— 单层时代的
+  // 「无法靠删资产静默少扫」语义原样保留，且新增「两层并集必须恰好等于投递集」（漏投一份即红）。
+  const publicNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".md")).sort();
+  const hostNames = readdirSync(HOST_PROMPTS).filter((n) => n.endsWith(".md")).sort();
+  const distPromptNames = readdirSync(join(DIST, "prompts")).filter((n) => n.endsWith(".md")).sort();
+  const srcUnion = [...publicNames, ...hostNames].sort();
+  assert.deepEqual(srcUnion, distPromptNames, "源侧两层并集与随包副本必须同集（派生基准可信）");
+  assert.equal(new Set(srcUnion).size, srcUnion.length, "两层资产名不得重复（合并会 fail-closed）");
+  // 被扫条目 = 源侧两层（逐层各按其下限）+ dist 合并层。
+  assert.equal(assets.length, srcUnion.length + distPromptNames.length,
+    `应扫到 源 ${srcUnion.length} 份 + dist ${distPromptNames.length} 份（实得 ${assets.length}）`);
   const violations = await scanAllAssets();
   assert.deepEqual(violations, [], `资产命中禁用 token（应 0 命中）：\n${violations.join("\n")}`);
 });
@@ -594,7 +650,7 @@ test("g-444 逐资产粒度下限：清空/截断任一预期资产即判红（�
   // 真实资产侧：每个资产都必须满足非空行/字节下限（阈值与主扫描一致）。
   for (const asset of markdownAssets()) {
     const hits = scanText(asset.label, asset.text, {
-      minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES, maxMarkerLines: asset.maxMarkerLines,
+      minLines: MD_MIN_LINES, minBytes: asset.minBytes, maxMarkerLines: asset.maxMarkerLines,
     });
     assert.deepEqual(hits, [], `${asset.label} 覆盖不足或命中 token：\n${hits.join("\n")}`);
   }
@@ -605,6 +661,32 @@ test("g-444 逐资产粒度下限：清空/截断任一预期资产即判红（�
   // 字典侧：清空取值必须判红。
   const empty = scanServerI18n("fixture", { zh: {}, en: {} });
   assert.equal(empty.length, 2, `清空字典必须逐语言判红（实得 ${empty.length}）`);
+});
+
+test("g-444 att-012：短 GUI 豁免恰为既有 9 类，宿主层不再是「一律宽松」通行证", () => {
+  // ① 豁免集合 ≡ 宿主层实际存在的全部基名（既不漏发、也不虚发；新增宿主资产自动回到 100）。
+  const hostBases = [...new Set(
+    readdirSync(HOST_PROMPTS).filter((n) => n.endsWith(".md")).map((n) => n.replace(/\.(zh|en)\.md$/, "")),
+  )].sort();
+  assert.deepEqual(hostBases, [...SHORT_GUI_ASSET_BASES].sort(),
+    "短 GUI 豁免集合必须恰等于宿主层现有资产基名（既不多发也不漏发）");
+  // ② 阈值真正按身份而非按层：9 类得 20，其余一律 100（含公共层与任何未来宿主资产）。
+  for (const name of hostBases) {
+    assert.equal(markdownAssets().find((a) => a.label === `源/${name}.zh.md`)?.minBytes, MD_MIN_BYTES_SHORT_GUI,
+      `${name} 属既有短 GUI 模板 ⇒ 20 字节下限`);
+  }
+  assert.equal(markdownAssets().find((a) => a.label === "源/discipline.zh.md")?.minBytes, MD_MIN_BYTES, "公共层仍 100");
+  // ③ 负向对照：一个**不在** 9 类里的未来 host 资产名必须拿不到短豁免，且按其真实长度会被 100 判红。
+  assert.equal(isShortGuiAsset("gui-future-widget.zh.md"), false, "未来宿主资产不得自动获得短豁免");
+  assert.equal(isShortGuiAsset("error-msg.zh.md"), false, "任意短宿主资产名不得自动获得短豁免");
+  const futureAsset = "短文案。\n"; // 真实存在的短 host 资产若走到这里，必须被判红（而非靠 20 蒙混）
+  assert.equal(
+    scanText("fixture", futureAsset, { minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES }).length, 1,
+    "非豁免资产即使很短也必须按 100 字节判红",
+  );
+  // ④ 既有 9 类的短豁免**未被削弱**：反例证明 20 仍拦得住清空/截断。
+  assert.equal(scanText("fixture", "", { minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES_SHORT_GUI }).length, 1, "短豁免仍拦空文件");
+  assert.equal(scanText("fixture", "x\n", { minLines: MD_MIN_LINES, minBytes: MD_MIN_BYTES_SHORT_GUI }).length, 1, "短豁免仍拦截断");
 });
 
 // ---------------------------------------------------------------------------
@@ -760,18 +842,28 @@ test("g-444 B③：attempt 尾注骨架不含 npm 插件生态词（宿主 / eng
 });
 
 test("g-444 B④：zh/en 同步（骨架条目、指南行数、示例标记行数）", () => {
-  const zh = readFileSync(join(HOST, "supervisor-guide.zh.md"), "utf8");
-  const en = readFileSync(join(HOST, "supervisor-guide.en.md"), "utf8");
+  const zh = readFileSync(join(PUBLIC_PROMPTS, "supervisor-guide.zh.md"), "utf8");
+  const en = readFileSync(join(PUBLIC_PROMPTS, "supervisor-guide.en.md"), "utf8");
   assert.equal(zh.split("\n").length, en.split("\n").length, "指南 zh/en 行数必须相等");
   const markerLines = (text: string) => text.split("\n").filter((l) => new RegExp(MARK).test(l)).length;
   assert.equal(markerLines(zh), markerLines(en), "「本项目示例」标记行 zh/en 必须成对");
   assert.equal(markerLines(zh), MARKER_LINE_CAP, `指南豁免行数应恰为 ${MARKER_LINE_CAP}（实得 ${markerLines(zh)}）`);
-  const promptNames = readdirSync(join(HOST, "prompts")).filter((n) => n.endsWith(".zh.md"));
+  const promptNames = readdirSync(PUBLIC_PROMPTS).filter((n) => n.endsWith(".zh.md"));
+  // g-496（att-009 返工）：两份资产的行差是**结构基线固有**的，不是抽取自由：
+  //  ① `attempt-instructions`：英文 `## Task positioning` 框架标题由 g401 强制保留，中文对应行是
+  //     `【本次任务定位】` 内文标记（无标题，且 attempt-prompt.test.ts 断言中文产物以它开头）；
+  //     另有英文验收项列表按基线独立成行 ⇒ 允许恰好 2 行。
+  //  ② `collect-task`（rev-att-009-02 复核）：中文基线含「附件安全与边界」整节及附件类型细则，
+  //     英文基线本就是 31 行简版 ⇒ 允许恰好 −8 行（口径 en − zh）；**不得**把中文独有规范句翻译追加进英文（判据 8）。
+  // 其余资产仍要求逐字相等，超出上限即判红。
+  const STRUCTURAL_LINE_EXCEPTIONS: Record<string, number> = { "attempt-instructions": 2, "collect-task": -8 };
   for (const name of promptNames) {
     const base = name.slice(0, -6);
-    const pzh = readFileSync(join(HOST, "prompts", `${base}.zh.md`), "utf8");
-    const pen = readFileSync(join(HOST, "prompts", `${base}.en.md`), "utf8");
-    assert.equal(pzh.split("\n").length, pen.split("\n").length, `${base} 行数必须 zh/en 相等`);
+    const pzh = readFileSync(join(PUBLIC_PROMPTS, `${base}.zh.md`), "utf8");
+    const pen = readFileSync(join(PUBLIC_PROMPTS, `${base}.en.md`), "utf8");
+    const delta = pen.split("\n").length - pzh.split("\n").length;
+    const allowed = STRUCTURAL_LINE_EXCEPTIONS[base] ?? 0;
+    assert.equal(delta, allowed, `${base} 行数必须 zh/en 相等（结构性豁免上限 ${allowed} 行）`);
   }
   assert.equal(
     ATTEMPT_REPORT_SKELETON.split("\n").length,
@@ -782,7 +874,7 @@ test("g-444 B④：zh/en 同步（骨架条目、指南行数、示例标记行�
 
 test("g-444 判据2：提示词不再要求用户项目存在或手工维护 INDEX.md（双向）", () => {
   for (const [side, name] of [["zh", "supervisor-guide.zh.md"], ["en", "supervisor-guide.en.md"]] as const) {
-    const text = readFileSync(join(HOST, name), "utf8");
+    const text = readFileSync(join(PUBLIC_PROMPTS, name), "utf8");
     assert.doesNotMatch(text, /INDEX\.md/, `${side} 仍提到 INDEX.md`);
     assert.doesNotMatch(text, /务必先阅读[^。\n]*索引|必须同步更新[^。\n]*索引/, `${side} 仍有「必读/必维护索引」要求`);
     assert.doesNotMatch(text, /always read[^.\n]*index|must also update[^.\n]*index (table|file)/i, `${side} 仍有「必读/必维护索引」要求`);

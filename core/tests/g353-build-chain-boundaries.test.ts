@@ -78,6 +78,8 @@ function makeSandbox(opts: { withFreshnessSuite?: boolean } = {}): Sandbox {
   mkdirSync(repo, { recursive: true });
   cpSync(join(repoRoot, "scripts"), join(repo, "scripts"), { recursive: true });
   cpSync(join(repoRoot, "dsh-graph-host"), join(repo, "dsh-graph-host"), { recursive: true });
+  // g-496：公共层提示词资产在仓库根 `prompts/`（构建合并两层的源之一），沙箱须同构镜像。
+  cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));

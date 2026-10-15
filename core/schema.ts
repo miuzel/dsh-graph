@@ -427,6 +427,20 @@ export const projectConfigPatchSchema: ObjectSchema = {
       },
       additionalProperties: false,
     },
+    // g-480：harness 模块可选开关（workspace 级单层，不做 profile 默认 + 覆盖两层）。
+    // 五个模块、默认全开：未配置/缺失 = null = **开启**，此时工具面（51 个 graph_* 工具）与提示词段
+    // 与改造前逐字节一致。只允许真布尔或 null（拒绝 "true"/1 等隐式形态）；未知模块键一律拒绝。
+    modules: {
+      type: "object",
+      properties: {
+        tags: { type: "boolean", nullable: true },
+        memory: { type: "boolean", nullable: true },
+        shared_cards: { type: "boolean", nullable: true },
+        automation_prompts: { type: "boolean", nullable: true },
+        attachments: { type: "boolean", nullable: true },
+      },
+      additionalProperties: false,
+    },
     prompt_overrides: {
       type: "object",
       properties: {

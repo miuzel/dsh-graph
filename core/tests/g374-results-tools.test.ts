@@ -14,6 +14,7 @@ import {
   goalResultsSummaryFile,
   writeAttemptResults,
   stripAttemptReportSkeleton,
+  MODULE_TOOL_NAMES,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
@@ -27,7 +28,7 @@ import { apply } from "../../dist/index.js";
 //  - F3-b：工具必须被 agent「知道存在」（四处提示面 + 工具描述共同指路）。
 
 const repoRoot = join(import.meta.dirname, "../..");
-const promptPath = (name: string) => join(repoRoot, "dsh-graph-host", "prompts", name);
+const promptPath = (name: string) => join(repoRoot, "prompts", name);
 
 function createHarness() {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-tools-"));
@@ -343,6 +344,9 @@ test("g-374 F2/F3-a：POST /api/dsh-graph/refresh-results 与工具共用同一�
 // ============================================================================
 
 test("g-374 F3-b：四个提示面 + 文档镜像都告知两个新工具，且点明「无子代理时主管必须自己写」", () => {
+  // g-495 改判：help.zh/en 不再逐条列工具（改判为功能模块清单 + 当前开关状态），
+  // 故这两个面从「必须含工具名 + 场景」改判为「必须声明承载该能力的**模块**归属」
+  // （memory 模块，见 MODULE_TOOL_NAMES）；工具级告知由其余**四个**承载面 + schema 注入承担。
   const faces = [
     ["discipline.zh.md", promptPath("discipline.zh.md"), "无子代理"],
     ["discipline.en.md", promptPath("discipline.en.md"), "no subagent"],
@@ -350,8 +354,6 @@ test("g-374 F3-b：四个提示面 + 文档镜像都告知两个新工具，且�
     ["guide-hint.en.md", promptPath("guide-hint.en.md"), "no subagent"],
     ["usage.zh.md", promptPath("usage.zh.md"), "无子代理"],
     ["usage.en.md", promptPath("usage.en.md"), "subagent-less"],
-    ["help.zh.md", promptPath("help.zh.md"), "无子代理"],
-    ["help.en.md", promptPath("help.en.md"), "no subagent"],
   ] as const;
   for (const [label, path, scenarioNeedle] of faces) {
     const text = readFileSync(path, "utf8");
@@ -361,20 +363,47 @@ test("g-374 F3-b：四个提示面 + 文档镜像都告知两个新工具，且�
     const line = text.split("\n").find((l) => l.includes("graph_write_results") || l.includes("graph_refresh_results"))!;
     assert.ok(line.includes(scenarioNeedle), `${label} 的工具说明行必须点明场景「${scenarioNeedle}」：${line.slice(0, 80)}`);
   }
-  // discipline 的 zh/en 必须**逐条对称**（行数一致 + 两个工具都出现），且文档镜像同步
+  // help 面（agent 侧）改判：这两个结果工具**不属于任何可裁剪模块**（常驻工具，见
+  // MODULE_TOOL_NAMES 中不存在它们）⇒ agent 面必须声明「模块只管被裁剪的工具组」这一前提，
+  // 否则 agent 会误以为没在表里就等于不可用。
+  for (const label of ["help.zh.md", "help.en.md"] as const) {
+    const text = readFileSync(promptPath(label), "utf8");
+    assert.match(text, /\{memory\}/, `${label} 必须声明模块行（模块表是 agent 面的开关视图）`);
+    // 负向对照（内存变异）：模块占位被改坏时判据必红。
+    assert.doesNotMatch(text.replace("{memory}", "{memry}"), /\{memory\}/, `${label} 模块占位改坏时判据必须变红`);
+    // 必须点明「关闭的模块其工具不暴露」——即表外的常驻工具不受模块影响。
+    assert.match(text, /不暴露|not exposed/, `${label} 必须点明关闭模块的工具不暴露（否则表外工具被误读为不可用）`);
+  }
+  // 真源核对：两个结果工具**确实**不在任何模块的工具集里（常驻）。
+  const allModuleTools = new Set(Object.values(MODULE_TOOL_NAMES).flat());
+  for (const n of ["graph_write_results", "graph_refresh_results"]) {
+    assert.ok(!allModuleTools.has(n), `${n} 不应归属任何可裁剪模块（它是常驻工具，不受模块开关影响）`);
+  }
+  // discipline 的 zh/en 必须**逐条对称**（行数一致 + 两个工具都出现）
   const zh = readFileSync(promptPath("discipline.zh.md"), "utf8").split("\n").filter((l) => l.trim());
   const en = readFileSync(promptPath("discipline.en.md"), "utf8").split("\n").filter((l) => l.trim());
   assert.equal(zh.length, en.length, "discipline zh/en 必须逐条对称");
+  // g-496 改判（负责人批准）：docs 不再持正文副本 ⇒ 原「镜像逐条一致」**反转**为「不得含副本」；
+  // 告知义务**前移到真源**（下方对 discipline.zh 本身的断言，与上面 [discipline.zh.md, "无子代理"] 同源）。
+  // 独立验证者 BLOCK 记录：去镜像最初只覆盖 discipline，**漏了同文的 guide-hint 副本** ⇒ 此处两份都查。
   const mirror = readFileSync(join(repoRoot, "docs", "guide-auto-injection.md"), "utf8");
-  const matched = zh.filter((l) => mirror.includes(l.replace(/"/g, '\\"')));
-  assert.equal(matched.length, zh.length, "docs/guide-auto-injection.md 的 SUPERVISOR_DISCIPLINE 镜像必须逐条一致");
+  assert.doesNotMatch(mirror, /SUPERVISOR_DISCIPLINE/, "docs 不得再含 SUPERVISOR_DISCIPLINE 副本（g-496 去镜像）");
+  assert.doesNotMatch(mirror, /\bGUIDE_HINT\b/, "docs 不得再含 GUIDE_HINT 副本（g-496 去镜像，同文另一处）");
+  const zhText = readFileSync(promptPath("discipline.zh.md"), "utf8");
   for (const need of ["graph_write_results", "graph_refresh_results"]) {
-    assert.ok(mirror.includes(need), `文档镜像必须包含 ${need}（否则镜像落后于资产）`);
+    assert.ok(zhText.includes(need), `纪律真源必须包含 ${need}（承载面已从 docs 副本前移到真源）`);
   }
+  assert.ok(zhText.includes("无子代理"), "纪律真源必须点明「无子代理」场景（原 docs 副本的同一条语义）");
+  // 引导真源同样必须承载结果面告知（原 docs GUIDE_HINT 副本里就有这两条；副本删了，义务前移）。
+  const guideText = readFileSync(promptPath("guide-hint.zh.md"), "utf8");
+  for (const need of ["graph_write_results", "graph_refresh_results"]) {
+    assert.ok(guideText.includes(need), `引导真源必须包含 ${need}（原 docs GUIDE_HINT 副本的同一条语义）`);
+  }
+  assert.ok(guideText.includes("不要自动接管 supervisor"), "引导真源必须点明「不要自动接管 supervisor」（claim 限制）");
   // 主管守则（skill 资产，主管显式加载后的主要依据）也必须指路
   for (const [label, path, scenarioNeedle] of [
-    ["supervisor-guide.zh.md", join(repoRoot, "dsh-graph-host", "supervisor-guide.zh.md"), "无子代理"],
-    ["supervisor-guide.en.md", join(repoRoot, "dsh-graph-host", "supervisor-guide.en.md"), "subagent-less"],
+    ["supervisor-guide.zh.md", join(repoRoot, "prompts", "supervisor-guide.zh.md"), "无子代理"],
+    ["supervisor-guide.en.md", join(repoRoot, "prompts", "supervisor-guide.en.md"), "subagent-less"],
   ] as const) {
     const text = readFileSync(path, "utf8");
     assert.ok(text.includes("graph_write_results"), `${label} 必须告知 graph_write_results`);

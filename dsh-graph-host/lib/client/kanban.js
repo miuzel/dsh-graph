@@ -34,8 +34,8 @@
       // g-105: 记忆管理弹窗状态
       const [showMemoryModal, setShowMemoryModal] = React.useState(false);
       const memoryModalGuard = useBackdropClose(() => setShowMemoryModal(false));
-      // g-462：Graph 设计哲学弹窗状态（入口在看板标题栏，与刷新/记忆并列）
-      const [showDesignModal, setShowDesignModal] = React.useState(false);
+      // g-481：使用说明弹窗状态（入口在看板标题栏，与刷新/记忆并列；原「Graph 设计」入口已并入其中）
+      const [showHelpModal, setShowHelpModal] = React.useState(false);
       // g-187：顶部多选标签筛选；选中多个标签时采用 OR。
       const [tagFilter, setTagFilter] = React.useState([]);
       const [showTagFilterModal, setShowTagFilterModal] = React.useState(false);
@@ -949,6 +949,18 @@
           loadBacklogGoals();
         }
       }, [viewBacklogOnly, state.data]);
+
+      // g-494 判据 4（不留孤儿 UI）：模块被关闭时若其面板**正打开**，安全关闭它（回退到可用看板）。
+      // 不能只靠「入口藏了、面板还浮着」——那正是「不留空壳/占位」要消灭的形态。
+      // 幂等：已关闭态下 setX(false) 不产生额外渲染循环（React 对同值 setState 会 bail out）。
+      // 只读服务端下发的同一份开关（`state.data.modules`），不新增任何状态真源。
+      React.useEffect(() => {
+        const modsNow = state.data?.modules;
+        if (!modsNow || typeof modsNow !== "object") return;
+        if (!moduleEnabled(modsNow, "memory")) setShowMemoryModal(false);
+        if (!moduleEnabled(modsNow, "shared_cards")) setShowSharedPanel(false);
+        if (!moduleEnabled(modsNow, "tags")) setShowTagFilterModal(false);
+      }, [state.data]);
 
       if (!activeWs) return h("div", { style: S.wrap, role: "status" }, dgT('kanban.error.workspace'));
       if (state.loading) return h("div", { style: S.wrap }, dgT('kanban.loading'));
@@ -2309,25 +2321,38 @@
       }
 
       // g-216: 判定是否有任何弹窗或抽屉处于打开态
-      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showDesignModal || showTagFilterModal);
+      const hasModal = !!(modalGoal || drawerCard || showCreateGoal || showCreateVersion || renameVersionTarget || deleteVersionTarget || versionDetailTarget || showSettings || showVersionDrawer || showSharedPanel || showMemoryModal || showHelpModal || showTagFilterModal);
 
       // g-352：窄宽度适配**取代** g-330 的纯 CSS 最小适配（那条「头部放开换行」规则）。
       // 断点以看板根容器实测宽度为准（`boardWidth`，见上方 ResizeObserver）。
       // att-005（负责人 gate「两侧完全一致」）：会话页看板页签与右侧栏共用**同一份**头部/工具条
       // 实现（同一个 KanbanView，零 host 门控）——折叠逻辑因此两侧完全一致。
       //（工具条按钮样式 tbBtnStyle / 折叠态兜底 headBtnStyle 已在泳道渲染之前就位，见上方。
-      //  折叠态弹层内的按钮集合 = **只收这些**（刷新/标签筛选/[清空标签]/记忆/Graph 设计/知识库/设置/显示已归档），
-      //  g-462 之前是六项；「Graph 设计」按负责人规格与刷新/记忆并列，故平铺与折叠态**同一处**派生。
+      //  折叠态弹层内的按钮集合 = **只收这些**（刷新/标签筛选/[清空标签]/记忆/使用说明/知识库/设置/显示已归档），
+      //  g-481：原「Graph 设计」入口升格为「使用说明」（设计图成为其第 5 个页签），与刷新/记忆并列，故平铺与折叠态**同一处**派生。
       //  排成整行、每行图标 + 文字；「版本管理 / 创建版本」不再进弹层（att-005 第 B-2 项：回到网格
       //  左上角原位置、靠左对齐）。宽档平铺保留原有的字面量渲染与动作/tooltip。
       //  标签（图标 + 文字）由 headPanelEntry 统一派生。）
+      //  g-494：模块开关的**界面呈现裁剪**——已关闭模块的功能入口**整条从界面移除**（隐藏，不是置灰）。
+      //  开关值 = 服务端在**同一份**看板载荷里下发的 `b.modules`（由 core `boardPayload` 经同一个
+      //  `resolveModuleSwitches` 从 project.yaml 的 modules 段解析）⇒ 与既有真裁剪**同源**。
+      //  载荷缺字段/畸形一律按开启（fail-safe，见 lib/client/module-gate.js）⇒ 老服务端零回退。
+      //  隐藏的入口（记忆/知识库/标签筛选）在这里**一并对平铺与折叠弹层两处**生效：折叠弹层由
+      //  `headPanelItems` 派生（本处即其真源），无需第二处改动 ⇒ 不会「宽档藏了、窄档还留着」。
+      const mods = b.modules;
       const headPanelRows = [
         { key: "refresh", label: dgT("common.refresh"), title: dgT("common.refresh"), action: load },
-        { key: "tagfilter", label: tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title"), title: dgT("tagFilter.title"), action: () => setShowTagFilterModal(true) },
-        tagFilter.length > 0 ? { key: "tagclear", label: dgT("tagFilter.clear"), title: dgT("tagFilter.clear"), action: () => setTagFilter([]) } : null,
-        { key: "memory", label: dgT("memory.btn"), title: dgT("memory.title"), action: () => setShowMemoryModal(true) },
-        { key: "design", label: dgT("design.btn"), title: dgT("design.title"), action: () => setShowDesignModal(true) },
-        { key: "shared", label: dgT("shared.title"), title: dgT("shared.title"), action: () => setShowSharedPanel(true) },
+        moduleEnabled(mods, "tags")
+          ? { key: "tagfilter", label: tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title"), title: dgT("tagFilter.title"), action: () => setShowTagFilterModal(true) }
+          : null,
+        moduleEnabled(mods, "tags") && tagFilter.length > 0 ? { key: "tagclear", label: dgT("tagFilter.clear"), title: dgT("tagFilter.clear"), action: () => setTagFilter([]) } : null,
+        moduleEnabled(mods, "memory")
+          ? { key: "memory", label: dgT("memory.btn"), title: dgT("memory.title"), action: () => setShowMemoryModal(true) }
+          : null,
+        { key: "help", label: dgT("help.btn"), title: dgT("help.title"), action: () => setShowHelpModal(true) },
+        moduleEnabled(mods, "shared_cards")
+          ? { key: "shared", label: dgT("shared.title"), title: dgT("shared.title"), action: () => setShowSharedPanel(true) }
+          : null,
         { key: "settings", label: dgT("settings.title"), title: dgT("settings.title"), action: () => setShowSettings(true) },
       ].filter(Boolean).map((it) => {
         const entry = headPanelEntry(it.key, it.label);
@@ -2549,13 +2574,14 @@
           // 折叠时只收这六项 + 显示已归档开关（headPanelItems），每行图标 + 文字。
           toolbarCollapsed ? null : h("button", { style: tbBtnStyle, className: "dg-btn", onClick: load }, dgT("common.refresh")),
           // g-187：顶部标签筛选弹层入口
-          toolbarCollapsed ? null : h("button", {
+          // g-494：tags 模块关闭 ⇒ 本入口（含其后的「清除筛选」）整条不渲染，不留空壳。
+          toolbarCollapsed || !moduleEnabled(mods, "tags") ? null : h("button", {
             style: { ...tbBtnStyle, ...(tagFilter.length > 0 ? { borderColor: "var(--dsw-alias-state-business-primary, #4c8dff)", background: "rgba(76,141,255,.15)" } : {}) },
             className: "dg-btn" + (tagFilter.length > 0 ? " dg-btn-active" : ""),
             title: dgT("tagFilter.title"),
             onClick: () => setShowTagFilterModal(true),
           }, tagFilter.length > 0 ? dgT("tagFilter.title") + ` (${tagFilter.length})` : dgT("tagFilter.title")),
-          toolbarCollapsed || tagFilter.length === 0
+          toolbarCollapsed || !moduleEnabled(mods, "tags") || tagFilter.length === 0
             ? null
             : h("button", {
                 className: "dg-btn",
@@ -2567,22 +2593,25 @@
                 onClick: () => setTagFilter([]),
               }, dgT("tagFilter.clear")),
           // g-105: 记忆管理按钮（位于设置按钮左侧）
-          toolbarCollapsed ? null : h("button", {
+          // g-494：memory 模块关闭 ⇒ 入口从界面移除（隐藏，不是置灰）。容器内其余按钮原地不动，
+          // 不留占位/空壳（本行整体不产生 DOM 节点）。
+          toolbarCollapsed || !moduleEnabled(mods, "memory") ? null : h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
             title: dgT("memory.title"),
             onClick: () => setShowMemoryModal(true),
           }, dgT("memory.btn")),
-          // g-462：Graph 设计入口（负责人规格：与刷新 / 记忆等既有按钮**并列**同一行/同一容器，
+          // g-481：使用说明入口（与刷新 / 记忆等既有按钮**并列**同一行/同一容器，
           // 不占看板主区域——点开的是弹窗，看板主区域不新增任何常驻元素）。
           toolbarCollapsed ? null : h("button", {
             style: tbBtnStyle,
-            className: "dg-btn dg-design-btn",
-            title: dgT("design.title"),
-            onClick: () => setShowDesignModal(true),
-          }, dgT("design.btn")),
+            className: "dg-btn dg-help-btn",
+            title: dgT("help.title"),
+            onClick: () => setShowHelpModal(true),
+          }, dgT("help.btn")),
           // g-183: 项目知识库面板入口
-          toolbarCollapsed ? null : h("button", {
+          // g-494：shared_cards 模块关闭 ⇒ 入口从界面移除（隐藏）。
+          toolbarCollapsed || !moduleEnabled(mods, "shared_cards") ? null : h("button", {
             style: tbBtnStyle,
             className: "dg-btn",
             title: dgT("shared.title"),
@@ -2773,6 +2802,9 @@
               onPmFinished: () => setPolishGoal(null),
               goalStatus,
               supervisorSession: b.supervisorSession ?? null,
+              // g-494：把**同一份**模块开关（看板载荷下发）透传给目标弹窗，供其隐藏已知关闭模块的入口
+              //（如 tags 模块关闭 ⇒ 副标题行的标签编辑器不渲染）。缺字段 ⇒ 全开（fail-safe）。
+              modules: b.modules,
               onRenamed: () => { forceFreshRef.current = true; load(); },
               onArchived: () => load(),
               onTagsChanged: () => load(),
@@ -3341,11 +3373,11 @@
               onClose: () => setShowMemoryModal(false),
             })
           : null,
-        // g-462: Graph 设计哲学弹窗（内嵌 lifecycle + workflow 两张随包发布的交互图）
-        showDesignModal
-          ? h(DesignPhilosophyModal, {
-              key: "dg-design-modal",
-              onClose: () => setShowDesignModal(false),
+        // g-481: 使用说明弹窗（五页签；Graph 设计页签内嵌 lifecycle + workflow 两张随包发布的交互图）
+        showHelpModal
+          ? h(HelpModal, {
+              key: "dg-help-modal",
+              onClose: () => setShowHelpModal(false),
             })
           : null,
         // g-187: 标签多选筛选弹窗/面板

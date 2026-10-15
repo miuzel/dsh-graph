@@ -40,7 +40,7 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.20.2（本次发布准备产物；开发线沿用的版本串为 `0.20.1`）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.21.0（本版发布候选串；开发线此前沿用的版本串为 `0.20.2`）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
@@ -50,16 +50,17 @@ dsh plugin --profile <profile-name> add dsh-graph
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；H 系列共享探针在本版全绿） |
 | 原生 Windows | ⏳ **本版结论一律以台账为准**：真机轮次结论（逐版本、逐宿主代际）登记在 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（该文档**不随包发布**）—— **本行不预称任何轮次结果，也不得读出「已通过」**。台账中已完成的历史轮次示例：`v0.20.1`（2026-10-10，`win32/x64` + Node `v24.21.0`，宿主 `0.2.0-rc.2` 与 `0.2.1-alpha.2` 两代际，T1–T5 = 通过 15 / 失败 0 / 告警 1、T3 = 32/32 步）—— 历史轮次**只覆盖安装 / 启动 / REST 层**，且只覆盖该版本的产品代码，**不替代**本版结论。 |
-| macOS | ⏳ **本版未验证**：`v0.20.2` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（不随包发布）为准。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖各自版本的产品代码。 |
+| macOS | ⏳ **本版未验证**：`v0.21.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（不随包发布）为准。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖各自版本的产品代码。 |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.20.2）**
+**最新亮点（v0.21.0）**
 
-- **Windows 上派发不再因「工具名对不上」而起不来**：宿主用哪套 shell 工具（`bash` / `pwsh`）由平台条件化的组合声明决定；旧版按固定名字预置白名单，组合里装的若是另一套，Windows 上评审 / 上下文收集 / 极简执行三条派发路径会直接起不来（工具调用报 `tools.restrict() names unknown`）。本版改为**按组合实际声明的工具名解析**，缺所需能力时给出可读诊断，不再让子代理无声失败。
-- **两平台门禁新增「组合与系统行为」探针层**：新增六个共享探针（shell 工具名解析、角色白名单求交、派发可用、路径大小写语义、换行与编码往返、命令引号与参数传递），单一定义、Windows 执行件与跨平台执行件共用；组合声明一变就判红，缺真机事实时如实标注跳过，不冒充通过。
-- **注入式判定不再被真实系统带跑偏**：判「大小写敏感卷」时旧实现仍去问真实文件系统，在 Windows / macOS 这类真实不敏感卷上会得出错误结论；本版让三态注入全部忠实、判定与真实卷解耦。同时修好 Windows 上组合声明的自动发现（旧实现调用 `npm` 不经 shell 必然失败），找不到时给出可复制的定位命令。
-- **配置与行为零变化**：宿主兼容声明范围、设置项与看板行为均未改动；从 v0.20.1 升级无需任何手工动作。
+- **全新「📖 使用说明」中心与 Graph Engineering 体系**：看板顶栏新增一体化使用说明弹窗，包含五大主题页签（使用说明、提示词模板、工具清单、常见问题与 Graph 设计）；完整阐述 Graph Engineering（图工程）设计理念，并提供全部 51 个工具的分类表格与简称速查。
+- **提示词渐进式披露与单源化重构**：全面精简每轮恒定注入的系统提示词，主管常驻纪律削减超过 58%；所有提示词正文统一收口至 Markdown 资产单一真源，消除硬编码副本，杜绝中英文不对称。
+- **工作区级模块真裁剪**：支持在工作区按需关闭标签、记忆、共享卡片、附件等功能模块；关闭后对应工具从模型工具集中彻底移除、系统提示词段同步隐去，且看板相关入口自动隐藏。
+- **设置弹窗信息架构升级与双语无缝热重载**：设置弹窗全面 Tab 化，说明文字 Tooltip 化；提示词与技能指南全面跟随 DSH 语言偏好，并支持在线热切换中英文实时生效。
+- **多处健壮性与操作体验优化**：修复判据反馈在无执行会话时的转交路由、放宽评审 Markdown 标题解析容错、加固多实例本地插件软链冲突检测，并优化大屏与窄屏下的双栏独立滚动交互。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -282,7 +283,7 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.20.2 (this release-preparation artifact; `0.20.1` was the development version string carried by the dev line). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.21.0 (this release-candidate string; `0.20.2` was the development version string carried by the dev line). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
@@ -292,16 +293,17 @@ dsh plugin --profile <profile-name> add dsh-graph
 |----------|-------------------------|
 | Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures; the shared H-series probes are all green on this release) |
 | Native Windows | ⏳ **The verdict for this release is the ledger, and only the ledger**: on-device round results (per version, per host DSH generation) are recorded in the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (**that document is not shipped inside the package**) — **this row pre-claims no round result and must not be read as "passed"**. Example of a completed historical round in that ledger: `v0.20.1` (2026-10-10, `win32/x64` + Node `v24.21.0`, host DSH generations `0.2.0-rc.2` and `0.2.1-alpha.2`; T1–T5 15 passed / 0 failed / 1 warning, T3 32/32 steps) — historical rounds **cover the install / boot / REST layers only** and only that version's product code, so they **do not substitute** for this release's verdict. |
-| macOS | ⏳ **Not verified for this release**: `v0.20.2` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**; the verdict likewise comes from the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (not shipped in the package). Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and cover each of those versions' product code only. |
+| macOS | ⏳ **Not verified for this release**: `v0.21.0` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**; the verdict likewise comes from the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (not shipped in the package). Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and cover each of those versions' product code only. |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.20.2)**
+**What's new (v0.21.0)**
 
-- **Dispatching no longer dies on Windows because a tool name does not match**: which shell tool the host exposes (`bash` or `pwsh`) is decided by a platform-conditional composition declaration; the old version pre-seeded its allow-list with a fixed name, so when the composition provided the other one, all three dispatch paths on Windows — reviewer, context collector and minimal executor — failed outright (tool calls reporting `tools.restrict() names unknown`). This release **resolves the shell tool name from the composition declaration actually in effect** and gives a readable diagnosis when a required capability is missing, instead of letting subagents fail silently.
-- **Both platform gates gain a "composition and OS behaviour" probe layer**: six shared probes (shell tool name resolution, role allow-list intersection, dispatch availability, path case semantics, newline and encoding round-trips, command quoting and argument passing), defined once and consumed by both the Windows executable and the cross-platform executable; a changed composition turns the gate red, and missing on-device facts are honestly marked as skipped rather than passed.
-- **Injection-based verdicts are no longer dragged off course by the real system**: when judging "case-sensitive volume", the old implementation still consulted the real filesystem, which yielded a wrong verdict on genuinely case-insensitive volumes such as Windows and macOS; this release makes all three injection states faithful and decouples the verdict from the real volume. It also fixes automatic discovery of the composition declaration on Windows (the old implementation spawned `npm` without a shell, which can never work) and prints copy-pasteable locate commands when discovery fails.
-- **Zero config or behaviour change**: the host compatibility range, settings and kanban behaviour are unchanged; upgrading from v0.20.1 requires no manual action.
+- **All-new "📖 Usage Guide" center & Graph Engineering architecture**: adds an integrated help modal to the kanban header with five themed tabs (Usage, Prompt templates, Tool reference, FAQ, and Graph design); comprehensively articulates the Graph Engineering methodology and provides categorized tables with aliases for all 51 tools.
+- **Progressive disclosure & single-source prompt refactoring**: dramatically streamlines system prompt sections constantly injected each turn, slashing standing supervisor discipline by >58%; consolidates all prompt bodies into single-source Markdown assets, eliminating hardcoded duplicates and en/zh divergence.
+- **Workspace-level real module trimming**: supports on-demand deactivation of tags, memory, shared cards, and attachments at the workspace level; turning a module off completely removes its tools from model visibility, elides corresponding prompt sections, and hides related UI entrances.
+- **Settings modal IA upgrade & seamless bilingual hot-reloading**: tabifies settings dialog with tooltips; ensures prompt and skill guides strictly follow DSH language preferences and hot-reload dynamically when toggling languages on the fly.
+- **Robustness & UX enhancements**: fixes criteria feedback routing when live execution sessions are absent, enhances resilience in parsing review Markdown headings, hardens dev instance symlink collision detection, and delivers independent dual-pane scrolling across viewport sizes.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
 

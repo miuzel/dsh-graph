@@ -149,6 +149,8 @@
         card: props.cardData ?? null,
       });
       const [promptText, setPromptText] = React.useState("");
+      const [collectTemplate, setCollectTemplate] = React.useState(null);
+      const [collectTemplateError, setCollectTemplateError] = React.useState(null);
       const [collectNote, setCollectNote] = React.useState(null);
       const [collecting, setCollecting] = React.useState(false);
       const [relaunchRoute, setRelaunchRoute] = React.useState(null); // g-109：最近一次重新收集的模型路由
@@ -165,7 +167,14 @@
       }, [props.cardId]);
       React.useEffect(() => {
         let alive = true;
+        setCollectTemplate(null);
+        setCollectTemplateError(null);
         if (props.goalId) {
+          loadGuiPromptAsset("collect-task").then((template) => {
+            if (alive) setCollectTemplate(template);
+          }).catch((error) => {
+            if (alive) setCollectTemplateError(String(error?.message ?? error));
+          });
           setState((s) => ({ ...s, loading: true }));
           fetch(graphUrl("/api/dsh-graph/goal", { id: props.goalId }))
             .then((r) => r.json())
@@ -215,46 +224,35 @@
           const root = state.data?.root ?? dgT("drawer.unknownRoot");
           const attRoot = state.data?.attachmentsDir ?? (root !== dgT("drawer.unknownRoot") ? root + "/attachments" : dgT("drawer.unknownAttachmentRoot"));
 
-          // 可编辑的收集信息目标部分
-          const editablePart = [
-            dgT("drawer.collectContext"),
-            ``,
-            dgT("drawer.collectScope"),
-            dgT("drawer.collectHint", { title: cardTitle }),
-          ].join("\n");
-
-          // 只读的规范约束部分
-          const readonlyPart = [
-            ``,
-            dgT("drawer.canonicalAttRoot") + " " + attRoot,
-            ``,
-            dgT("drawer.goalInfoLabel"),
-            `- id: \`${props.goalId}\``,
-            `- ${dgT("createGoal.titleLabel")}: ${goalTitle}`,
-            ``,
-            dgT("drawer.cardInfoLabel"),
-            `- id: \`${card.id}\``,
-            `- ${dgT("createGoal.titleLabel")}: ${cardTitle}`,
-            ``,
-            dgT("drawer.backfillReq"),
-            dgT("prompt.collect.backfillText"),
-            dgT("prompt.collect.attachments"),
-            dgT("prompt.collect.reference"),
-            dgT("prompt.collect.finish"),
-            `\`\`\``,
-            dgT("prompt.collect.command", { goalId: props.goalId, cardId: card.id }),
-            `\`\`\``,
-            ``,
-            dgT("prompt.collect.securityTitle"),
-            dgT("prompt.collect.security"),
-            ``,
-            dgT("prompt.collect.forbiddenTitle"),
-            dgT("prompt.collect.forbiddenGoal", { cardId: card.id }),
-            dgT("prompt.collect.forbiddenReview"),
-            dgT("prompt.collect.forbiddenWorkspace"),
-          ].join("\n");
-
-          const autoPrompt = editablePart + readonlyPart;
+          // g-496 att-012：**第三副本已消除** —— 预览与发送共用同一份公共层 Markdown 渲染结果。
+          // 预览 = 对**已加载的公共层资产**做一次 `interpolateGuiPrompt` 渲染；发送时 host 用
+          // **同一份** `prompts/collect-task.<lang>.md` 经 `formatCollectPrompt` 重新渲染，
+          // 两侧同源同变量 ⇒ 预览 ≡ 实际派发正文。
+          // 可编辑区只承载**用户附加材料**，不再由 i18n 字典拼「可编辑正文」（旧
+          // `drawer.collectContext/collectScope/collectHint` 固定正文已从 i18n.js 整体删除）。
+          // `collect-task` 资产本身已包含「收集范围 / Collection scope」一段，
+          // 故由模板做该句的唯一真源，预览里不会重复。
+          const collectVars = {
+            attRoot,
+            dataRoot: state.data?.root ?? root,
+            goalId: props.goalId,
+            goalTitle,
+            cardId: card.id,
+            cardTitle,
+          };
+          let readonlyPart;
+          if (collectTemplate) {
+            readonlyPart = interpolateGuiPrompt(collectTemplate, collectVars);
+            // 自检：模板渲染后不得残留未替换的 `{key}` 占位符（装配点漏传变量要当场暴露，
+            // 而不是把 `{goalId}` 这类字面量发给用户/子代理）。键字符集与 `interpolateGuiPrompt`
+            // 同口径（`[A-Za-z0-9_]+`），避免把用户值里的 `{a-b}` 误判为未替换占位符。
+            // 错误文案走 ASCII（与 `interpolateGuiPrompt` 自身抛错同语系），不留硬编码中文。
+            const leftover = readonlyPart.match(/\{\{?[A-Za-z0-9_]+\}?\}/);
+            if (leftover) throw new Error(`collect-task template has unreplaced placeholder: ${leftover[0]}`);
+          } else {
+            readonlyPart = collectTemplateError || dgT("common.loading");
+          }
+          const editableText = promptText;
           const childLink = card.child_id
             ? h("div", { style: S.drawerSection, key: "child" },
                 h("div", { style: { ...S.drawerH, display: "flex", alignItems: "center", justifyContent: "space-between" } },
@@ -269,12 +267,16 @@
                 // 可编辑的收集信息目标部分
                 h("div", { style: { marginTop: 4, marginBottom: 8 } },
                   h("div", { style: { fontWeight: 600, fontSize: 12, opacity: 0.9, marginBottom: 4 } }, dgT("drawer.collectInfoTarget")),
+                   collectTemplateError ? h("button", { type: "button", className: "dg-btn", style: S.btn, onClick: () => {
+                     setCollectTemplateError(null);
+                     loadGuiPromptAsset("collect-task").then(setCollectTemplate).catch((error) => setCollectTemplateError(String(error?.message ?? error)));
+                   } }, dgT("common.retry")) : null,
                   h("textarea", {
                     style: { ...S.promptInput, width: "100%", minHeight: 150, resize: "vertical", marginTop: 2 },
-                    value: promptText ? promptText.split(readonlyPart)[0] : editablePart,
+                    value: editableText,
                     onChange: (e) => {
                       const newEditable = e.target.value;
-                      setPromptText(newEditable + readonlyPart);
+                      setPromptText(newEditable);
                     },
                   })),
                 // 只读的规范约束部分
@@ -296,7 +298,7 @@
                   }, readonlyPart)),
                 h("button", {
                   style: { ...S.btn, marginTop: 6, padding: "4px 14px" }, className: "dg-btn",
-                  disabled: collecting,
+                  disabled: collecting || !collectTemplate,
                   onClick: async () => {
                     setCollecting(true);
                     setCollectNote(dgT("drawer.dispatching"));
@@ -307,7 +309,7 @@
                         body: JSON.stringify({
                           goal: props.goalId,
                           card: props.cardId,
-                          prompt: promptText || autoPrompt,
+                          prompt: editableText,
                         }),
                       });
                       const data = await r.json();
@@ -557,7 +559,7 @@
               ? h(SessionPanel, { key: "live", parentId: card.parent_session_id, childId: card.child_id, collapsible: true,
                                   provider: card.provider, model: card.model,
                                   goalId: props.goalId, relaunchKind: "collect",
-                                  relaunchCardId: props.cardId, relaunchPrompt: promptText || autoPrompt,
+                                  relaunchCardId: props.cardId, relaunchPrompt: editableText,
                                   relaunchRoute, onRelaunched: setRelaunchRoute })
               : null,
           ];
