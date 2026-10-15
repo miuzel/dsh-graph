@@ -411,8 +411,8 @@
         // alive 守卫：快速切换语言时，**旧请求的响应不得覆盖**新选择的结果。
         return () => { alive = false; };
       }, [selected]);
-      return h("div", { className: "dg-help-prompts" },
-        h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8 } },
+      return h("div", { className: "dg-help-prompts", style: { display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0, height: "100%" } },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8, flex: "0 0 auto" } },
           h("div", { style: { ...S.meta, marginRight: "auto" } }, dgT("help.prompts.intro")),
           ...["zh", "en"].map((code) => h("button", {
             key: "help-lang-" + code,
@@ -424,14 +424,13 @@
           ? h("div", { className: "dg-help-loading", style: { ...S.meta, padding: "8px 0" } }, dgT("help.prompts.loading"))
           : state.status === "error"
             ? h("div", { className: "dg-help-error", style: { fontSize: 12, padding: "8px 0" } }, dgT("help.prompts.error", { error: String(state.error ?? "") }))
-            // g-498：两栏**各自独立滚动**的承载布局。外层给定受限高度（`min(60vh, 460px)`）并
-            // `minHeight: 0` —— 否则 flex 子项的最小内容高度会把容器撑开，滚动条跑到外层 body 上，
-            // 出现「只有整页在滚、标题与列表随外层一起跑走」。两栏各自 `overflow: auto` + `minHeight: 0`。
+            // g-498：两栏**各自独立滚动**的承载布局。自适应填满弹窗可用高度（flex: 1 1 auto + height: 100%），
+            // 并设 `minHeight: 0` —— 避免内容撑开弹窗。两栏各自 `overflow: auto` + `minHeight: 0`。
             : h("div", {
               className: "dg-help-prompts-split",
               style: {
                 display: "flex", gap: 12, alignItems: "stretch",
-                height: "min(60vh, 460px)", minHeight: 220, minWidth: 0,
+                flex: "1 1 auto", height: "100%", minHeight: 220, minWidth: 0,
               },
             },
           h("div", {
