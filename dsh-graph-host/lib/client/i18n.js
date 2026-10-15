@@ -806,7 +806,7 @@
       'settings.tabLocalNote': '本页两项为本地偏好：只保存在浏览器 localStorage，不写入 project.yaml，也不随项目配置同步。',
       // g-480：harness 模块可选开关（workspace 级；关闭 = 真裁剪工具面 + 相关提示词段，不删除数据）
       'settings.modulesNote': '关闭某模块会真正裁剪该模块的能力：其工具从模型可见的工具清单中移除，相关系统提示词段也不再注入。数据不会被删除，重新开启即恢复。',
-      'settings.modulesScopeNote': '作用范围：当前 workspace（写入本项目的 project.yaml）。未配置 = 全部开启，行为与改造前一致。',
+      'settings.modulesScopeNote': '作用范围：当前 workspace（写入本项目的 project.yaml）。未配置 = 全部开启。提示：修改开关后创建的新会话（或新派发子代理）立即生效；已有活跃会话需开启新会话或重载生效。',
       // g-480：宿主**不支持真裁剪**（无 agent/created 或 tools.restrict）时的唯一一行提示；
       // 服务端 `trim_supported === false` 才渲染（支持时**不渲染**该行）。
       'settings.modulesTrimUnsupported': '⚠️ 本版本 DSH 不支持真裁剪：模块开关不生效，只会记录配置（工具与提示词均不受影响）。',
@@ -2183,7 +2183,7 @@
       // g-480: optional harness module switches (workspace level; off = real trimming of the tool face
       // plus the related prompt sections, and never any data deletion)
       'settings.modulesNote': 'Turning a module off really trims its capability: its tools are removed from the tool list the model can see, and the related system prompt sections are no longer injected. No data is deleted; turning it back on restores everything.',
-      'settings.modulesScopeNote': 'Scope: the current workspace (written to this project\'s project.yaml). Unconfigured means all modules on, matching the previous behavior.',
+      'settings.modulesScopeNote': 'Scope: the current workspace (written to this project\'s project.yaml). Unconfigured means all modules on. Note: changes take effect immediately for new sessions and newly dispatched subagents; existing live sessions require a new session or reload.',
       // g-480: single hint line rendered only when the host reports `trim_supported === false`
       // (no agent/created event or no tools.restrict); never rendered on supporting hosts.
       'settings.modulesTrimUnsupported': '⚠️ This DSH version does not support real trimming: module switches have no effect and are recorded only (tools and prompts stay unchanged).',
