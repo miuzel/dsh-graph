@@ -2138,6 +2138,7 @@ export function apply(ctx, config) {
       writeFileSync(join(legacy.dir, GRAPH_LEGACY_SETTINGS_MARKER), `${new Date().toISOString()} ${trace}\n`);
     } catch { /* 标记写不进去：只是下次启动再判定一遍（值幂等 ⇒ 无重复写入） */ }
   };
+  let registerGraphSkills = () => {};
   const setupGraphSettings = async () => {
     const z = resolveSchemastery();
     if (typeof ctx.inject !== "function") return; // 无 inject 的上下文（如部分 mock）降级
@@ -2161,6 +2162,7 @@ export function apply(ctx, config) {
             base: { ...GRAPH_SETTINGS_DEFAULTS },
           });
           sctx.effect(() => () => { graphSettingsScope = null; });
+          try { registerGraphSkills(); } catch { /* 静默 */ }
           return;
         } catch (e) {
           const reason = `register: ${e?.message ?? e}`;
@@ -2179,6 +2181,7 @@ export function apply(ctx, config) {
         }
         graphSettingsScope = { get: () => readGraphSettingsFromForms(svc) };
         sctx.effect(() => () => { graphSettingsScope = null; });
+        try { registerGraphSkills(); } catch { /* 静默 */ }
         // 迁移失败不阻断（读取侧已有同源只读兜底），故不 await、只兜住异常。
         if (legacyGraphSettings) void persistLegacyGraphSettings(svc).catch(() => {});
         return;
@@ -6291,11 +6294,37 @@ export function apply(ctx, config) {
     }
     // 无 sandboxPolicy 且无显式绝对 root：推迟 init，
     // 等工具/REST 端点有 session/request workspace 时再 init。
-    // 注册 supervisor 工作指南为运行时技能（可选服务，缺失时静默）
-    const skills = ctx.get?.('skills');
-    if (skills) { try { skills.register({ name: 'dsh-graph-supervisor', description: 'dsh-graph 主管 Agent 工作指南', source: 'dsh-graph-host', content: localizedPrompt("supervisor-guide", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }); } catch { /* 静默 */ } }
-    // g-113：普通 agent 的 dsh-graph 使用指引（新会话开箱即用）
-    if (skills) { try { skills.register({ name: 'dsh-graph', description: 'dsh-graph 目标看板：用 graph_* 工具管理目标/判据/卡片/执行', source: 'dsh-graph-host', content: localizedPrompt("usage", resolvePromptLanguage(readGraphSettings().promptLanguage, ctx)) }); } catch { /* 静默 */ } }
+    // 注册 supervisor 工作指南与使用指引为运行时技能（可选服务，缺失时静默）。
+    // 在 apply 期初次注册（确保同步上下文有值）；若 settings 就绪且 promptLanguage 发生变化，自动更新注册。
+    let unregisterSkills = [];
+    registerGraphSkills = () => {
+      const skills = ctx.get?.('skills');
+      if (!skills) return;
+      for (const unreg of unregisterSkills) {
+        try { unreg?.(); } catch { /* 静默 */ }
+      }
+      unregisterSkills = [];
+      const lang = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
+      try {
+        const unreg = skills.register({
+          name: 'dsh-graph-supervisor',
+          description: lang === "en" ? 'dsh-graph Supervisor Agent work guide' : 'dsh-graph 主管 Agent 工作指南',
+          source: 'dsh-graph-host',
+          content: localizedPrompt("supervisor-guide", lang),
+        });
+        if (typeof unreg === "function") unregisterSkills.push(unreg);
+      } catch { /* 静默 */ }
+      try {
+        const unreg = skills.register({
+          name: 'dsh-graph',
+          description: lang === "en" ? 'dsh-graph goal board: manage goals, criteria, cards, execution' : 'dsh-graph 目标看板：用 graph_* 工具管理目标/判据/卡片/执行',
+          source: 'dsh-graph-host',
+          content: localizedPrompt("usage", lang),
+        });
+        if (typeof unreg === "function") unregisterSkills.push(unreg);
+      } catch { /* 静默 */ }
+    };
+    registerGraphSkills();
 
     const toolLanguage = resolvePromptLanguage(readGraphSettings().promptLanguage, ctx);
     const disposers = tools.map((t) =>
