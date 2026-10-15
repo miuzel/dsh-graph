@@ -63,9 +63,9 @@ take over. If no process has taken over this workspace, explicitly take it over.
     - Rule: anything that is “the goal's own content” (to be implemented, to be seen by the executor/board) → `append`; anything that is
       “process/event/trace-only” → use only `note`. **When unsure, use `append`**; append contains only the body—do not
       include a `## heading` yourself, since a self-supplied heading creates a duplicate section and the board displays the first (placeholder) one as “To be filled”;
-11. **Goal Definition Polish & PM Suggestion Closure**：
-    - PM Agent report format requirement: report title MUST include goal id in format `【g-XXX 润色建议】`or `【g-XXX 定义建议】`；
-    - Use `parsePmReportGoalId(report)` to automatically extract goal id from report title, ensuring suggestions are correctly associated with goals；
+11. **Goal Definition Polish & PM Suggestion Closure**:
+    - PM Agent report format requirement: report title MUST include goal id in format `【g-XXX 润色建议】` or `【g-XXX 定义建议】`;
+    - Use `parsePmReportGoalId(report)` to automatically extract goal id from report title, ensuring suggestions are correctly associated with goals;
     - When receiving goal-definition/refinement suggestions from a product manager (PM) Agent, the supervisor **must not leave them only in the comments** (comments are process records only);
     - **The following two-step loop must be completed proactively**:
       1. Call `graph_amend_goal(append=...)` to add the refined background, requirements scope, and core mechanism to the goal description body;
@@ -373,7 +373,7 @@ and `supervisor:<sessionId>` matching `project.yaml` `supervisor.session` are al
   `workspaces.list.getSnapshot().items.find(w => w.sessionIds.includes(sid))?.path`;
 - **Frozen-script SIGPIPE race**: under `set -o pipefail`, `awk '…' | grep -q '…'` makes grep exit early and awk receive
   SIGPIPE, causing intermittent FAIL; in the pipeline use `grep "…" >/dev/null` (read to completion before exiting);
-- **Troubleshooting a subagent's “empty failure”**: `zstd -dc ~/.dsh/sessions/<项目key>/<child_id>/session.jsonl.zstd | tail`
+- **Troubleshooting a subagent's “empty failure”**: `zstd -dc ~/.dsh/sessions/<project-key>/<child_id>/session.jsonl.zstd | tail`
   to inspect the last line's `turn/end` error (common causes: 403 insufficient balance / no adapter / rate limiting);
 - **Do not confuse the two provider concepts when spawning subagents**: subagent provider (spawn/fork, choose one with
   prepareContinuable capability) ≠ LLM provider (agentOptions, selectable by the user); if no subagent provider is found, explicitly report the registered names
