@@ -744,8 +744,20 @@ export function resolvePromptLanguage(override = "follow", ctx = null) {
   try {
     // 首选：DSH settings 服务的 locale.preference（服务端可读的界面语言，
     // 由 dsh-client-locale 注册命名空间 "locale"、字段 "preference"）。
-    const viaSettings = pick(ctx?.get?.("settings")?.get?.("locale")?.preference ?? ctx?.settings?.get?.("locale")?.preference);
-    if (viaSettings) return viaSettings;
+    // 兼容两代 Settings 服务：0.1.6 的 .get("locale") 与 0.2.x 的 .describe() 表单投影。
+    const svc = ctx?.get?.("settings") ?? ctx?.settings;
+    if (svc) {
+      if (typeof svc.describe === "function") {
+        try {
+          const rows = svc.describe({ redactSecrets: true });
+          const row = Array.isArray(rows) ? rows.find((r) => r?.ns === "locale") : null;
+          const pref = pick(row?.value?.preference ?? row?.user?.preference);
+          if (pref) return pref;
+        } catch { /* describe 异常降级 */ }
+      }
+      const viaGet = pick(svc.get?.("locale")?.preference);
+      if (viaGet) return viaGet;
+    }
   } catch { /* settings 服务可选 */ }
   try {
     // 次选：直接暴露的 locale 服务（部分宿主组合）。

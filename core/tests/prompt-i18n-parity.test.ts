@@ -206,12 +206,22 @@ test("resolvePromptLanguage: override wins, locale.preference via settings, lega
   // 显式覆盖优先
   assert.equal(resolvePromptLanguage("en"), "en");
   assert.equal(resolvePromptLanguage("zh"), "zh");
-  // follow：首选 DSH settings 服务的 locale.preference（dsh-client-locale 注册的命名空间）
+  // follow：首选 DSH settings 服务的 locale.preference（兼容 0.1.6 get 与 0.2.x describe 表单投影）
   const viaSettings = (preference?: string) => ({
     get: (name: string) => (name === "settings" ? { get: (ns: string) => (ns === "locale" ? { preference } : undefined) } : undefined),
   });
+  const viaSettingsDescribe = (preference?: string) => ({
+    get: (name: string) =>
+      name === "settings"
+        ? {
+            describe: () => [{ ns: "locale", value: { preference } }],
+          }
+        : undefined,
+  });
   assert.equal(resolvePromptLanguage("follow", viaSettings("en")), "en");
   assert.equal(resolvePromptLanguage("follow", viaSettings("zh-CN")), "zh");
+  assert.equal(resolvePromptLanguage("follow", viaSettingsDescribe("en")), "en");
+  assert.equal(resolvePromptLanguage("follow", viaSettingsDescribe("zh-CN")), "zh");
   // preference 缺失（跟随浏览器）时走次选 locale 服务探测
   assert.equal(resolvePromptLanguage("follow", { locale: { getLocale: () => ({ active: "en-US" }) } }), "en");
   assert.equal(resolvePromptLanguage("follow", { get: (name: string) => (name === "locale" ? { snapshot: () => ({ active: "zh" }) } : undefined) }), "zh");
