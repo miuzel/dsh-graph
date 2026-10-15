@@ -426,9 +426,10 @@ const MEMORY_500_PATTERNS: Array<[string, RegExp]> = [
 
 function walkFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
-    if (["node_modules", ".git", ".worktrees", ".dsh-graph", "tmp"].includes(name)) continue;
+    if (["node_modules", ".git", ".worktrees", ".dsh-graph", "tmp", "video", ".claude"].includes(name)) continue;
     const full = join(dir, name);
-    const st = statSync(full);
+    let st;
+    try { st = statSync(full); } catch { continue; }
     if (st.isDirectory()) {
       if (full === join(repoRoot, "core/tests")) continue; // 测试自身需要书写边界值，排除
       walkFiles(full, out);
