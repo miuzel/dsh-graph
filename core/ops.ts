@@ -129,6 +129,9 @@ import {
   registerWorktreeCandidates,
   listWorktrees,
   cleanWorktree,
+  // g-500：删除目标前的关联工作树盘点与阻断闸门（判据 1）
+  listGoalWorktrees,
+  goalWorktreeDeleteBlocker,
   defaultWorktreeForGoalType,
   detectWorkspaceCleanliness,
   resolveWorktreeIsolationDecision,
@@ -162,6 +165,9 @@ export {
   registerWorktreeCandidates,
   listWorktrees,
   cleanWorktree,
+  // g-500：删除闸门与孤儿清理的对外入口（host 半边与看板投影取用）
+  listGoalWorktrees,
+  goalWorktreeDeleteBlocker,
   defaultWorktreeForGoalType,
   detectWorkspaceCleanliness,
   resolveWorktreeIsolationDecision,
@@ -11288,6 +11294,14 @@ export function deleteGoal(
       }
     }
   }
+  // g-500 判据 1：关联工作树阻断闸门（在**任何**破坏性动作之前，含下面的 rmSync）。
+  // 目标目录（含 attempts/）是这些工作树归属的唯一板内证据：删掉之后树立刻退化成
+  // missing_attempt_evidence 孤儿而无法安全清理。故此处 fail-closed 阻断，并给出
+  // 「先 clean_worktree、再 delete_goal」的可执行两步指引。
+  // 放在活跃子代理校验**之后**：有在途子代理时先报更贴近原因的那条错误。
+  // 该闸门只读、零副作用：不写事件、不改文件、不删任何树。
+  const worktreeBlocker = goalWorktreeDeleteBlocker(root, id);
+  if (worktreeBlocker) throw new GraphError(worktreeBlocker);
   // 执行删除
   if (dir) {
     // 目录形态：删整个目标目录（含 cards/ attempts/）
