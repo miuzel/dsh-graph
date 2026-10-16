@@ -1316,9 +1316,8 @@ const PROMPT_MARKER_REPLACEMENTS = {
     // 模式小节标题：`standard` 无策略片段（不注入该段），故当前唯一可达值是 minimal。
     [/## Subagent execution mode \(minimal\)/g, "## in-text: Subagent execution mode (minimal)"],
     [/## Hand-back report skeleton \(tail note - every item required; a missing item means the delivery is incomplete\)/g, "## in-text: Hand-back report skeleton (tail note - every item required; a missing item means the delivery is incomplete)"],
-    [/### A\. executor report \(8 required items\)/g, "### in-text: A. executor report (8 required items)"],
-    [/### B\. reviewer report \(6 required items\)/g, "### in-text: B. reviewer report (6 required items)"],
-    [/### C\. Report length budget \(soft cap; exceeding it is not a failed delivery, but you must self-report\)/g, "### in-text: C. Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)"],
+    [/### Executor report \(6 required items\)/g, "### in-text: Executor report (6 required items)"],
+    [/### Report length budget \(soft cap; exceeding it is not a failed delivery, but you must self-report\)/g, "### in-text: Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)"],
   ],
 };
 

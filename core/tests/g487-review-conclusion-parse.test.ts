@@ -301,11 +301,20 @@ test("g-487 判据4：骨架/提示词登记的示例行必须被解析器认（
   // ① 常量本身必须是可解析的确定裁决
   assert.equal(parseReviewConclusion(REVIEW_CONCLUSION_EXAMPLE_ZH), "PASS", `zh 示例必须可解析：${REVIEW_CONCLUSION_EXAMPLE_ZH}`);
   assert.equal(parseReviewConclusion(REVIEW_CONCLUSION_EXAMPLE_EN), "PASS", `en 示例必须可解析：${REVIEW_CONCLUSION_EXAMPLE_EN}`);
-  // ② 骨架必须**登记**这两个示例（同源常量，不得各写一份字面量）
-  assert.ok(ATTEMPT_REPORT_SKELETON.includes(REVIEW_CONCLUSION_EXAMPLE_ZH), "zh 报告骨架必须登记可解析的结论行示例");
-  assert.ok(ATTEMPT_REPORT_SKELETON_EN.includes(REVIEW_CONCLUSION_EXAMPLE_EN), "en 报告骨架必须登记可解析的结论行示例");
-  assert.ok(ATTEMPT_REPORT_SKELETON.includes("总判"), "zh 骨架必须保留「总判」标签（既有守卫口径不变）");
-  assert.ok(ATTEMPT_REPORT_SKELETON_EN.includes("Overall verdict"), "en 骨架必须保留 Overall verdict 标签");
+  // ② g-504 解耦后，「登记可解析结论行」的责任落在**评审者自己的载体**上：
+  //    评审提示词（review-task.{zh,en}.md）必须登记示例行与「总判」标签。
+  //    执行者骨架（attempt-report-skeleton）已显式移出 reviewer 段 ⇒ 它**不得**再含 reviewer 标签
+  //    （否则又逼执行者写「未做独立评审」，正是 g-504 要消除的冗余）。
+  const zhPromptEarly = formatReviewPrompt({ goalId: "g-1", attemptId: "att-001", goalRel: "goal.md", language: "zh", candidateSha: CANDIDATE, criteria: ["c1"] });
+  const enPromptEarly = formatReviewPrompt({ goalId: "g-1", attemptId: "att-001", goalRel: "goal.md", language: "en", candidateSha: CANDIDATE, criteria: ["c1"] });
+  assert.ok(zhPromptEarly.includes(REVIEW_CONCLUSION_EXAMPLE_ZH), "zh 评审提示词必须登记可解析的结论行示例");
+  assert.ok(enPromptEarly.includes(REVIEW_CONCLUSION_EXAMPLE_EN), "en 评审提示词必须登记可解析的结论行示例");
+  assert.ok(zhPromptEarly.includes("总判"), "zh 评审载体必须保留「总判」标签（既有守卫口径不变）");
+  assert.ok(/\*\*Verdict\*\*/.test(enPromptEarly), "en 评审载体必须保留 Verdict 标签（既有守卫口径不变）");
+  assert.ok(!ATTEMPT_REPORT_SKELETON.includes("总判"),
+    "g-504：执行者骨架不得再要求执行者写 reviewer 总判（解耦反回归）");
+  assert.ok(!ATTEMPT_REPORT_SKELETON_EN.includes("Overall verdict"),
+    "g-504：en 执行者骨架同样不得含 reviewer 标签（解耦反回归）");
 
   // ③ 评审提示词（zh/en）必须同时登记「示例行」与「可接受形态」，且每条形态都能被解析器认
   const zh = formatReviewPrompt({ goalId: "g-1", attemptId: "att-001", goalRel: "goal.md", language: "zh", candidateSha: CANDIDATE, criteria: ["c1"] });

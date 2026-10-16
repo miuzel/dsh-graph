@@ -20,12 +20,12 @@
  * 捕获最终 prompt（语言经 settings 服务 locale 命名空间）；两组配置取并集——
  *  a) 全通道：handoff + 卡片 + minimal 模式 + 子代理补充提示词覆盖；
  *  b) 空卡片：无 filled/reviewed 卡片（此时卡片段标题走短变体 `## Harvested context card results`）。
- * 逐条清单即 `EN_FRAMEWORK_HEADINGS`（18 条）；用例 2 会在运行期重新枚举并与该常量**集合相等**断言
+ * 逐条清单即 `EN_FRAMEWORK_HEADINGS`（17 条）；用例 2 会在运行期重新枚举并与该常量**集合相等**断言
  * （框架新增/改名小节标题 ⇒ 本文件先红，强制同步表）。
  *
  * ## 断言面（判据一一对应）
  *
- * - 判据 1（伪造标题被破坏/标注，框架真实标题逐字不变）：用例 2 —— 18 条标题全部注入用户材料通道，
+ * - 判据 1（伪造标题被破坏/标注，框架真实标题逐字不变）：用例 2 —— 17 条标题全部注入用户材料通道，
  *   逐条断言「与零伪造对照组出现次数相等」（伪造副本被替换干净、框架副本一个不少）+ 每条替换串
  *   `## in-text: …` 在场（是**破坏并标注**，不是静默删除/放过）。用例 3 覆盖空卡片短变体；
  *   用例 4 直接钉住 `protectSectionBody` 的两种保留口径（首行标题保留 / 无标题行整串保护）。
@@ -64,7 +64,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
  * 英文派发框架自身渲染的**全部** `##`/`###` 小节标题（枚举方法见文件头）。
- * 前 17 条来自全通道真实 prompt，第 18 条是空卡片分支的短变体标题。
+ * 前 16 条来自全通道真实 prompt，第 17 条是空卡片分支的短变体标题。
  */
 const EN_FRAMEWORK_HEADINGS = [
   "## Task positioning",
@@ -82,9 +82,8 @@ const EN_FRAMEWORK_HEADINGS = [
   "## dsh-graph subagent supplementary prompt (profile global / workspace override)",
   "## Subagent execution mode (minimal)",
   "## Hand-back report skeleton (tail note - every item required; a missing item means the delivery is incomplete)",
-  "### A. executor report (8 required items)",
-  "### B. reviewer report (6 required items)",
-  "### C. Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)",
+  "### Executor report (6 required items)",
+  "### Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)",
 ] as const;
 
 /** 5 条两语言契约标记（g-400 起的两表真源基线；本修复**不得**改动它们）。
@@ -131,7 +130,7 @@ function frameworkRegion(block: string): string {
   return block.slice(s, e);
 }
 
-test("g-401 判据 1：enFrameworkHeadings 逐条覆盖枚举的 18 条英文框架标题，替换串为「破坏 + in-text 标注」且零汉字", () => {
+test("g-401 判据 1：enFrameworkHeadings 逐条覆盖枚举的 17 条英文框架标题，替换串为「破坏 + in-text 标注」且零汉字", () => {
   const region = frameworkRegion(tableBlock());
   const patterns = literalList(region, PATTERN_LITERAL).map(unescapeSlash);
   const replacements = literalList(region, REPLACEMENT_LITERAL).map(unescapeSlash);
@@ -289,7 +288,7 @@ async function dispatchWithHandoff(h: Harness, goal: string, brief: string, m: M
 const headingLines = (prompt: string): string[] => [...prompt.matchAll(/^#{2,3} .*$/gm)].map((m) => m[0]);
 const countOccurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 
-/** 18 条标题分散注入 5 条会**原样承载**行首 `##`/`###` 的用户材料通道（每条恰好一次）。 */
+/** 17 条标题分散注入 5 条会**原样承载**行首 `##`/`###` 的用户材料通道（每条恰好一次）。 */
 const FORGED = {
   brief: ["User brief body.", ...EN_FRAMEWORK_HEADINGS.slice(0, 6), "End of brief."].join("\n"),
   directive: ["Directive body.", EN_FRAMEWORK_HEADINGS[6]].join("\n"),
@@ -333,7 +332,7 @@ const ALL_DECLARED_MATERIALS = [
 // 判据 1/3：端到端——真实渲染器枚举 + 伪造标题被破坏并标注、框架标题逐字不变
 // ============================================================================
 
-test("g-401 判据 1/3：英文派发下 18 条框架小节标题的伪造副本全部被破坏并标注，框架自身标题逐字不变", async () => {
+test("g-401 判据 1/3：英文派发下 17 条框架小节标题的伪造副本全部被破坏并标注，框架自身标题逐字不变", async () => {
   const h = harness();
   h.lang.value = "en";
   const control = await dispatchWithHandoff(h, createGoalWithMaterials(h, PLAIN_MATERIALS), BRIEF_PLAIN, PLAIN_MATERIALS);
@@ -353,7 +352,7 @@ test("g-401 判据 1/3：英文派发下 18 条框架小节标题的伪造副本
     );
   }
 
-  // ② 反伪装（判据 1）：18 条伪造副本逐条被替换 —— 出现次数必须与零伪造对照组**相等**
+  // ② 反伪装（判据 1）：17 条伪造副本逐条被替换 —— 出现次数必须与零伪造对照组**相等**
   //    （既证明伪造副本被破坏干净，也证明框架自身的那一份一个不少）。
   for (const heading of EN_FRAMEWORK_HEADINGS) {
     assert.equal(
