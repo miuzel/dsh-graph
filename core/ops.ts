@@ -6791,12 +6791,12 @@ export const ATTEMPT_REPORT_SOFT_MAX_BYTES = 4 * 1024;
  * 超限本身不算交付失败（见 `ATTEMPT_REPORT_SKELETON` 第 5 节）。
  */
 export const ATTEMPT_REPORT_SECTION_BUDGETS: Record<string, number> = {
-  changes: 1536,   // 改了什么 ≤1.5 KiB
+  changes: 1536,   // 交付位置与改动 ≤1.5 KiB
   how: 1024,       // 怎么改的 ≤1 KiB
   impact: 512,     // 影响面 ≤0.5 KiB
   tested: 512,     // 测过什么/没测什么 ≤0.5 KiB
-  noteworthy: 512, // 值得注意的点 ≤0.5 KiB
-  criteria: 512,   // 与判据的对应 ≤0.5 KiB
+  noteworthy: 512, // 残余风险与判据对应（残余风险部分）≤0.5 KiB
+  criteria: 512,   // 残余风险与判据对应（判据对应部分）≤0.5 KiB
 };
 /** 单个 attempt 送去 LLM 的报文本体硬上限。 */
 export const SUMMARY_INPUT_ATTEMPT_MAX_BYTES = 8 * 1024;
@@ -6898,12 +6898,14 @@ export const REVIEW_CONCLUSION_LABELS = ["总判", "结论", "Verdict"] as const
 export const REVIEW_CONCLUSION_EXAMPLE_ZH = "- **总判**：PASS";
 export const REVIEW_CONCLUSION_EXAMPLE_EN = "- **Verdict**: PASS";
 
-/** executor 报文骨架（8 项逐项必填；缺失即视为交付不完整）+ reviewer 报文骨架（6 项）。
+/** 执行者报文骨架（6 项逐项必填；缺失即视为交付不完整）。**不再含 reviewer 段** —— 评审子代理
+ *  自有 `prompts/review-task.{zh,en}.md` 管辖，执行者在旧被要求填写「本 attempt 为执行者，未做
+ *  独立评审」这类无意义条目（g-504 解耦）。
  *
  *  g-496：**正文真源 = 公共层 `prompts/attempt-report-skeleton.{zh,en}.md`**（唯一事实源，
  *  代码不再持有第二副本）。逻辑侧只保留「预算常量 / 结论示例 / begin-end 机器标记 / 占位符插值」——
- *  资产里以 `{{conclusion_example}}` 与 `{{soft_max_kib}}` 两处占位符引用它们，读取时由本模块替换，
- *  保证「预算与结论示例仍由逻辑提供」而正文不留第二份。
+ *  资产里以 `{{soft_max_kib}}` 引用预算（可选地以 `{{conclusion_example}}` 引用结论示例，当前骨架
+ *  已无 reviewer 段故不再使用该占位符，插值仍保留以免资产复用时报错），读取时由本模块替换。
  *
  *  占位符替换是**纯字符串**替换（非模板求值）：资产文本不可执行，也不引入新依赖。
  *  缺资产 ⇒ `readCorePromptAsset` fail-closed 抛错（绝不回落内置正文掩盖漏包）。 */
@@ -7065,9 +7067,11 @@ function renderGoalResultsDigestText(
   lines.push(`- 质量判据（${digest.criteria.length} 条，逐字；✅/⬜ 为原文标记，不得自行判定）：`);
   if (digest.criteria.length === 0) lines.push("  - （未登记判据）");
   for (const c of digest.criteria) lines.push(`  - ${c}`);
-  lines.push(`- 评论与反馈（共 ${digest.comments.length} 条）：`);
-  if (digest.comments.length === 0) lines.push("  - （无评论）");
-  for (const c of digest.comments.slice(-8)) lines.push(`  - ${c.ts}｜${c.author}：${c.text}`);
+  // g-504：评论区只送**命中「值得注意」关键词**的少量条目（旧版送最近 8 条全文 ⇒ 诱导摘要复述评论拉扯）。
+  const notableComments = digest.comments.filter((c) => RESULTS_NOTABLE_PATTERN.test(c.text));
+  lines.push(`- 评论与反馈（共 ${digest.comments.length} 条；只列命中「值得注意」关键词的 ${notableComments.length} 条，其余见目标弹窗「详情」Tab）：`);
+  if (notableComments.length === 0) lines.push("  - （无值得注意的评论）");
+  for (const c of notableComments.slice(0, GOAL_RESULTS_DIGEST_COMMENT_MAX)) lines.push(`  - ${c.ts}｜${c.author}：${truncateChars(c.text, GOAL_RESULTS_NOTABLE_MAX_CHARS)}`);
   if (digest.handoff) {
     lines.push("- 返工 handoff（前序 attempt 的已核实失败与约束）：");
     if (digest.handoff.failures) lines.push(`  - 失败：${digest.handoff.failures}`);
@@ -7083,15 +7087,21 @@ function renderGoalResultsDigestText(
 
 /** g-496：`results.md` 规范章节标题的**机器契约常量**（跨 deterministic / llm / manual 三来源
  *  一致，与界面语言无关）。摘要子代理的正文结构取自此处，**两语言资产共用一个真源** ——
- *  这样英文资产里不需要出现中文契约字面量（en 零 CJK），而标题本身仍只有一份定义。 */
+ *  这样英文资产里不需要出现中文契约字面量（en 零 CJK），而标题本身仍只有一份定义。
+ *
+ *  g-504 去冗余瘦身：旧六节（结论 / 改动与影响 / 判据达成 / 证据引用 / 关键决策 / 时间线）里，
+ *  「关键决策」（评论与指令沿革）与「时间线」是**评论区拉扯与历史返工沿革**的整体搬运 —— 正是
+ *  负责人反馈的阅读负担来源，且本就在弹窗「详情」「活动」Tab 可见 ⇒ 两节整体移除，
+ *  LLM 正文改为**终态交付简报**（见 `GOAL_RESULTS_SUMMARY_BRIEF_MAX_CHARS`）。 */
 const SUMMARY_STRUCTURE_CONTRACT: Array<{ heading: string; zh: string; en: string }> = [
-  { heading: "## 结论", zh: "一段话说清改动概要 + 影响与约束 + 值得注意 + 交付状态；", en: "one-paragraph change summary, impact/constraints, what is noteworthy, delivery state." },
-  { heading: "## 改动与影响", zh: "分小节写 改动面 / 影响面与硬约束 / 值得注意 / 涉及文件与命令；", en: "subsections: change surface, impact and hard constraints, noteworthy items, files and commands touched." },
+  { heading: "## 交付快照", zh: "一段话说清终态交付成果（改了什么、交付定位与状态）；", en: "one paragraph on the final delivered outcome (what changed, where it landed, delivery state)." },
+  { heading: "## 影响与残余风险", zh: "影响面、硬约束、值得注意的点与残余风险（含未验证项）；", en: "impact surface, hard constraints, noteworthy items and residual risks (including unverified items)." },
   { heading: "## 判据达成", zh: "逐条逐字引用判据原文与其已有标记，绝不自行判定是否达成；", en: "quote each criterion verbatim with its existing mark; never decide verification yourself." },
   { heading: "## 证据引用", zh: "attempt、commit/baseline、结果文件、验证命令；", en: "attempts, commits/baselines, result files, verification commands." },
-  { heading: "## 关键决策", zh: "评论与最近指令里的决策与评审反馈；", en: "decisions and review feedback from comments/directives." },
-  { heading: "## 时间线", zh: "可选，只列关键事件。", en: "optional, key events only." },
 ];
+
+/** g-504：LLM 摘要正文的建议字数上限（终态交付简报，替代旧版「主干 ≤4000 字」）。 */
+export const GOAL_RESULTS_SUMMARY_BRIEF_MAX_CHARS = 1200;
 
 /** 把结构契约渲染成资产里的 `{{structureLines}}` 片段（按语言取描述，标题恒为中文契约字面量）。 */
 function summaryStructureLines(language: "zh" | "en"): string {
@@ -9639,12 +9649,31 @@ export const RESULTS_SUMMARY_NAME = "results.md";
 export const RESULTS_ARCHIVE_PREFIX = "results-archive-";
 /** g-374 F2：归档文件名（含同秒冲突后缀）的可枚举正则。 */
 export const RESULTS_ARCHIVE_PATTERN = /^results-archive-\d{8}T\d{6}(?:-\d+)?\.md$/;
-/** g-374 F2：时间线段落最多列出的事件条数（其余以计数说明，不静默丢信息）。 */
-const GOAL_RESULTS_TIMELINE_MAX = 30;
-/** g-374 F2：关键决策段里单条评论的字数上限。 */
+/** g-374 F2：关键决策段里单条评论的字数上限（g-504 起只用于「值得注意」单行摘录）。 */
 const GOAL_RESULTS_COMMENT_MAX_CHARS = 600;
-/** g-374 F2：最近指令段的字数上限。 */
-const GOAL_RESULTS_DIRECTIVE_MAX_CHARS = 3000;
+
+/**
+ * g-504 去冗余瘦身契约常量（确定性 `results.md` 的体积下限来源）。
+ *
+ * 负责人反馈：旧版把评论区（N×600 字）、最近指令原文（3000 字）、30 条事件时间线**整体搬运**进
+ * 「完成摘要」Tab，而这三者本就在目标弹窗的「详情」「活动」Tab 展示 ⇒ 中长目标体积膨胀到 26–94 KB。
+ * 故本文只保留终态交付快照，并给每类单行摘录一个**可断言的字数上限**（不再有 directive / 时间线节）。
+ */
+/** 「值得注意」单条评论的字数上限（旧版同一事实还被全量评论节重复一次）。 */
+const GOAL_RESULTS_NOTABLE_MAX_CHARS = 200;
+/** 返工 handoff 的失败/约束单行字数上限。 */
+const GOAL_RESULTS_HANDOFF_MAX_CHARS = 240;
+/** g-504：材料包里最多列出多少条「值得注意」评论（旧版 8 条全文 ⇒ 摘要复述评论拉扯）。 */
+const GOAL_RESULTS_DIGEST_COMMENT_MAX = 4;
+
+/**
+ * 中长目标确定性正文的体积上限（判据 1：显著降低至 5 KB 以内）。
+ *
+ * 口径说明：判据的「≤5KB」以**正文**（`buildGoalResultsSummary` 产出的 body）计；`results.md`
+ * 落盘时另加机器头 + 覆盖说明 + 标题前缀（固定约 1 KB，与目标长度无关），故 `bytes` 允许略高于 5 KB。
+ * 本常量是**守卫上限**：正文超限即判红（防未来回归把评论/时间线重新倾倒回来）。
+ */
+export const GOAL_RESULTS_BODY_MAX_BYTES = 5 * 1024;
 
 /** `results.md` 的**唯一真源路径**（写入器与读取投影共用；不得在别处重复拼接文件名）。 */
 export function goalResultsSummaryFile(goalFile: string): string {
@@ -9707,30 +9736,6 @@ function goalResultsFirstLine(body: unknown): string | null {
     return truncateChars(line, 160);
   }
   return null;
-}
-
-/** 事件摘要（时间线段落用）：按固定键优先级取最多 3 个 `k=v`，纯确定性、不猜语义。 */
-const GOAL_RESULTS_EVENT_KEYS = ["attempt", "to", "status", "result", "reason", "title", "child_id", "source", "file", "bytes", "note"];
-function goalResultsEventDigest(details: unknown): string {
-  const d = (details ?? {}) as Record<string, unknown>;
-  const parts: string[] = [];
-  for (const k of GOAL_RESULTS_EVENT_KEYS) {
-    const v = d[k];
-    if (v === null || v === undefined || typeof v === "object") continue;
-    const s = oneLine(v);
-    if (!s) continue;
-    parts.push(`${k}=${truncateChars(s, 60)}`);
-    if (parts.length >= 3) break;
-  }
-  return parts.join(" ");
-}
-
-/** 最近指令原文的标题降级（`#` → 低一级），避免它冒充 results.md 的小节标题。 */
-function demoteHeadings(text: string): string {
-  return String(text ?? "")
-    .split("\n")
-    .map((line) => (line.startsWith("## ") ? `### ${line.slice(3)}` : line.startsWith("# ") ? `## ${line.slice(2)}` : line))
-    .join("\n");
 }
 
 /**
@@ -9916,11 +9921,20 @@ interface GoalResultsSummaryBuild {
 }
 
 /**
- * 由目标历史**零 LLM** 拼装 `results.md` 正文（结论 / 判据达成 / 证据引用 / 关键决策 / 时间线 / 来源）。
+ * 由目标历史**零 LLM** 拼装 `results.md` 正文（g-504 精简版：交付快照 / 判据达成 / 证据引用 / 来源）。
  *
  * 数据源全部来自 `goalDetail(root, goalId)` 的既有只读投影：评论、最近指令、attempt 记录、
  * attempt 结果文件（`results-att-*.md`）与事件流。**不做任何语义判断**（判据是否达成只如实转述
  * goal.md 里的 `✅已验` 标记），因此不受 LLM 参与、也不可能引入 token 成本。
+ *
+ * **g-504 去冗余契约（负责人反馈：完成摘要 Tab 阅读负担极重）**：目标描述、判据原文、评论区、
+ * 事件流本已在弹窗的「详情」「活动」Tab 展示，故本文**只保留终态交付快照**：
+ *  - 不再全量倾倒评论区（`GOAL_RESULTS_COMMENT_MAX_CHARS` × N）、不再照搬 3000 字 directive 原文、
+ *    不再列 30 条事件时间线（这些节已整体删除，取代为单行计数）；
+ *  - 前序历史 attempt 只保留**单行紧凑索引**（attempt / commit / 终态 / 结果文件名），
+ *    不再逐个展开长 brief 与验收项；
+ *  - 同一事实（评论、brief）**不得跨小节重复出现**（旧版最多重复 3 次）。
+ *  各节合计体积上限见 `GOAL_RESULTS_SUMMARY_*_MAX_CHARS`。
  */
 function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: string): GoalResultsSummaryBuild {
   const meta = (detail?.meta ?? {}) as Record<string, any>;
@@ -9940,70 +9954,40 @@ function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: strin
 
   const lines: string[] = [];
 
-  // ---- 结论（主体 = 结合目标详情的实质内容，**不复述卡片字段**）----
-  lines.push("## 结论", "");
-  // 改动概要：优先目标描述首段实质句，其次最近指令首句
-  const overview = digest.description_sections.find((s) => s.points.length > 0)?.points[0] ?? null;
-  lines.push(`- 改动概要：${overview ?? "（目标描述为空，无法从详情提炼改动概要）"}`);
-  const briefs = digest.attempts.filter((a) => a.brief).map((a) => `${a.id}：${a.brief}`);
-  if (briefs.length > 0) {
-    lines.push(`- 各 attempt 做了什么：${briefs.slice(0, 3).join("；")}`);
-  } else if (digest.attempts.length > 0) {
-    lines.push(`- 各 attempt 做了什么：${digest.attempts.slice(0, 3).map((a) => `${a.id}：${a.result_head ?? "（无 brief/输出）"}`).join("；")}`);
-  } else {
-    lines.push("- 各 attempt 做了什么：（无 attempt 记录；本目标的改动可能是主管自做或尚未派发）");
-  }
-  if (digest.impact_lines.length > 0) {
-    lines.push(`- 影响与约束：${digest.impact_lines.slice(0, 3).join("；")}`);
-  }
-  const noted = digest.comments.filter((c) => RESULTS_NOTABLE_PATTERN.test(c.text)).map((c) => c.text);
-  if (noted.length > 0) lines.push(`- 值得注意：${noted.slice(0, 3).join("；")}`);
+  // 终态交付快照 = **最新有效 attempt**（按投影顺序；投影已按 attempt 倒序/终态优先）。
+  // 前序历史 attempt 只做单行索引，不再展开长 brief / 验收项（g-504）。
+  const newestAttempt = attempts[0] ?? null;
+  const newestRow = newestAttempt ? digest.attempts.find((x) => x.id === oneLine(newestAttempt?.id)) ?? null : null;
+  const newestResultFile = resultsFiles[0] ?? null;
   const verified = criteria.filter((c) => isCriterionVerified(String(c))).length;
   const dist: Record<string, number> = {};
   for (const a of attempts) {
     const k = `${oneLine(a?.result) || "?"}/${oneLine(a?.status_state) || "-"}`;
     dist[k] = (dist[k] ?? 0) + 1;
   }
-  const newest = resultsFiles.length > 0 ? resultsFiles[0] : null;
-  const newestLine = newest ? goalResultsFirstLine(newest.body) : null;
-  lines.push(`- 交付状态：判据带 \`✅已验\` 标记 ${verified}/${criteria.length} 条；attempt 共 ${attempts.length}${attempts.length ? `（${Object.entries(dist).map(([k, v]) => `${k}×${v}`).join("，")}）` : ""}；最近交付：${newestLine ? `${newestLine}（来源 \`${basename(String(newest.file ?? ""))}\`）` : "（无可截获的子代理输出）"}`);
 
-  // ---- 改动与影响（负责人反馈的核心：结合目标详情说清「改了什么/什么影响/什么要注意」）----
-  lines.push("", "## 改动与影响", "");
-  lines.push("### 改动面（目标描述的小节要点，逐字摘录）", "");
-  if (digest.description_sections.length === 0) {
-    lines.push("（目标描述为空 ⇒ 无改动面可提炼；请补写目标描述后重新摘要）");
-  } else {
-    for (const s of digest.description_sections) {
-      if (s.points.length === 0) { lines.push(`- **${s.title}**`); continue; }
-      const pts = s.points.map((x) => x.replace(/[；;]+$/, ""));
-      lines.push(`- **${s.title}**：${pts.join("；")}`);
-    }
+  // ---- 交付快照（唯一主体：终态交付成果；不复述卡片字段，不倾倒评论/指令/事件）----
+  lines.push("## 交付快照", "");
+  const overview = digest.description_sections.find((s) => s.points.length > 0)?.points[0] ?? null;
+  lines.push(`- 改动概要：${overview ?? "（目标描述为空，无法从详情提炼改动概要）"}`);
+  // 终态 attempt 的交付首句（来自其结果文件）优先于 brief —— 它是**终态交付成果**本身。
+  const newestAttemptId = newestRow?.id ?? (newestAttempt ? oneLine(newestAttempt.id) : null);
+  const deliverLine = newestRow?.result_head ?? newestRow?.brief ?? null;
+  lines.push(`- 终态交付（${newestAttemptId ? `attempt=\`${newestAttemptId}\`` : "无 attempt"}）：${deliverLine ?? "（无 attempt 记录；本目标的改动可能是主管自做或尚未派发）"}`);
+  const wt0 = newestAttempt?.worktree && typeof newestAttempt.worktree === "object" ? newestAttempt.worktree : null;
+  const deliverBits: string[] = [];
+  if (wt0?.head) deliverBits.push(`commit=\`${oneLine(wt0.head).slice(0, 12)}\``);
+  if (newestAttempt?.baseline_commit) deliverBits.push(`baseline=\`${oneLine(newestAttempt.baseline_commit)}\``);
+  if (newestResultFile) deliverBits.push(`结果文件=\`${basename(String(newestResultFile.file ?? ""))}\``);
+  if (deliverBits.length > 0) lines.push(`- 交付定位：${deliverBits.join("；")}`);
+  if (digest.impact_lines.length > 0) {
+    lines.push(`- 影响与约束：${digest.impact_lines.slice(0, 3).join("；")}`);
   }
-  lines.push("", "### 影响面与硬约束（关键词命中行，逐字引用，不做语义判断）", "");
-  if (digest.impact_lines.length === 0) {
-    lines.push("（目标描述中无「影响/约束/红线/非目标/兼容/风险」类语句）");
-  } else {
-    for (const l of digest.impact_lines) lines.push(`- ${l}`);
-  }
-  lines.push("", "### 值得注意（评审结论、已知风险、返工约束）", "");
-  const notable: string[] = [];
-  for (const c of digest.comments) {
-    if (RESULTS_NOTABLE_PATTERN.test(c.text)) notable.push(`评论（${c.author}）：${c.text}`);
-  }
-  if (digest.handoff?.failures) notable.push(`已核实失败：${digest.handoff.failures}`);
-  if (digest.handoff?.constraints) notable.push(`返工禁止项/约束：${digest.handoff.constraints}`);
-  for (const a of digest.attempts) {
-    if (a.state && a.state !== "done" && a.state !== "working") notable.push(`${a.id} 终态：${a.result ?? "?"}/${a.state}`);
-  }
-  for (const rf of resultsFiles) {
-    for (const l of goalResultsKeyLines(rf?.body, RESULTS_NOTABLE_PATTERN, 2)) notable.push(`${basename(String(rf?.file ?? ""))}：${l}`);
-  }
-  if (notable.length === 0) lines.push("（投影窗口内无评审结论/风险/返工留痕）");
-  else for (const l of notable.slice(0, 10)) lines.push(`- ${l}`);
-  lines.push("", "### 涉及文件与命令（从结果文件/评论里抽取的字面量，不做语义判断）", "");
-  if (digest.literals.length === 0) lines.push("（未在结果文件或评论里发现可识别的路径/命令字面量）");
-  else lines.push(...digest.literals.map((x) => `- \`${x}\``));
+  const noted = digest.comments.filter((c) => RESULTS_NOTABLE_PATTERN.test(c.text)).map((c) => c.text);
+  if (noted.length > 0) lines.push(`- 值得注意：${noted.slice(0, 2).map((t) => truncateChars(t, GOAL_RESULTS_NOTABLE_MAX_CHARS)).join("；")}`);
+  if (digest.handoff?.failures) lines.push(`- 已核实失败（返工 handoff）：${truncateChars(digest.handoff.failures, GOAL_RESULTS_HANDOFF_MAX_CHARS)}`);
+  if (digest.handoff?.constraints) lines.push(`- 返工约束/禁止项：${truncateChars(digest.handoff.constraints, GOAL_RESULTS_HANDOFF_MAX_CHARS)}`);
+  lines.push(`- 交付状态：判据带 \`✅已验\` 标记 ${verified}/${criteria.length} 条；attempt 共 ${attempts.length}${attempts.length ? `（${Object.entries(dist).map(([k, v]) => `${k}×${v}`).join("，")}）` : ""}`);
 
   // ---- 判据达成 ----
   lines.push("", "## 判据达成", "");
@@ -10014,28 +9998,19 @@ function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: strin
     for (const c of criteria) lines.push(`- ${isCriterionVerified(String(c)) ? "✅" : "⬜"} ${oneLine(c)}`);
   }
 
-  // ---- 证据引用 ----
+  // ---- 证据引用（前序历史 attempt 只保留**单行紧凑索引**；不展开 brief/验收项/结果全文）----
   lines.push("", "## 证据引用", "");
   if (attempts.length === 0) {
     lines.push("（无 attempt 记录）");
   } else {
     for (const a of attempts) {
       const wt = a?.worktree && typeof a.worktree === "object" ? a.worktree : null;
-      const bits = [`attempt=\`${oneLine(a?.id) || "?"}\``, `executor=${oneLine(a?.executor) || "?"}`, `result=${oneLine(a?.result) || "?"}`];
-      if (a?.status_state) bits.push(`state=${oneLine(a.status_state)}`);
-      if (a?.task_type) bits.push(`task_type=${oneLine(a.task_type)}`);
+      const bits = [`attempt=\`${oneLine(a?.id) || "?"}\``];
       if (wt?.head) bits.push(`commit=${oneLine(wt.head).slice(0, 12)}`);
-      if (a?.baseline_commit) bits.push(`baseline=${oneLine(a.baseline_commit)}`);
-      lines.push(`- ${bits.join("；")}`);
-      const row = digest.attempts.find((x) => x.id === oneLine(a?.id));
-      if (row?.brief) lines.push(`  - 任务 brief：${row.brief}`);
-      if (row?.acceptance_items && row.acceptance_items.length > 0) {
-        lines.push(`  - 本次验收项：${row.acceptance_items.map((x) => oneLine(x)).join("；")}`);
-      }
+      bits.push(`终态=${oneLine(a?.result) || "?"}/${oneLine(a?.status_state) || "-"}`);
       const rf = resultsFiles.find((r: any) => oneLine(r?.attempt) === oneLine(a?.id));
-      lines.push(rf
-        ? `  - 完成摘要文件：\`${basename(String(rf.file ?? ""))}\`（source=${oneLine(rf.source) || "?"}；bytes=${Number(rf.bytes) || 0}；truncated=${rf.truncated ? "true" : "false"}；placeholder=${rf.placeholder ? "true" : "false"}；generated_at=${oneLine(rf.generated_at) || "?"}）`
-        : "  - 完成摘要文件：（无）");
+      bits.push(`结果=${rf ? `\`${basename(String(rf.file ?? ""))}\`` : "（无）"}`);
+      lines.push(`- ${bits.join("；")}`);
     }
   }
   const eventCounts: Record<string, number> = {};
@@ -10043,35 +10018,7 @@ function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: strin
     const name = oneLine(e?.event);
     if (name.includes("results")) eventCounts[name] = (eventCounts[name] ?? 0) + 1;
   }
-  lines.push(`- 事件留痕：${Object.entries(eventCounts).map(([k, v]) => `${k}×${v}`).join("，") || "（投影窗口内无 results 事件）"}`);
-
-  // ---- 关键决策 ----
-  lines.push("", "## 关键决策", "");
-  lines.push("### 最近指令", "");
-  lines.push(directive ? truncateChars(demoteHeadings(directive), GOAL_RESULTS_DIRECTIVE_MAX_CHARS) : "（无最近指令）");
-  lines.push("", `### 评论与反馈（共 ${comments.length} 条）`, "");
-  if (comments.length === 0) {
-    lines.push("（无评论）");
-  } else {
-    for (const c of comments) {
-      lines.push(`- ${oneLine(c?.ts) || "?"}｜${oneLine(c?.author) || "?"}：${truncateChars(oneLine(c?.text), GOAL_RESULTS_COMMENT_MAX_CHARS)}`);
-    }
-  }
-
-  // ---- 时间线 ----
-  lines.push("", "## 时间线", "");
-  if (visibleEvents.length === 0) {
-    lines.push("（无事件）");
-  } else {
-    const timeline = visibleEvents.slice(-GOAL_RESULTS_TIMELINE_MAX);
-    if (visibleEvents.length > timeline.length) {
-      lines.push(`（只列最近 ${timeline.length} 条；本次投影窗口共 ${visibleEvents.length} 条）`, "");
-    }
-    for (const e of timeline) {
-      const digestLine = goalResultsEventDigest(e?.details);
-      lines.push(`- ${oneLine(e?.ts) || "?"}｜${oneLine(e?.actor) || "?"}｜${oneLine(e?.event) || "?"}${digestLine ? `｜${digestLine}` : ""}`);
-    }
-  }
+  lines.push(`- 事件留痕：${Object.entries(eventCounts).map(([k, v]) => `${k}×${v}`).join("，") || "（投影窗口内无 results 事件）"}；评论 ${comments.length} 条、最近指令${directive ? "有" : "无"}、事件 ${visibleEvents.length} 条（明细见目标弹窗「详情」「活动」Tab，本文不再全量搬运）`);
 
   // ---- 来源（判据 4 要求的「来源节」+ 生成时间）----
   // 注意：本节点在 `source_hash` 之外（含生成时间与归档清单，逐次必然变化），
@@ -10081,7 +10028,6 @@ function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: strin
   lines.push(`- 生成时间：${generatedAt}（零 LLM 拼装；不含任何会话或模型调用）`);
   lines.push(`- goal.md：\`${oneLine(detail?.goalFile)}\``);
   lines.push(`- 卡片字段（仅供定位，非摘要主体）：title=${title}；id=${goalId}；type=${oneLine(meta.type) || "task"}；status=${oneLine(meta.status) || "?"}${meta.version ? `；version=${oneLine(meta.version)}` : ""}${meta.blocked_reason ? `；blocked_reason=${oneLine(meta.blocked_reason)}` : ""}`);
-  lines.push(`- 评论：${comments.length} 条；最近指令：${directive ? "有" : "无"}；attempt：${attempts.length} 个；完成摘要文件：${resultsFiles.length} 份；事件（投影窗口，不含摘要自身生成事件）：${visibleEvents.length} 条`);
   lines.push(`- 历史归档：${archives.length > 0 ? archives.map((n: unknown) => `\`${oneLine(n)}\``).join("、") : "（无）"}`);
 
   // source_hash 覆盖「历史状态」各节（不含来源节）⇒ 同一历史状态重复刷新得到同一指纹。

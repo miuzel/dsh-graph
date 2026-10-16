@@ -46,14 +46,21 @@ test("g-374 F6：骨架是单一真源——正文只在 prompts/attempt-report-
     // 资产里**不得**含 begin/end 机器标记（标记仍由逻辑提供）
     assert.ok(!text.includes(ATTEMPT_REPORT_SKELETON_BEGIN), `${name} 不得含骨架 begin 标记（标记由逻辑提供）`);
     assert.ok(!text.includes(ATTEMPT_REPORT_SKELETON_END), `${name} 不得含骨架 end 标记（标记由逻辑提供）`);
-    // 资产里以**占位符**引用「预算」与「结论示例」，二者仍由逻辑提供
+    // 资产里以**占位符**引用「预算」，仍由逻辑提供
     assert.ok(text.includes("{{soft_max_kib}}"), `${name} 必须用占位符引用预算（不得写死数字）`);
-    assert.ok(text.includes("{{conclusion_example}}"), `${name} 必须用占位符引用结论示例`);
+    // g-504：执行者骨架解耦后**不再含 reviewer 段** ⇒ 也就**不得**再引用「结论示例」（那是 reviewer 的契约，
+    // 其占位符由 `review-task.*.md` 的 `{{conclusionExamples}}` 承载）。反向断言：不得残留 `{{conclusion_example}}`。
+    assert.ok(!text.includes("{{conclusion_example}}"), `${name} 不得再引用 reviewer 的结论示例占位符（g-504 解耦）`);
   }
-  // 骨架独有句式（executor 8 项 + reviewer 6 项的标题行）：必须**恰好**在真源资产里出现一次，
+  // 结论示例契约并未丢失：其真源仍是 review-task 资产的独立占位符（信息搬家而非删除）。
+  for (const name of ["review-task.zh.md", "review-task.en.md"]) {
+    const text = readFileSync(promptPath(name), "utf8");
+    assert.ok(text.includes("{{conclusionExamples}}"), `${name} 必须用占位符引用结论示例（reviewer 契约真源）`);
+  }
+  // 骨架独有句式（g-504：执行者 6 项的标题行）：必须**恰好**在真源资产里出现一次，
   // 且不得出现在**其它**任何提示面资产里（单一真源约束，方向与 g-496 之前相反）。
   const skeletonLines = ATTEMPT_REPORT_SKELETON.split("\n").filter((l) => /^\d+\. \*\*/.test(l));
-  assert.equal(skeletonLines.length, 14, "executor 8 项 + reviewer 6 项 = 14 条逐项必填");
+  assert.equal(skeletonLines.length, 6, "g-504 解耦后执行者恰 6 条逐项必填（reviewer 段已移出）");
   const zhAsset = readFileSync(promptPath("attempt-report-skeleton.zh.md"), "utf8");
   for (const line of skeletonLines) {
     // 资产里用 `{{conclusion_example}}` 占位符引用结论示例 ⇒ 比对时把插值结果还原成占位符形态。
@@ -85,17 +92,23 @@ test("g-374 F6：骨架是单一真源——正文只在 prompts/attempt-report-
   for (const line of skeletonLines) assert.ok(!host.includes(line), `宿主不得内联骨架条目：${line.slice(0, 30)}`);
 });
 
-test("g-374 F6：executor 8 项逐项必填——骨架逐项在列（含影响面/怎么改的/负向与基线对照）", () => {
+test("g-374 F6/g-504：执行者 6 项逐项在列 + reviewer 段已解耦（reviewer 6 项只归 review-task）", () => {
   const execTitles = [
-    "交付位置", "改了什么", "怎么改的", "影响面", "测过什么 / 没测什么", "值得注意的点", "与判据的对应", "需主管裁决事项",
+    "交付位置与改动", "怎么改的", "影响面", "测过什么 / 没测什么", "残余风险与判据对应", "需主管裁决事项",
   ];
   const reviewerTitles = ["总判", "逐项结论与单行证据", "BLOCK 最小返工清单", "非阻塞注记", "残余风险", "未验证项"];
   const zh = ATTEMPT_REPORT_SKELETON;
-  for (const t of execTitles) assert.ok(zh.includes(`**${t}**`), `executor 骨架缺项：${t}`);
-  for (const t of reviewerTitles) assert.ok(zh.includes(`**${t}**`), `reviewer 骨架缺项：${t}`);
-  assert.ok(zh.includes("PASS / BLOCK / UNVERIFIED"), "reviewer 总判取值必须写死");
-  assert.ok(zh.includes("负向对照") && zh.includes("基线对照"), "第 5 项必须要求负向对照与基线对照");
-  assert.ok(zh.includes("含被否方案与否决理由"), "第 3 项必须要求被否方案与否决理由");
+  for (const t of execTitles) assert.ok(zh.includes(`**${t}**`), `执行者骨架缺项：${t}`);
+  // g-504 解耦：执行者骨架**不得**再出现 reviewer 报文的标题行（旧版把 B 段混在同一骨架里 ⇒
+  // 执行者被迫填写「本 attempt 为执行者，未做独立评审」这类无意义条目）。
+  assert.ok(!zh.includes("reviewer 报文"), "执行者骨架不得含 reviewer 报文段（g-504 解耦）");
+  for (const t of reviewerTitles) assert.ok(!zh.includes(`**${t}**`), `执行者骨架不得含 reviewer 项：${t}`);
+  assert.ok(!zh.includes("PASS / BLOCK / UNVERIFIED"), "执行者骨架不得含 reviewer 总判取值");
+  // 反向：reviewer 契约并未丢失，而是由其**专属**资产承载（信息不丢，只是搬家）。
+  const reviewAsset = readFileSync(promptPath("review-task.zh.md"), "utf8");
+  for (const t of reviewerTitles) assert.ok(reviewAsset.includes(t), `review-task.zh.md 必须承载 reviewer 项：${t}`);
+  assert.ok(zh.includes("负向对照") && zh.includes("基线对照"), "第 4 项必须要求负向对照与基线对照");
+  assert.ok(zh.includes("含被否方案与否决理由"), "第 2 项必须要求被否方案与否决理由");
 });
 
 // ============================================================================

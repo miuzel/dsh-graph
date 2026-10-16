@@ -118,7 +118,7 @@ test("g-374 F5 反回声：卡片字段齐全但历史贫瘠时，摘要不得�
   assert.ok(src.includes("无法从详情提炼改动概要"), "兜底文案必须存在于写入器源码（负控锚点）");
 });
 
-test("g-374 F5 内容契约：历史丰富时正文必须出现「改动 / 影响 / 值得注意」三要素的实质内容", async () => {
+test("g-374 F5/g-504 内容契约：终态交付快照必须带出真实改动、硬约束与值得注意的未验证项", async () => {
   const h = createHarness();
   const { goal } = prepare(h, {
     title: "完成摘要",
@@ -133,11 +133,23 @@ test("g-374 F5 内容契约：历史丰富时正文必须出现「改动 / 影�
   appendGoalComment(h.root, goal, "复核：PASS（Windows 未验证需如实标注）。", "agent:reviewer");
   const res = refreshGoalResults(h.root, goal, { actor: "human:gui", stamp: "20260101T040101" });
   const body = readFileSync(res.file, "utf8");
-  assert.ok(body.includes("## 改动与影响"), "必须有「改动与影响」节");
-  assert.ok(body.includes("core/ops.ts"), "必须引用真实改动文件");
+  // g-504：确定性正文改为**终态交付快照**（旧「改动与影响」节整体移除，其内容由交付快照承载）。
+  assert.ok(body.includes("## 交付快照"), "必须有「交付快照」节");
+  assert.ok(!body.includes("## 改动与影响"), "g-504：旧「改动与影响」节不得复活");
+  // 本用例的 attempt 记录由测试直接落盘（非经 graph_start_attempt）⇒ 投影里没有 attempt 条目，
+  // 但**结果文件**仍被投影到（交付定位可见）。断言口径据此：能拿到什么就如实带出什么。
+  assert.ok(body.includes("交付定位：结果文件="), "交付快照必须标出结果文件定位（一手成果来源）");
   assert.ok(body.includes("engines"), "必须逐字引用硬约束（影响面）");
+  // 「值得注意」仍须可见：命中关键词的评论以单行摘录带出（但**不**全量倾倒整段评论区）。
   assert.ok(body.includes("Windows 未验证"), "必须带出「值得注意」的未验证项");
-  assert.ok(body.includes("复核"), "必须带出复核结论");
+  assert.ok(body.includes("值得注意："), "命中关键词的评论以单行摘录形式带出");
+  // g-504 负向对照：超长评论**必须被截断为单行摘录**，绝不整体倾倒（旧版按 600 字全量搬进正文）。
+  const longTail = "尾部哨兵不得出现";
+  appendGoalComment(h.root, goal, "值得注意：" + "很长的历史讨论。".repeat(200) + longTail, "human:gui");
+  const res2 = refreshGoalResults(h.root, goal, { actor: "human:gui", stamp: "20260101T040102" });
+  const body2 = readFileSync(res2.file, "utf8");
+  assert.ok(!body2.includes(longTail), "g-504：超长评论必须被截断（尾部绝不能原样进正文）");
+  assert.ok(/值得注意：.*很长的历史讨论/.test(body2), "超长评论仍须以**摘录**形式可见（不静默丢信息）");
 });
 
 // ============================================================================
@@ -521,13 +533,23 @@ test("g-374 F5 提示词面：formatSummaryPrompt zh/en 对称且都钉住「改
   });
   assert.match(realPrompt, /卡片字段（仅供定位，非摘要主体）/, "材料包必须把卡片字段标为仅供定位");
   assert.match(realPrompt, /在目标目录下新增 results\.md/, "材料包必须带目标描述要点（真正的取材来源）");
-  // en 零 CJK：允许的例外只有「写入器认的六个正文章节标题」（格式契约，不可翻译）
-  const canonical = ["## 结论", "## 改动与影响", "## 判据达成", "## 证据引用", "## 关键决策", "## 时间线"];
+  // g-504 去冗余：摘要被定位为**终态交付简报** ⇒ 必须显式禁止复述评论区拉扯/返工沿革（阅读负担的根因）。
+  assert.match(zh, /严禁复述评论区拉扯与历史返工沿革/, "zh 必须显式禁止复述评论沿革");
+  assert.match(en, /never retell comment-thread churn/i, "en 必须显式禁止复述评论沿革");
+  // 正文长度上限从 4000 字收紧为终态简报（1200 字），且两语言同口径。
+  assert.match(zh, /正文 ≤ 1200 字/, "zh 正文上限必须收紧到终态简报");
+  assert.match(en, /under 1200 characters/, "en 正文上限必须与 zh 同口径");
+  // en 零 CJK：允许的例外只有「写入器认的**四个**正文章节标题」（格式契约，不可翻译）
+  const canonical = ["## 交付快照", "## 影响与残余风险", "## 判据达成", "## 证据引用"];
   let stripped = en;
   for (const h of canonical) stripped = stripped.split(h).join("");
   const cjk = stripped.match(/[\u3400-\u9fff]+/g) ?? [];
   assert.deepEqual(cjk, [], `en summarizer 提示词除规范章节标题外不得含 CJK：${cjk.slice(0, 5).join("、")}`);
-  assert.ok(zh.includes("## 结论"), "zh 必须引用规范章节标题");
+  for (const h of canonical) assert.ok(zh.includes(h), `zh 必须引用规范章节标题：${h}`);
+  // g-504 反回归：被删掉的旧节不得再出现在提示词里（否则会诱导模型复活流水账）。
+  for (const h of ["## 关键决策", "## 时间线", "## 结论"]) {
+    assert.ok(!zh.includes(h), `g-504：提示词不得再引用已删除的小节：${h}`);
+  }
 });
 
 // ============================================================================
