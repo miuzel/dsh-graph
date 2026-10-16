@@ -7362,6 +7362,66 @@ function persistReviewRecord(
 
 const REVIEW_REPORT_PLACEHOLDER = "（评审进行中：报告正文由宿主在评审子代理结束时按真实 child 归因写入）\n";
 
+/**
+ * g-499：目标**路径迁移**后同步修复 `reviews/*.md` 内的 `report_file`。
+ *
+ * 缺陷形态：`settleReview` 把 `report_file` 写成**绝对路径**（`reviewRecordFile(root, …)`）。目标一旦
+ * 被 `archiveGoal` / `unarchiveGoal` / `moveGoal`（或 `postponeGoal`）整体搬迁目录，旧绝对路径即指向
+ * 不存在的位置 —— 记录仍自称报告在 `<老位置>/reviews/<id>.md`，物理文件却已随目录搬走，形成**死链**。
+ *
+ * 修复方向（只重写、不删改正文与其余 meta）：把每条记录的 `report_file` 重写为**该记录当前的绝对落盘
+ * 路径**。不改成「相对 goal.md 的引用」是为了**不破坏既有契约**：`report_file` 一直是绝对路径，
+ * g-436 判据 5 断言其以 `<reviews>/<review_id>.md` 结尾，消费者（事件 details / 记录 meta）也按绝对
+ * 路径语义读取；改成相对引用会让既有断言与消费者同时失效，属于超出本缺陷范围的契约变更。
+ *
+ * 三条不变量：
+ *  1. **只在确有需要时写**：`report_file` 已是当前正确绝对路径（含 `null` / 缺失 / 非字符串）⇒ 该文件
+ *     一个字节都不动（幂等；重复迁移零副作用，也不刷新 mtime）；
+ *  2. **绝不猜归属**：只处理 `<goalDir>/reviews/` 下符合 `rev-att-…` 命名的 `.md`；坏文件/不可解析
+ *     的记录跳过（读路径必须稳），绝不因一条坏记录让整次迁移失败；
+ *  3. **搬迁后调用**：调用点在目录 rename **之后**（`reviewsDir` 按当前 `goal.md` 位置解析），此时
+ *     `findGoalFile` 已能看到新位置，算出的即新路径。
+ *
+ * 返回被重写的记录文件名列表（供测试与审计；无改动时为空数组）。
+ */
+export function reconcileReviewReportFiles(root: string, goalId: string): string[] {
+  let dir: string;
+  try {
+    dir = reviewsDir(root, goalId);
+  } catch {
+    return []; // backlog 平铺形态没有目录：无 reviews/ 可言
+  }
+  if (!existsSync(dir)) return [];
+  const rewritten: string[] = [];
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  for (const name of names) {
+    if (!name.endsWith(".md")) continue;
+    const reviewId = name.slice(0, -3);
+    if (!REVIEW_ID_PATTERN.test(reviewId)) continue; // 非评审记录文件概不触碰
+    const file = join(dir, name);
+    let doc: GoalDoc;
+    try {
+      doc = loadGoal(file);
+    } catch {
+      continue; // 坏记录跳过，绝不让整次迁移失败
+    }
+    const expected = file;
+    if (doc.meta.report_file === expected) continue; // ① 已正确 ⇒ 零写入（幂等）
+    try {
+      saveGoal(file, { meta: { ...doc.meta, report_file: expected }, body: doc.body });
+      rewritten.push(name);
+    } catch {
+      /* 单条写失败不影响迁移结果与其余记录 */
+    }
+  }
+  return rewritten;
+}
+
 export interface ReviewDispatchInput {
   goalId: string;
   sourceAttempt: string;
@@ -11036,6 +11096,9 @@ export function moveGoal(
           }
         }
       }
+      // g-499：位置变更后同步 `reviews/*.md` 的 `report_file`（必须在 rename **之后**，此时
+      // `reviewsDir` 才按新位置解析）。仅重写确有需要的记录，已是新路径的记录零写入。
+      reconcileReviewReportFiles(root, id);
     },
   });
 }
@@ -11090,6 +11153,8 @@ export function archiveGoal(
         mkdirSync(dirname(targetFile), { recursive: true });
         renameSync(file, targetFile);
       }
+      // g-499：归档是位置变更 ⇒ 同步 reviews/*.md 的 report_file（rename 之后调用）
+      reconcileReviewReportFiles(root, id);
     },
   });
 }
@@ -11127,6 +11192,8 @@ export function unarchiveGoal(
     renameSync(file, targetFile);
   }
   saveGoal(targetFile, doc);
+  // g-499：取消归档同样是位置变更 ⇒ 同步 reviews/*.md 的 report_file（rename 之后调用）
+  reconcileReviewReportFiles(root, id);
   appendEvent(root, {
     actor: opts.actor,
     event: "goal.unarchived",
@@ -11230,6 +11297,8 @@ export function postponeGoal(
     doc.meta.status = "draft";
   }
   saveGoal(targetFile, doc);
+  // g-499：暂缓也是位置变更（版本/独立 → backlog 目录形态）⇒ 同步 reviews/*.md 的 report_file
+  reconcileReviewReportFiles(root, id);
 
   appendEvent(root, {
     actor: opts.actor,
