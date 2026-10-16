@@ -93,6 +93,7 @@ import {
   addSharedCardRef,
   deleteSharedCard,
   removeSharedCardRef,
+  detachSharedCardRef,
   convertOwnedToShared,
   convertSharedToOwned,
   sharedCards,
@@ -546,6 +547,8 @@ const objOut = {
 };
 const str = { type: "string" };
 const strArr = { type: "array", items: { type: "string" } };
+/** g-501：布尔参数的字面量简写（与 str/strArr 同风格；既有工具里 { type:"boolean" } 逐字等价）。 */
+const bool = { type: "boolean" };
 
 // supervisor attempt 的关键事实必须结构化传入，不从 brief/directive 的自然语言猜测。
 const ATTEMPT_TASK_TYPE_LABELS = Object.freeze({ merge: "合入", rewrite: "重写", fix: "修复" });
@@ -3423,12 +3426,27 @@ export function apply(ctx, config) {
     },
     {
       // g-128：删除上下文卡片（删文件 + 移除 context_cards 引用 + 记 card.deleted 事件，事件先行 R-02）
+      // g-501：①零引用共享卡可直接删除（非零引用仍严格拒绝，避免删掉其他 goal 在用的实体）；
+      //        ②本工具**不受任何 harness 模块开关管理** ⇒ 会话内 shared_cards:false 关闭时它仍在可见
+      //          工具面内，故新增 detach_only 开关作为「保底解除引用」通道（不依赖被裁剪的共享池工具）。
       def: {
         name: "graph_delete_card",
-        description: "删除目标的上下文卡片（删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件，事件先行 R-02）。正在收集中的卡片（status=collecting）不可删除。",
-        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+        description: "删除目标的上下文卡片（删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件，事件先行 R-02）。正在收集中的卡片（status=collecting）不可删除。零引用的共享卡可直接删除；非零引用共享卡严格拒绝（请先解除引用）。detach_only=true 时只解除引用不删除（卡本体保留共享池），用于 shared_cards 模块关闭、无共享池工具时的保底解引用。",
+        parameters: params({ goal: str, card: str, detach_only: bool }, ["goal", "card"]),
       },
-      run: (a, ex) => { deleteCard(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => {
+        const root = rootFor(ex);
+        if (a.detach_only === true) {
+          // g-501：保底解除引用——与 graph_detach_shared_card 同一 ops 路径与鉴权口径
+          //（owner/主管；先鉴权后调用 ⇒ 拒绝零副作用），只是入口不被模块开关裁剪。
+          const actor = unbindActorOf(ex, root);
+          authorizeSharedCardLink(root, actor, goalCreatedBy(root, a.goal));
+          const refCount = detachSharedCardRef(root, a.goal, a.card, actor);
+          return { ok: true, card: a.card, detached: true, refCount };
+        }
+        const res = deleteCard(root, a.goal, a.card, { actor: actorOf(ex) });
+        return { ok: true, card: res.card, scope: res.scope, refCount: res.refCount };
+      },
     },
     {
       // g-304：将 goal 自有卡转换为共享卡（封装 convertOwnedToShared）。

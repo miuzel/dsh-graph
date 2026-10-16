@@ -5899,37 +5899,60 @@ export function reviewCard(
   });
 }
 
+/** g-501：deleteCard 的删除结果——`scope` 如实回报被删卡片的归属，
+ *  便于工具层把「删的是共享池实体」与「删的是目标自有卡」区分开（调用方据此提示）。 */
+export interface DeleteCardResult {
+  card: string;
+  scope: CardScope;
+  /** 删除后该卡的剩余引用数（自有卡恒为 0；共享卡删除前已校验为 0）。 */
+  refCount: number;
+}
+
 /** 删除上下文卡片（g-128）：删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件（事件先行 R-02）。
  *  前置校验：卡片存在；正在收集中的卡片（status=collecting）拒绝删除（需先停止子代理）。
- *  g-183：被引用/任何共享卡不可经 deleteCard 删除——共享卡走 deleteSharedCard（零引用显式删除）。 */
+ *  g-183：被引用的共享卡不可经 deleteCard 删除——共享卡走 deleteSharedCard（零引用显式删除）。
+ *  g-501：**零引用共享卡**改为可经 deleteCard 直接显式删除（补齐「会话内无 shared_cards 模块工具」
+ *  时的安全删除通道）；**非零引用**共享卡仍严格拒绝（避免删掉其他 goal 仍在用的实体）。
+ *
+ *  解析顺序（g-501 修正的关键点）：共享池按 **cardId 直查**优先。
+ *   理由：零引用共享卡**必然**已不在任何 goal 的 `context_cards` 里，而 `resolveCard` 对共享卡要求
+ *   「调用 goal 仍引用它」才能解析 ⇒ 若沿用 `loadCard`，零引用共享卡将**永远无法被解析**，
+ *   「零引用可删」形同虚设。故此处先判共享池存在性，再走共享分支；否则退回自有卡解析。
+ *   访问边界不放松：共享卡删除仍受 collecting 守卫 + 引用计数门禁约束（**非零引用一律拒绝**），
+ *   因此「绕过 goal 引用解析」不会带来越权删除——被其他 goal 引用的卡依旧删不掉。
+ *
+ *  共享卡删除走与 deleteSharedCard 同一条权威路径（同一守卫 + 同一门禁 + 同一事件），本函数不另写一份。
+ *  返回 DeleteCardResult（scope 与剩余引用数）。 */
 export function deleteCard(
   root: string,
   goalId: string,
   cardId: string,
   opts: { actor: string },
-): void {
-  const { file, doc, scope } = loadCard(root, goalId, cardId);
-  // 前置校验：正在收集中的卡片不可删除（无论共享卡还是自有卡均不可在收集中删除）
-  if (doc.meta.status === "collecting") {
-    throw new GraphError(`卡片 ${cardId} 正在收集子代理中，不能删除——请先停止子代理或等其完成`);
+): DeleteCardResult {
+  const cardIdSafe = assertSafeId(cardId, "卡片 id");
+  const sharedFile = join(sharedCardsDir(root), `${cardIdSafe}.md`);
+  if (existsSync(sharedFile)) {
+    // g-501：零引用共享卡可删；非零引用由 deleteSharedCard 统一拒绝（同因同话；collecting 同源守卫）。
+    deleteSharedCard(root, cardIdSafe, { actor: opts.actor });
+    return { card: cardIdSafe, scope: "shared", refCount: referenceCount(root, cardIdSafe) };
   }
-  if (scope === "shared") {
-    throw new GraphError(
-      `共享卡 ${cardId} 被 goal 引用，不能删除——请在共享管理面板先解除引用（零引用后再显式删除）`,
-    );
+  const { file, doc, scope } = loadCard(root, goalId, cardIdSafe);
+  // 前置校验：正在收集中的卡片不可删除（自有卡；共享卡的同一守卫在 deleteSharedCard 内）
+  if (doc.meta.status === "collecting") {
+    throw new GraphError(`卡片 ${cardIdSafe} 正在收集子代理中，不能删除——请先停止子代理或等其完成`);
   }
   // 事件先行（R-02）
   appendEvent(root, {
     actor: opts.actor,
     event: "card.deleted",
     goal: goalId,
-    details: { card: cardId, title: doc.meta.title, kind: doc.meta.kind },
+    details: { card: cardIdSafe, title: doc.meta.title, kind: doc.meta.kind },
   });
   // 从 goal 的 context_cards 移除引用
   const goalFile = findGoalFile(root, goalId);
   const goalDoc = loadGoal(goalFile);
   if (Array.isArray(goalDoc.meta.context_cards)) {
-    const idx = goalDoc.meta.context_cards.indexOf(cardId);
+    const idx = goalDoc.meta.context_cards.indexOf(cardIdSafe);
     if (idx >= 0) {
       goalDoc.meta.context_cards.splice(idx, 1);
       saveGoal(goalFile, goalDoc);
@@ -5937,6 +5960,25 @@ export function deleteCard(
   }
   // 删卡片文件
   rmSync(file, { force: true });
+  return { card: cardIdSafe, scope, refCount: 0 };
+}
+
+/** g-501：共享卡引用的**保底**解除通道——不依赖 `shared_cards` 模块被裁剪关闭的四个共享池工具
+ *  （graph_detach_shared_card / graph_list_shared_cards / graph_attach_shared_card / graph_convert_*）。
+ *
+ *  与 `removeSharedCardRef` 的关系（不新增第二份语义）：
+ *   · 二者共用同一条落地实现——本函数只是「不带 owner/主管鉴权的核心解引用入口」，
+ *     鉴权一律留在工具层（`authorizeSharedCardLink`），因此**不产生第二条授权真源**；
+ *   · 语义完全一致：卡本体保留在共享池、记 `card.shared_unreferenced` 事件、`collecting` 拒绝解除。
+ *
+ *  存在意义：`graph_delete_card` **不受**任何模块开关管理 ⇒ 当会话内 `shared_cards: false` 关闭时，
+ *  它仍在模型可见工具面内。本函数据此让「解除引用」在无模块工具时仍有可达路径（避免操作死锁），
+ *  与「零引用共享卡可经 graph_delete_card 直接删除」共同构成保底闭环。
+ *  注意：本函数本身仍是 ops 层公开 API（REST/测试可直接用），**工具面暴露必须走 graph_delete_card 的
+ *  `detachOnly` 开关**，不得新增第二个共享池专属工具名（否则会被模块映射表的命名面前缀吞并）。 */
+export function detachSharedCardRef(root: string, goalId: string, sharedId: string, actor: string): number {
+  removeSharedCardRef(root, goalId, sharedId, actor);
+  return referenceCount(root, sharedId);
 }
 
 /** g-388：共享卡「正在收集」冲突文案的唯一真源——bindCardChild 的拒绝与 spawn 前准入共用同一句，
