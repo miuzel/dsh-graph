@@ -2,7 +2,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,8 +21,10 @@ import {
   validate,
   startAttempt,
   addCard,
+  resolveAccept,
   GraphError,
 } from "../ops.ts";
+import { listWorktrees, cleanWorktree, registerWorktreeCandidates } from "../worktree.ts";
 import { readEvents, replayStatuses, appendEvent } from "../events.ts";
 import { serializeDoc } from "../model.ts";
 
@@ -213,4 +216,81 @@ test("boardProjection：已删除目标不出现在看板", () => {
   const board = boardProjection(root, { includeArchived: true });
   assert.equal(board.backlog.length, 1, "已删除目标不应出现在看板");
   assert.equal(board.backlog[0].id, id1);
+});
+
+// ============================================================================
+// g-500 判据 1：删除前检测关联 worktree，未清理则阻断（防目标删除制造孤儿）
+// ============================================================================
+
+/** g-500：真 Git 仓库 + 已交付目标 + 一棵真实可清理 worktree（含候选登记）。 */
+function repoWithDeliverableWorktree() {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-graph-delete-wt-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFileSync(join(dir, "README"), "x");
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+  const root = join(dir, ".dsh-graph");
+  init(root);
+  const goal = createGoal(root, { title: "带工作树", version: "v-t", actor: "test" });
+  const attempt = startAttempt(root, goal, { executor: "test", actor: "test" });
+  const path = join(dir, ".worktrees", `${goal}-att-01`);
+  execFileSync("git", ["worktree", "add", "-q", "-b", `${goal}-att-01`, path], { cwd: dir });
+  const af = join(root, "versions", "v-t", "goals", goal, "attempts", attempt, "attempt.md");
+  writeFileSync(af, readFileSync(af, "utf8").replace('"status_line": null', '"status_line": "等待 review"'));
+  const gf = findGoalFile(root, goal);
+  writeFileSync(gf, readFileSync(gf, "utf8").replace('"status": "planning"', '"status": "review"'));
+  resolveAccept(root, goal, { actor: "supervisor:test", verdict: "accept" });
+  registerWorktreeCandidates(root, goal, "test");
+  return { dir, root, goal, attempt, path, gf };
+}
+
+test("g-500 判据1：关联未清理 worktree 时 deleteGoal 阻断，且目标目录零破坏", () => {
+  const { root, goal, path } = repoWithDeliverableWorktree();
+  assert.equal(listWorktrees(root, goal)[0].status, "candidate", "前置：树应为可清理候选");
+  archiveGoal(root, goal, { actor: "test" });
+  const archivedDir = join(root, "versions", "v-t", "archived", goal);
+  assert.ok(existsSync(archivedDir), "前置：归档目录存在");
+  // 负向对照：有未清理树 ⇒ 必须抛 GraphError，理由点名路径并给出可执行指引
+  assert.throws(
+    () => deleteGoal(root, goal, { actor: "test" }),
+    (e: any) => e instanceof GraphError && e.message.includes(path) && e.message.includes("graph_clean_worktree"),
+    "有未清理 worktree 时应阻断删除并给出可执行指引",
+  );
+  // 阻断必须发生在**任何**破坏性动作之前：目标目录与工作树原样保留，且未记 goal.deleted
+  assert.ok(existsSync(archivedDir), "阻断后目标目录必须零破坏");
+  assert.ok(existsSync(path), "阻断后工作树必须原样保留");
+  assert.equal(readEvents(root).filter((e) => e.event === "goal.deleted").length, 0, "阻断时不得记 goal.deleted");
+});
+
+test("g-500 判据1：清理 worktree 后 deleteGoal 放行（正向前后对照）", () => {
+  const { root, goal, path } = repoWithDeliverableWorktree();
+  archiveGoal(root, goal, { actor: "test" });
+  const c = listWorktrees(root, goal)[0];
+  assert.equal(cleanWorktree(root, c.id, "human:test", true).ok, true, "先清理应成功");
+  assert.ok(!existsSync(path), "清理后工作树目录应消失");
+  // 残留清空 ⇒ 阻塞解除 ⇒ 删除成功
+  deleteGoal(root, goal, { actor: "test" });
+  assert.ok(!existsSync(join(root, "versions", "v-t", "archived", goal)), "无残留树时目标应可删除");
+  assert.equal(readEvents(root).filter((e) => e.event === "goal.deleted").length, 1);
+});
+
+test("g-500 判据1：无关联 worktree 的目标照常可删（既有行为不回归）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dsh-graph-delete-nowt-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFileSync(join(dir, "README"), "x");
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+  const root = join(dir, ".dsh-graph"); init(root);
+  const goal = createGoal(root, { title: "无树", version: "v-t", actor: "test" });
+  archiveGoal(root, goal, { actor: "test" });
+  deleteGoal(root, goal, { actor: "test" });
+  assert.ok(!existsSync(join(root, "versions", "v-t", "archived", goal)));
+});
+
+test("g-500 判据1：非 Git 工作区不因探测失败锁死删除（降级放行）", () => {
+  const root = tmpRoot(); // 非 Git 仓库：不可能存在可清理工作树
+  const id = createGoal(root, { title: "非git", actor: "test" });
+  archiveGoal(root, id, { actor: "test" });
+  deleteGoal(root, id, { actor: "test" });
+  assert.ok(!existsSync(join(root, "backlog", "archived", `${id}.md`)), "非 Git 环境下删除不得被阻断");
 });

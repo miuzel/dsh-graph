@@ -4290,7 +4290,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_clean_worktree",
-        description: "用户明确选择后清理已实时验证的 worktree；默认不删除分支。",
+        description: "用户明确选择后清理已实时验证的 worktree；默认不删除分支。g-500：目标已被删除的残留孤儿工作树同样可清理（按 Git 元数据 + canonical .worktrees 路径模式安全核验后删除），不再因 missing_attempt_evidence 被永久阻断。",
         parameters: params({ id: str, confirm: { type: "boolean" } }, ["id", "confirm"]),
       },
       run: (a, ex) => {
@@ -4318,7 +4318,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_delete_goal",
-        description: "删除已归档目标（含其卡片/attempts 目录）。仅已归档目标可删除，且不能有活跃子代理。记 goal.deleted 事件。",
+        description: "删除已归档目标（含其卡片/attempts 目录）。仅已归档目标可删除，且不能有活跃子代理。g-500：若目标仍关联未清理的工作树则阻断删除（目标目录是这些树归属的唯一证据，删除后会退化为无法清理的孤儿）——请先 graph_clean_worktree 清理干净再删除。记 goal.deleted 事件。",
         parameters: params({ goal: str }, ["goal"]),
       },
       run: (a, ex) => { deleteGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
