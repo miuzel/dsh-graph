@@ -449,3 +449,117 @@ test("g-504 判据 1：中长目标确定性正文 ≤5 KiB——旧版会把评
   assert.ok(!raw.includes("很长的指令沿革正文"), "最近指令原文不得被照搬（只留有无）");
   assert.ok(raw.includes("评论 41 条"), "评论改为单行计数，仍如实反映历史规模");
 });
+
+// ============================================================================
+// g-504 att-002 修复：终态交付快照定序错配（三要素必须同源同一 attempt 实体）
+// ============================================================================
+
+/** 造出多 attempt 目标：每个 attempt 各有**可区分的 baseline / commit / 结果文件正文**。 */
+function seedTwoAttempts(root: string, goal: string) {
+  const baseline = (n: number) => String(n).repeat(40);
+  const a1 = startAttempt(root, goal, { executor: "agent:e1", actor: "human:gui", baselineCommit: baseline(1) });
+  writeAttemptResults(root, {
+    goal, attempt: a1, source: "subagent/end", childId: "c1", stopReason: "completed",
+    text: "第一次交付：旧成果",
+  });
+  const a2 = startAttempt(root, goal, { executor: "agent:e2", actor: "human:gui", baselineCommit: baseline(2) });
+  writeAttemptResults(root, {
+    goal, attempt: a2, source: "subagent/end", childId: "c2", stopReason: "completed",
+    text: "第二次交付：新成果",
+  });
+  return { a1, a2, baseline };
+}
+
+test("g-504 att-002：交付快照三要素与最新 attempt **严格同源**——两个投影定序相反也不得首末倒置", () => {
+  const { root, goal } = setup();
+  const { a1, a2, baseline } = seedTwoAttempts(root, goal);
+
+  // 事故根因先钉死：两个投影的**定序方向相反**（这正是旧实现各自下标取首即错配的原因）。
+  const detail = goalDetail(root, goal);
+  assert.deepEqual(detail.attempts.map((a: any) => a.id), [a1, a2],
+    "goalDetail.attempts 为升序（readdirSync 序）——最老的在前");
+  assert.deepEqual(detail.results.attempts.map((a: any) => a.attempt), [a2, a1],
+    "results.attempts 为降序（最新优先）——与上面相反");
+
+  const res = refreshGoalResults(root, goal, { actor: "human:gui" });
+  const raw = readFileSync(res.file, "utf8");
+
+  // ① 终态交付行必须绑定**最新** attempt（旧实现绑 att-001 ⇒ 本断言必红）。
+  const deliver = raw.split("\n").find((l) => l.includes("- 终态交付（"))!;
+  assert.ok(deliver.includes(`attempt=\`${a2}\``), `终态交付必须指向最新 attempt：${deliver}`);
+  assert.ok(!deliver.includes(`attempt=\`${a1}\``), "终态交付不得再指向最老 attempt");
+  assert.ok(deliver.includes("第二次交付：新成果"), "终态交付成果取自最新 attempt 的结果文件");
+  assert.ok(!deliver.includes("第一次交付：旧成果"), "旧 attempt 的成果不得冒充终态交付");
+
+  // ② 交付定位（commit / baseline / 结果文件）每一项都必须来自**同一个**最新 attempt 实体。
+  const locate = raw.split("\n").find((l) => l.includes("- 交付定位："))!;
+  assert.ok(locate.includes(`baseline=\`${baseline(2)}\``), `baseline 必须是最新 attempt 的：${locate}`);
+  assert.ok(!locate.includes(baseline(1)), "baseline 不得混入最老 attempt 的值");
+  assert.ok(locate.includes(`结果文件=\`results-${a2}.md\``), `结果文件必须是 att-002 的：${locate}`);
+  assert.ok(!locate.includes(`results-${a1}.md`), "结果文件不得混入最老 attempt 的");
+
+  // ③ 三要素**同源一致性**：从「交付定位」里解析出的 attempt / baseline / 结果文件必须自洽互指。
+  const mAtt = /attempt=`([^`]+)`/.exec(deliver)!;
+  const mBase = /baseline=`([^`]+)`/.exec(locate)!;
+  const mFile = /结果文件=`([^`]+)`/.exec(locate)!;
+  assert.equal(mAtt[1], a2);
+  assert.equal(mFile[1], `results-${mAtt[1]}.md`, "结果文件名必须与被绑定 attempt 严格同源（同名映射）");
+  assert.equal(mBase[1], baseline(2));
+  const a2Meta = detail.attempts.find((a: any) => a.id === a2)!;
+  assert.equal(mBase[1], a2Meta.baseline_commit, "baseline 必须逐字等于该 attempt 记录里的值（不得取自他者）");
+  assert.equal(baseline(1), detail.attempts.find((a: any) => a.id === a1)!.baseline_commit,
+    "对照：att-001 的 baseline 确实不同（证明上面的断言非同值恒真）");
+});
+
+test("g-504 att-002：证据引用按最新优先定序，且逐 attempt 结果文件一一对应（不张冠李戴）", () => {
+  const { root, goal } = setup();
+  const { a1, a2 } = seedTwoAttempts(root, goal);
+  const res = refreshGoalResults(root, goal, { actor: "human:gui" });
+  const raw = readFileSync(res.file, "utf8");
+
+  const rows = raw.split("\n").filter((l) => /^- attempt=`/.test(l));
+  assert.equal(rows.length, 2, "两个 attempt 各一行紧凑索引");
+  // 证据引用与终态快照**共用同一份已定序序列**（最新在前）——旧实现此处为升序，与快照不一致。
+  assert.ok(rows[0].includes(`attempt=\`${a2}\``), `证据引用首行应为最新 attempt：${rows[0]}`);
+  assert.ok(rows[1].includes(`attempt=\`${a1}\``), `证据引用末行应为最老 attempt：${rows[1]}`);
+
+  // 逐行「attempt ↔ 结果文件」必须一一对应（旧实现用未定序序列查找，仍会对，但这里锁死契约）。
+  assert.ok(rows[0].includes(`结果=\`results-${a2}.md\``), "最新 attempt 行必须指向自己的结果文件");
+  assert.ok(!rows[0].includes(`results-${a1}.md`), "最新 attempt 行不得指向他者的结果文件");
+  assert.ok(rows[1].includes(`结果=\`results-${a1}.md\``), "最老 attempt 行必须指向自己的结果文件");
+
+  // 交付快照与证据引用**首行同指**最新 attempt（同源、同序）。
+  const deliver = raw.split("\n").find((l) => l.includes("- 终态交付（"))!;
+  assert.ok(deliver.includes(`\`${a2}\``) && rows[0].includes(`\`${a2}\``),
+    "交付快照与证据引用必须同指最新 attempt（消除首末倒置）");
+});
+
+test("g-504 att-002 反回归：result 文件与 attempt 的映射按 id **精确匹配**——错配版本必红", () => {
+  const { root, goal } = setup();
+  const { a1, a2 } = seedTwoAttempts(root, goal);
+  const res = refreshGoalResults(root, goal, { actor: "human:gui" });
+  const raw = readFileSync(res.file, "utf8");
+  const deliver = raw.split("\n").find((l) => l.includes("- 终态交付（"))!;
+  const locate = raw.split("\n").find((l) => l.includes("- 交付定位："))!;
+
+  // 负向对照：显式构造「旧错配形态」的字符串，证明上面的断言**不是恒真**——
+  // 若实现退回 `attempts[0]` + `resultsFiles[0]` 拼装，产出的正是这一行，且会被 ① 判红。
+  const mismatched = `- 终态交付（attempt=\`${a1}\`）：${a2}`;
+  assert.ok(!deliver.startsWith(`- 终态交付（attempt=\`${a1}\``),
+    `不得产出「最老 attempt 混搭最新结果文件」的错配形态（旧版即 ${mismatched}）`);
+  assert.ok(!/attempt=`att-001`[\s\S]*结果文件=`results-att-002\.md`/.test(deliver + locate),
+    "同一快照内 attempt=att-001 与 results-att-002.md 不得共存（三要素张冠李戴）");
+
+  // 单 attempt 目标仍工作（边界：无多 attempt 可比时不得崩、不得空态化）。
+  const solo = setup();
+  const only = startAttempt(solo.root, solo.goal, {
+    executor: "agent:e1", actor: "human:gui", baselineCommit: "c".repeat(40),
+  });
+  writeAttemptResults(solo.root, {
+    goal: solo.goal, attempt: only, source: "subagent/end", childId: "s1", stopReason: "completed",
+    text: "唯一交付",
+  });
+  const soloRaw = readFileSync(refreshGoalResults(solo.root, solo.goal, { actor: "human:gui" }).file, "utf8");
+  assert.ok(soloRaw.includes(`attempt=\`${only}\``), "单 attempt 目标仍绑定该 attempt");
+  assert.ok(soloRaw.includes(`结果文件=\`results-${only}.md\``), "单 attempt 目标的结果文件仍同源");
+});

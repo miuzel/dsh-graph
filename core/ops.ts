@@ -9954,11 +9954,31 @@ function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: strin
 
   const lines: string[] = [];
 
-  // 终态交付快照 = **最新有效 attempt**（按投影顺序；投影已按 attempt 倒序/终态优先）。
-  // 前序历史 attempt 只做单行索引，不再展开长 brief / 验收项（g-504）。
-  const newestAttempt = attempts[0] ?? null;
-  const newestRow = newestAttempt ? digest.attempts.find((x) => x.id === oneLine(newestAttempt?.id)) ?? null : null;
-  const newestResultFile = resultsFiles[0] ?? null;
+  // ---- g-504 att-002 修复：attempt 定序**唯一真源** ----
+  // 事故形态（前序 attempt 已核实）：两个投影的**定序方向相反**，而本函数此前对二者分别下标取首 ——
+  //   - `goalDetail.attempts` 来自 `readdirSync(attDir).sort()` ⇒ **升序**（att-001 在前）；
+  //   - `detail.results.attempts` 来自 `goalResults()` 的 `sort(倒序)` ⇒ **降序**（att-002 在前）。
+  // 于是 `attempts[0]`（最老）+ `resultsFiles[0]`（最新）被粗暴拼装，终态交付快照里的
+  // attempt ID / commit / baseline 来自 att-001，而「结果文件」指向 `results-att-002.md`
+  // ⇒ 三要素张冠李戴、首末倒置。
+  // 修复：**先按 attempt id 显式归一定序**（与 `goalResults` 同源的倒序 = 最新优先），
+  // 之后终态快照与证据引用的每一个字段都从**同一个已定序序列**里取（不再各自下标）。
+  const attemptsNewestFirst = [...attempts].sort((a: any, b: any) =>
+    String(oneLine(b?.id) ?? "").localeCompare(String(oneLine(a?.id) ?? "")),
+  );
+  const resultsFilesNewestFirst = [...resultsFiles].sort((a: any, b: any) =>
+    String(oneLine(b?.attempt) ?? "").localeCompare(String(oneLine(a?.attempt) ?? "")),
+  );
+
+  // 终态交付快照 = **最新有效 attempt**。前序历史 attempt 只做单行索引，不再展开长 brief / 验收项（g-504）。
+  // 交付三要素（attempt ID / commit+baseline / 结果文件）**必须同源**：三者都锚定到同一条
+  // `newestAttempt` 实体，结果文件按 attempt id **精确匹配**（不是取序列首项）。
+  const newestAttempt = attemptsNewestFirst[0] ?? null;
+  const newestAttemptIdRaw = newestAttempt ? oneLine(newestAttempt.id) || "?" : null;
+  const newestRow = newestAttemptIdRaw ? digest.attempts.find((x) => x.id === newestAttemptIdRaw) ?? null : null;
+  const newestResultFile = newestAttemptIdRaw
+    ? resultsFilesNewestFirst.find((r: any) => oneLine(r?.attempt) === newestAttemptIdRaw) ?? null
+    : null;
   const verified = criteria.filter((c) => isCriterionVerified(String(c))).length;
   const dist: Record<string, number> = {};
   for (const a of attempts) {
@@ -9971,7 +9991,9 @@ function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: strin
   const overview = digest.description_sections.find((s) => s.points.length > 0)?.points[0] ?? null;
   lines.push(`- 改动概要：${overview ?? "（目标描述为空，无法从详情提炼改动概要）"}`);
   // 终态 attempt 的交付首句（来自其结果文件）优先于 brief —— 它是**终态交付成果**本身。
-  const newestAttemptId = newestRow?.id ?? (newestAttempt ? oneLine(newestAttempt.id) : null);
+  // g-504 att-002：ID 直接取自已定序实体自身（不再回退到未定序的 `attempts[0]`），与下方
+  // commit / baseline / 结果文件同源同实体。
+  const newestAttemptId = newestAttemptIdRaw;
   const deliverLine = newestRow?.result_head ?? newestRow?.brief ?? null;
   lines.push(`- 终态交付（${newestAttemptId ? `attempt=\`${newestAttemptId}\`` : "无 attempt"}）：${deliverLine ?? "（无 attempt 记录；本目标的改动可能是主管自做或尚未派发）"}`);
   const wt0 = newestAttempt?.worktree && typeof newestAttempt.worktree === "object" ? newestAttempt.worktree : null;
@@ -9999,16 +10021,18 @@ function buildGoalResultsSummary(detail: Record<string, any>, generatedAt: strin
   }
 
   // ---- 证据引用（前序历史 attempt 只保留**单行紧凑索引**；不展开 brief/验收项/结果全文）----
+  // g-504 att-002：遍历**同一份已定序序列** `attemptsNewestFirst`（最新在前），使交付快照与
+  // 证据引用的 attempt 顺序、及其逐 attempt 的结果文件匹配口径完全一致（不再一个升序一个降序）。
   lines.push("", "## 证据引用", "");
-  if (attempts.length === 0) {
+  if (attemptsNewestFirst.length === 0) {
     lines.push("（无 attempt 记录）");
   } else {
-    for (const a of attempts) {
+    for (const a of attemptsNewestFirst) {
       const wt = a?.worktree && typeof a.worktree === "object" ? a.worktree : null;
       const bits = [`attempt=\`${oneLine(a?.id) || "?"}\``];
       if (wt?.head) bits.push(`commit=${oneLine(wt.head).slice(0, 12)}`);
       bits.push(`终态=${oneLine(a?.result) || "?"}/${oneLine(a?.status_state) || "-"}`);
-      const rf = resultsFiles.find((r: any) => oneLine(r?.attempt) === oneLine(a?.id));
+      const rf = resultsFilesNewestFirst.find((r: any) => oneLine(r?.attempt) === oneLine(a?.id));
       bits.push(`结果=${rf ? `\`${basename(String(rf.file ?? ""))}\`` : "（无）"}`);
       lines.push(`- ${bits.join("；")}`);
     }

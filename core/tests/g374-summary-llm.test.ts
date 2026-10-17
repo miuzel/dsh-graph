@@ -125,7 +125,6 @@ test("g-374 F5/g-504 内容契约：终态交付快照必须带出真实改动�
     description: "在 goal 目录下新增 results.md。\n\n**影响面**\n- 宿主兼容性：engines 下界不变；\n- 结果面：GUI 新增只读 tab。\n\n**非目标**\n- 不做跨目标汇总。",
   });
   const att = await dispatch(h, goal, "实现 llm-summarizer 与缓存键");
-  writeFileSync(join(h.root, "versions/v1.0/goals", goal, "attempts", att, "attempt.md"), "x");
   h.call("graph_write_results", {
     goal, attempt: att,
     text: "改动：core/ops.ts 新增 refreshGoalResults；dsh-graph-host/index.js 新增 summarizer 派发。\n影响：宿主 GUI 多一个按钮。\n值得注意：Windows 未验证。",
@@ -136,9 +135,12 @@ test("g-374 F5/g-504 内容契约：终态交付快照必须带出真实改动�
   // g-504：确定性正文改为**终态交付快照**（旧「改动与影响」节整体移除，其内容由交付快照承载）。
   assert.ok(body.includes("## 交付快照"), "必须有「交付快照」节");
   assert.ok(!body.includes("## 改动与影响"), "g-504：旧「改动与影响」节不得复活");
-  // 本用例的 attempt 记录由测试直接落盘（非经 graph_start_attempt）⇒ 投影里没有 attempt 条目，
-  // 但**结果文件**仍被投影到（交付定位可见）。断言口径据此：能拿到什么就如实带出什么。
-  assert.ok(body.includes("交付定位：结果文件="), "交付快照必须标出结果文件定位（一手成果来源）");
+  // g-504 att-002：交付快照的三要素（attempt / commit+baseline / 结果文件）**必须同源**同一 attempt 实体。
+  // 旧版本用例把 attempt.md 覆写成一字节，使 attempt 实体在投影里消失、却仍靠「取 resultsFiles[0]」
+  // 显示结果文件 —— 那正是本次修复要消除的「跨实体拼装」。现在该路径按契约必须整条省略，
+  // 故此处同时断言「同源实体存在时才带出定位」，且断言结果文件确属该 attempt（不再与他者拼装）。
+  assert.ok(body.includes(`终态交付（attempt=\`${att}\``), "终态交付必须绑定该 attempt 实体");
+  assert.ok(body.includes(`结果文件=\`results-${att}.md\``), "交付快照必须标出结果文件定位且与 attempt 同源");
   assert.ok(body.includes("engines"), "必须逐字引用硬约束（影响面）");
   // 「值得注意」仍须可见：命中关键词的评论以单行摘录带出（但**不**全量倾倒整段评论区）。
   assert.ok(body.includes("Windows 未验证"), "必须带出「值得注意」的未验证项");
