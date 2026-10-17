@@ -325,14 +325,23 @@ export function listGoalWorktrees(root: string, goalId: string): WorktreeCandida
     if (foreignBoardOwnerRoot(root, tree.path)) continue;
     const id = candidateId(assoc.goal, assoc.attempt, tree.path);
     const registered = events.filter(e => e.event === "worktree.candidate_registered" && e.details?.id === id).at(-1)?.details as any;
-    const cleaned = events.some(e => (e.event === "worktree.cleaned" || e.event === "worktree.external_removed") && e.details?.id === id);
+    // g-500 att-002 判据 2：**清理留痕不能单独证明树已消失**。
+    // 只有「事件流记过 cleaned」**且**该树此刻确实不在 `git worktree list` 实测列表里，
+    // 才算出清。否则会出现「阻断集合 ⊂ 可清理集合」的死胡同：本函数说 cleaned（⇒ deleteGoal
+    // 放行），而 listWorktrees 因注册漂移判 reuse_suspected（⇒ cleanWorktree 恒拒绝），
+    // 目标一删，那棵树就既没被清、也再无人能清 —— 正是本目标要消除的死锁的另一种形态。
+    // 这里以 Git 真源为准；事件流只用于解释「为什么它不该还在」。
+    const cleanedEvent = events.some(e => (e.event === "worktree.cleaned" || e.event === "worktree.external_removed") && e.details?.id === id);
+    const stillLive = true; // 本函数只遍历 trees(main) 实测列表 ⇒ 走到这里就说明树**此刻确实存在**
     let clean = false; try { clean = git(tree.path, ["status", "--porcelain"]) === ""; } catch { clean = false; }
     const merged = ancestor(main, tree.head, target);
     out.push({
       id, ...assoc, path: tree.path, branch: tree.branch, head: tree.head, target_branch: target,
       merged, clean, active: isActive(root, assoc.goal, assoc.attempt),
-      status: cleaned ? "cleaned" : (registered ? "candidate" : "unknown"),
-      reason: cleaned ? "user_cleaned" : null, discovered_at: nowIso(),
+      // 树实测存在 ⇒ 绝不判 cleaned（stillLive 恒真，保留变量以显式表达该不变式）。
+      status: stillLive ? (registered ? "candidate" : "unknown") : "cleaned",
+      reason: cleanedEvent && stillLive ? "reuse_suspected" : (stillLive ? null : "user_cleaned"),
+      discovered_at: nowIso(),
     });
   }
   return out;
@@ -453,7 +462,10 @@ function cleanOrphanWorktree(
   let goalFileGone = false;
   try { findGoalFile(root, c.goal); goalFileGone = false; } catch { goalFileGone = true; }
   if (!goalFileGone) return block("state_changed");
-  // 闸门 3：归属证据仍在（尝试目录 / 事件留痕）⇒ 不是孤儿，交回主干判定。
+  // 闸门 3：**在途**证据仍在（attempt 目录仍存在）⇒ 不是孤儿，交回主干判定。
+  // g-500 att-002：这里**不再**把 `attempt.started` 记录的 worktree.path 当作阻断依据 ——
+  // 那是「这棵树确属本板」的**归属凭据**，恰是孤儿清理赖以成立的前提；把它当阻断项会让
+  // 真实宿主下的孤儿**永远清不掉**（宿主每次隔离派发都会写 worktree.path ⇒ 命中率 100%）。
   if (goalAttemptEvidenceExists(root, c)) return block("state_changed");
 
   const mainWorktree = resolveCodeWorkspace(root); if (!mainWorktree) return block("git_unavailable");
@@ -476,32 +488,35 @@ function cleanOrphanWorktree(
   } catch (error) { return block(String(error instanceof Error ? error.message : error)); }
 }
 
-/** g-500：该候选是否仍留有**决定性的**板内归属证据（attempt.md 本身 / `attempt.started` 留痕）。
+/** g-500：该候选是否仍留有**在途**的板内归属证据 ⇒ 不按孤儿处理，交回主干判定。
  *
  *  这里刻意**不**把 `worktree.candidate_registered` 当作阻断依据：它恰恰是「这棵树属于本板、
  *  且本板曾把它登记为可清理候选」的**正向**凭据，正是孤儿清理要依赖的那份痕迹。若拿它阻断，
  *  孤儿路径就永远不会被走到（死锁原地保留）。
  *
- *  真正必须交回主干的是「目标/attempt 的证据还在」——那说明这不是孤儿，不该借道绕过
- *  「未交付不可清理」「attempt 活跃」等既有保护。故只认两类决定性信号：
- *   1. `attempt.md` 文件仍存在（主干的 `missing_attempt_evidence` 判定即可覆盖）；
- *   2. `attempt.started` 事件记录了**这棵树的确切路径**（说明该 attempt 的执行树就是它）。
+ *  g-500 att-002 修正：`attempt.started` 里记录的 `worktree.path` **同样不是**阻断依据。
+ *  两类痕迹的语义必须分开：
+ *   - **归属凭据（attribution）**：`attempt.started{worktree.path}` 与 `candidate_registered`
+ *     证明「这棵树是本板建的、就是它」——这是孤儿清理的**前提**，不是障碍；
+ *   - **在途证据（in-doubt）**：目标目录/attempt 记录**仍然存在**——说明目标只是未交付或在途，
+ *     该树不是孤儿，必须回到主干受「未交付不可清理」「attempt 活跃」等既有保护。
+ *
+ *  把归属凭据误当在途证据，正是本轮要修的死锁：宿主对**每一次**隔离派发都写入
+ *  `worktree.path`（实测 `.dsh-graph/events.jsonl` 中 244 条带路径记录），因此该误判会命中
+ *  **几乎每一个**孤儿，使 `cleanOrphanWorktree` 恒返回 `state_changed`——死锁不是边角情况，
+ *  而是常态。故此处只认**唯一**一类决定性信号：`attempt.md` 文件仍存在。
+ *
+ *  安全性不因这次收窄而下降：真正防止误删的是 `cleanOrphanWorktree` 的其余闸门 ——
+ *  目标必须已删除（闸门 2）、Git 实时 head/branch 与登记候选逐字相符（闸门 4）、
+ *  字面路径与 realpath 双重落在本板 canonical `.worktrees/` 内（闸门 5a/5b）、
+ *  以及主干先行拦截的跨看板归属（g-449）。这些都以 Git 真源为准，不依赖事件留痕。
  */
 function goalAttemptEvidenceExists(root: string, c: WorktreeCandidate): boolean {
   try {
     const gf = findGoalFile(root, c.goal);
     if (existsSync(join(dirname(gf), "attempts", c.attempt, "attempt.md"))) return true;
-  } catch { /* 目标已删，继续查事件 */ }
-  try {
-    const target = canonicalPath(c.path);
-    return readEvents(root).some((event) => {
-      if (event.event !== "attempt.started" || event.goal !== c.goal) return false;
-      if ((event.details as any)?.attempt !== c.attempt) return false;
-      const recorded = (event.details as any)?.worktree;
-      const path = typeof recorded === "string" ? recorded : (typeof recorded?.path === "string" ? recorded.path : null);
-      return !!path && canonicalPath(path) === target;
-    });
-  } catch { return false; }
+  } catch { /* 目标已删 ⇒ 无在途证据，按孤儿继续 */ }
+  return false;
 }
 
 /**
