@@ -135,6 +135,7 @@ cp dsh-graph-host/lib/server-i18n.js dist/lib/server-i18n.js
 cp dsh-graph-host/cordis.patch.yml dist/cordis.patch.yml
 cp dsh-graph-host/LICENSE dist/LICENSE
 cp dsh-graph-host/README.md dist/README.md
+[ -f dsh-graph-host/icon.svg ] && cp dsh-graph-host/icon.svg dist/icon.svg
 # g-496：提示词资产**合并**两层 → dist/prompts/（负责人 2026-10-14 跨宿主所有权裁定）
 #
 #   · **公共层** `prompts/`（仓库根）—— 跨宿主共用正文的唯一维护源码；
