@@ -14,6 +14,7 @@ Scoped goal definition file (read it ONLY to re-check the goal definition / crit
 - **Verdict**: exactly one verdict word (PASS / BLOCK / UNVERIFIED) on its own line; accepted forms: {{conclusionExamples}} / `## Verdict: PASS` / `**Verdict**: PASS` / `Verdict: PASS` (a lone `Verdict` line whose verdict word sits on the next non-empty line is accepted as well);
 - **Per-criterion conclusion and one-line evidence**: criterion → conclusion + evidence (command / file:line / commit).
 - **Minimal rework list when BLOCK**: directly executable items, one per line.
+- **Non-blocking notes**: issues that can ship but must be recorded.
 - **Residual risk**: what remains risky after the fix.
 - **Unverified items**: paths not covered, and why.
 

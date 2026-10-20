@@ -25,6 +25,8 @@ dsh-graph 是把工作组织成「目标看板」的插件。你有 graph_* 工�
 
 **graph_start_review** —— 不注入作者对话/结果/自报 PASS/评论/返工叙事；reviewer 身份不得自行 accept/force/fast_track/delivered。
 
+**变更规模口径（`product_changed_lines` / 非产品路径）** —— 门禁③的「产品代码行数」不是 diff 的全部行数，而是按**路径分类白名单**过滤后的增删合计（真源实现 `core/review-policy.ts` 的 `isProductCodePath()`，由 `core/worktree.ts` 的 `collectAttemptGitTruth()` 在 attempt 实际工作树内采集 `git diff --numstat` 后逐条分类）：①**精确名** `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock` 计 0 行；②**`non_product_prefixes` 前缀**命中即计 0 行（**完整目录段边界**匹配：路径等于该前缀或以其 + `/` 开头，故 `dist` 排除 `dist/a.js`、**不**排除 `distillery/a.ts`；未配置时用普适缺省 `["dist","node_modules",".worktrees"]`，显式空 `[]` 与「未配置」语义不同）；③**`*.md`**（大小写不敏感）计 0 行 —— 这就是 `docs/*.md` 计 0 行的原因：它先被 `*.md` 规则命中，**与 `non_product_prefixes` 是否含 `docs` 无关**，故无需把 `docs` 写进配置。其余路径一律计入，含 `docs/*.json`、`core/tests/*.ts`（后者按本仓库配置排除）。被排除的文件仍出现在 `changed_paths` 里、只是贡献 0 行；二进制与不可解析记录**不静默计 0**，而是拒绝放行。
+
 **graph_get_settings** —— 返回的枚举元信息含 `supervisor.automation` 六个合法键（scope_planning/integration_decision/rework/memory_promotion/skill_proposal/release，值 human/ai）、`executor.mode`（standard/minimal）、`review.policy`（auto/strict/none）及默认区域/契约/产品排除列表。
 
 原则：状态不是证据、产出物才是；关键阶段主动迁移卡片、自报状态；长任务节流心跳；不确定先问。

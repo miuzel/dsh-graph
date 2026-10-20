@@ -235,7 +235,9 @@ test("g-374 F2/F4：graph_refresh_results 单目标写入 results.md（旧版归
   assert.equal(first.items[0].archive, null, "首版无旧版");
   assert.equal(first.items[0].file, goalResultsSummaryFile(goalFile));
   assert.ok(existsSync(first.items[0].file));
-  assert.ok(readFileSync(first.items[0].file, "utf8").includes("补一条决策。"), "正文含目标历史");
+  // g-504：评论正文不再倾倒进正文，但「目标历史被读取到」仍须可证 —— 以单行计数为可见信号。
+  assert.ok(readFileSync(first.items[0].file, "utf8").includes("评论 1 条"), "正文反映目标历史（评论计数）");
+  assert.ok(!readFileSync(first.items[0].file, "utf8").includes("补一条决策。"), "g-504：评论正文不得被倾倒（反回归）");
   assert.equal(h.capturedRequests.length, before, "零 LLM：刷新摘要不得派发子代理");
 
   const second = h.call("graph_refresh_results", { goal });
@@ -312,7 +314,7 @@ test("g-374 F2/F3-a：POST /api/dsh-graph/refresh-results 与工具共用同一�
   assert.equal(ok.res.payload.written, true);
   assert.equal(ok.res.payload.file, goalResultsSummaryFile(goalFile));
   assert.equal(ok.res.payload.goal, goal);
-  assert.ok(readFileSync(goalResultsSummaryFile(goalFile), "utf8").includes("REST 用例。"));
+  assert.ok(readFileSync(goalResultsSummaryFile(goalFile), "utf8").includes("评论 1 条"), "REST 落盘正文反映目标历史");
 
   // ② 再次 POST：归档旧版（按钮上能看到归档文件名）
   const again = restCall(route, { workspace: h.ws, goal });

@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%">
+  <defs>
+    <!-- 背景渐变：深邃科技暗底 -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#121624"/>
+      <stop offset="50%" stop-color="#161c30"/>
+      <stop offset="100%" stop-color="#0e121d"/>
+    </linearGradient>
+
+    <!-- 连接线流光渐变 -->
+    <linearGradient id="lineGradH" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4f8cff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#7059ff" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="lineGradV" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4f8cff" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#00d2b4" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="lineGradDiag" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7059ff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#00d2b4" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <!-- 主节点渐变：目标（深蓝到亮蓝） -->
+    <linearGradient id="nodeGoal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3d7fff"/>
+      <stop offset="100%" stop-color="#1a56db"/>
+    </linearGradient>
+
+    <!-- 执行节点渐变：执行/流转（紫色到深紫） -->
+    <linearGradient id="nodeExec" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8c6eff"/>
+      <stop offset="100%" stop-color="#5a3ae6"/>
+    </linearGradient>
+
+    <!-- 交付/核验节点渐变：青绿（成功交付） -->
+    <linearGradient id="nodeDone" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10e7c5"/>
+      <stop offset="100%" stop-color="#05967f"/>
+    </linearGradient>
+
+    <!-- 柔和发光阴影 -->
+    <filter id="glowBlue" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#3d7fff" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glowPurple" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#7059ff" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glowTeal" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#10e7c5" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- 背景：带圆角平滑深色底座 -->
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bgGrad)"/>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="none" stroke="#2b3655" stroke-width="6" stroke-opacity="0.6"/>
+
+  <!-- 背景微网格看板列隐喻 (3列看板列背景带) -->
+  <rect x="180" y="160" width="180" height="704" rx="24" fill="#ffffff" fill-opacity="0.02"/>
+  <rect x="422" y="160" width="180" height="704" rx="24" fill="#ffffff" fill-opacity="0.03"/>
+  <rect x="664" y="160" width="180" height="704" rx="24" fill="#ffffff" fill-opacity="0.02"/>
+
+  <!-- 拓扑连接图边线 (Graph 节点连线) -->
+  <line x1="270" y1="360" x2="512" y2="360" stroke="url(#lineGradH)" stroke-width="14" stroke-linecap="round"/>
+  <line x1="270" y1="360" x2="270" y2="660" stroke="url(#lineGradV)" stroke-width="14" stroke-linecap="round"/>
+  <line x1="270" y1="660" x2="754" y2="660" stroke="url(#lineGradH)" stroke-width="14" stroke-linecap="round"/>
+  <line x1="512" y1="360" x2="754" y2="660" stroke="url(#lineGradDiag)" stroke-width="14" stroke-linecap="round"/>
+  <line x1="512" y1="360" x2="754" y2="360" stroke="url(#lineGradH)" stroke-width="10" stroke-linecap="round" stroke-dasharray="16 16" stroke-opacity="0.6"/>
+
+  <!-- 节点 1：规划与目标（左上，蓝色） -->
+  <g filter="url(#glowBlue)">
+    <rect x="190" y="280" width="160" height="160" rx="44" fill="url(#nodeGoal)"/>
+    <!-- 标靶 / 目标图标 -->
+    <circle cx="270" cy="360" r="40" fill="none" stroke="#ffffff" stroke-width="8" stroke-opacity="0.9"/>
+    <circle cx="270" cy="360" r="18" fill="#ffffff"/>
+  </g>
+
+  <!-- 节点 2：执行与流转（右上，紫色） -->
+  <g filter="url(#glowPurple)">
+    <rect x="674" y="280" width="160" height="160" rx="44" fill="url(#nodeExec)"/>
+    <!-- 节点内看板卡片堆叠隐喻 -->
+    <rect x="714" y="326" width="80" height="20" rx="8" fill="#ffffff" fill-opacity="0.95"/>
+    <rect x="714" y="358" width="56" height="16" rx="6" fill="#ffffff" fill-opacity="0.65"/>
+    <rect x="714" y="384" width="70" height="16" rx="6" fill="#ffffff" fill-opacity="0.4"/>
+  </g>
+
+  <!-- 节点 3：决策与分流中心（中上小枢纽） -->
+  <circle cx="512" cy="360" r="28" fill="#1b243d" stroke="#5a7fff" stroke-width="8"/>
+  <circle cx="512" cy="360" r="10" fill="#7059ff"/>
+
+  <!-- 节点 4：信息收集与上下文（左下，蓝青） -->
+  <g filter="url(#glowBlue)">
+    <rect x="190" y="580" width="160" height="160" rx="44" fill="url(#nodeGoal)"/>
+    <!-- 上下文卡片隐喻 -->
+    <rect x="232" y="628" width="76" height="64" rx="14" fill="none" stroke="#ffffff" stroke-width="8" stroke-opacity="0.9"/>
+    <line x1="252" y1="652" x2="288" y2="652" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
+    <line x1="252" y1="668" x2="276" y2="668" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
+  </g>
+
+  <!-- 节点 5：交付与质量验收（右下，翠绿色成功节点） -->
+  <g filter="url(#glowTeal)">
+    <rect x="674" y="580" width="160" height="160" rx="44" fill="url(#nodeDone)"/>
+    <!-- 验证勾选 / 完成图标 -->
+    <path d="M720 660 L744 684 L788 636" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

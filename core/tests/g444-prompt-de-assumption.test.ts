@@ -837,7 +837,11 @@ test("g-444 B②：子代理上限文案（工具侧 + GUI 侧）不写死版本
 test("g-444 B③：attempt 尾注骨架不含 npm 插件生态词（宿主 / engines / host）", () => {
   for (const [side, text] of [["zh", ATTEMPT_REPORT_SKELETON], ["en", ATTEMPT_REPORT_SKELETON_EN]] as const) {
     assert.doesNotMatch(text, /宿主|engines|\bhost\b/, `${side} 骨架仍含 npm 插件生态词`);
-    assert.match(text, /4\. \*\*(影响面|Impact surface)\*\*/, `${side} 骨架必须仍含第 4 项影响面`);
+    // g-504 解耦后条目由 8 项收敛为 6 项，「影响面」不再固定在第 4 位 ⇒ 断言改为**序号无关**的语义不变式
+    // （仍然要求：有编号条目、且其中恰有一条以「影响面 / Impact surface」为题）。口径不放松。
+    assert.match(text, /^\d+\. \*\*(影响面|Impact surface)\*\*/m, `${side} 骨架必须仍含「影响面」条目`);
+    assert.equal((text.match(/^\d+\. \*\*/gm) ?? []).length, 6, `${side} 骨架应恰 6 项逐项必填`);
+    for (let i = 1; i <= 6; i++) assert.ok(text.includes(`${i}. **`), `${side} 骨架条目编号必须连续：缺 ${i}`);
   }
 });
 

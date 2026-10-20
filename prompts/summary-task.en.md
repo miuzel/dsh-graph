@@ -6,13 +6,12 @@ Workspace-relative goal.md path: {{goalRel}}
 ## Material digest (generated deterministically from the goal's own history; facts only)
 {{digest}}
 
-## What the summary must answer (this is the point)
-Ground the summary in the goal's *details*, not in fields already visible on the board card:
-- what changes this goal actually involves (per attempt brief / commit / delivered file),
-- what impact and hard constraints it carries (verbatim from the goal description),
-- what deserves attention (review verdicts, known risks, rework constraints, unverified items).
-Never restate card fields (title / status / version / attempt counts) as the substance.
-
+## What this summary is (the point of this revision)
+This is a **final-delivery brief** for a reader who only wants to know what was finally delivered and whether it can be trusted:
+- state the **final outcome only**: what changed in the end (by file/module), the core design and its impact;
+- state **verification and residual risk only**: verification results (command plus conclusion), unverified items, known defects;
+- **never retell comment-thread churn or the history of rework** (who said what when, how many rounds a plan flip-flopped) - that belongs to the activity log, not to the completion summary; earlier attempts appear only as one-line entries under evidence references.
+- Never restate card fields (title / status / version / attempt counts) as the substance, and do not act as a copier of the goal description or criteria text.
 ## Required body structure (markdown, body only; the tool adds the machine header)
 {{structureLines}}
 The section headings above are **always the canonical Chinese literals** shown here: they are a machine format contract of `results.md` (identical across deterministic / llm / manual sources and independent of UI language). Do not translate or reword them; write the body text in the goal's language.
@@ -28,8 +27,9 @@ Read goal.md (and results-att-*.md when you need the full delivered text) before
 
 ## Constraints
 - Facts only: quote criteria, file paths, commits and commands; anything unproven goes in as "unverified / to confirm".
-- Keep the main body under ~4000 characters; follow the goal's language (zh/en); no charts, no cross-goal aggregation.
+- Keep the body **under 1200 characters** (a final-delivery brief: the tighter the better); follow the goal's language (zh/en); no charts, no cross-goal aggregation.
+- Quote each criterion verbatim with its existing `✅ verified` mark; never decide verification yourself.
 - Do not create attempts, do not call graph_transition / graph_create_goal; you are not a supervisor.
+- Report the outcome compactly; do not pad the summary with restated history.
 
 Finish with a single report line: [summary:{{goalId}}] file=... archive=...
-

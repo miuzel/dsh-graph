@@ -93,6 +93,7 @@ import {
   addSharedCardRef,
   deleteSharedCard,
   removeSharedCardRef,
+  detachSharedCardRef,
   convertOwnedToShared,
   convertSharedToOwned,
   sharedCards,
@@ -546,6 +547,8 @@ const objOut = {
 };
 const str = { type: "string" };
 const strArr = { type: "array", items: { type: "string" } };
+/** g-501：布尔参数的字面量简写（与 str/strArr 同风格；既有工具里 { type:"boolean" } 逐字等价）。 */
+const bool = { type: "boolean" };
 
 // supervisor attempt 的关键事实必须结构化传入，不从 brief/directive 的自然语言猜测。
 const ATTEMPT_TASK_TYPE_LABELS = Object.freeze({ merge: "合入", rewrite: "重写", fix: "修复" });
@@ -1316,9 +1319,8 @@ const PROMPT_MARKER_REPLACEMENTS = {
     // 模式小节标题：`standard` 无策略片段（不注入该段），故当前唯一可达值是 minimal。
     [/## Subagent execution mode \(minimal\)/g, "## in-text: Subagent execution mode (minimal)"],
     [/## Hand-back report skeleton \(tail note - every item required; a missing item means the delivery is incomplete\)/g, "## in-text: Hand-back report skeleton (tail note - every item required; a missing item means the delivery is incomplete)"],
-    [/### A\. executor report \(8 required items\)/g, "### in-text: A. executor report (8 required items)"],
-    [/### B\. reviewer report \(6 required items\)/g, "### in-text: B. reviewer report (6 required items)"],
-    [/### C\. Report length budget \(soft cap; exceeding it is not a failed delivery, but you must self-report\)/g, "### in-text: C. Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)"],
+    [/### Executor report \(6 required items\)/g, "### in-text: Executor report (6 required items)"],
+    [/### Report length budget \(soft cap; exceeding it is not a failed delivery, but you must self-report\)/g, "### in-text: Report length budget (soft cap; exceeding it is not a failed delivery, but you must self-report)"],
   ],
 };
 
@@ -3423,12 +3425,27 @@ export function apply(ctx, config) {
     },
     {
       // g-128：删除上下文卡片（删文件 + 移除 context_cards 引用 + 记 card.deleted 事件，事件先行 R-02）
+      // g-501：①零引用共享卡可直接删除（非零引用仍严格拒绝，避免删掉其他 goal 在用的实体）；
+      //        ②本工具**不受任何 harness 模块开关管理** ⇒ 会话内 shared_cards:false 关闭时它仍在可见
+      //          工具面内，故新增 detach_only 开关作为「保底解除引用」通道（不依赖被裁剪的共享池工具）。
       def: {
         name: "graph_delete_card",
-        description: "删除目标的上下文卡片（删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件，事件先行 R-02）。正在收集中的卡片（status=collecting）不可删除。",
-        parameters: params({ goal: str, card: str }, ["goal", "card"]),
+        description: "删除目标的上下文卡片（删卡片文件 + context_cards 移除引用 + 记 card.deleted 事件，事件先行 R-02）。正在收集中的卡片（status=collecting）不可删除。零引用的共享卡可直接删除；非零引用共享卡严格拒绝（请先解除引用）。detach_only=true 时只解除引用不删除（卡本体保留共享池），用于 shared_cards 模块关闭、无共享池工具时的保底解引用。",
+        parameters: params({ goal: str, card: str, detach_only: bool }, ["goal", "card"]),
       },
-      run: (a, ex) => { deleteCard(rootFor(ex), a.goal, a.card, { actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => {
+        const root = rootFor(ex);
+        if (a.detach_only === true) {
+          // g-501：保底解除引用——与 graph_detach_shared_card 同一 ops 路径与鉴权口径
+          //（owner/主管；先鉴权后调用 ⇒ 拒绝零副作用），只是入口不被模块开关裁剪。
+          const actor = unbindActorOf(ex, root);
+          authorizeSharedCardLink(root, actor, goalCreatedBy(root, a.goal));
+          const refCount = detachSharedCardRef(root, a.goal, a.card, actor);
+          return { ok: true, card: a.card, detached: true, refCount };
+        }
+        const res = deleteCard(root, a.goal, a.card, { actor: actorOf(ex) });
+        return { ok: true, card: res.card, scope: res.scope, refCount: res.refCount };
+      },
     },
     {
       // g-304：将 goal 自有卡转换为共享卡（封装 convertOwnedToShared）。
@@ -4290,7 +4307,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_clean_worktree",
-        description: "用户明确选择后清理已实时验证的 worktree；默认不删除分支。",
+        description: "用户明确选择后清理已实时验证的 worktree；默认不删除分支。支持安全清理已删除目标的残留孤儿工作树（消除 missing_attempt_evidence 阻断）。",
         parameters: params({ id: str, confirm: { type: "boolean" } }, ["id", "confirm"]),
       },
       run: (a, ex) => {
@@ -4318,7 +4335,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_delete_goal",
-        description: "删除已归档目标（含其卡片/attempts 目录）。仅已归档目标可删除，且不能有活跃子代理。记 goal.deleted 事件。",
+        description: "删除已归档目标（含其卡片/attempts 目录）。仅已归档目标可删除，且不能有活跃子代理；若目标仍有关联未清理的工作树则阻断并提示先清理。记 goal.deleted 事件。",
         parameters: params({ goal: str }, ["goal"]),
       },
       run: (a, ex) => { deleteGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },

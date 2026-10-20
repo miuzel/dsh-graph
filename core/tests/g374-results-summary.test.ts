@@ -23,6 +23,8 @@ import {
   moveGoal,
   GOAL_RESULTS_MAX_BYTES,
   GOAL_RESULTS_READ_TOTAL_MAX_BYTES,
+  GOAL_RESULTS_BODY_MAX_BYTES,
+  RESULTS_SOURCE_LLM,
   RESULTS_ARCHIVE_PATTERN,
   RESULTS_SUMMARY_NAME,
 } from "../ops.ts";
@@ -36,7 +38,12 @@ import { dirEntries, assertNoNewEntries } from "./_residue-guard.ts";
 // 与 core/ops.ts 的 OVERWRITE_NOTE 逐字一致（该常量不导出，F1 测试亦同法）
 const OVERWRITE_NOTE = "本文件由机器生成，下次写入整体覆盖";
 
-const SECTIONS = ["## 结论", "## 判据达成", "## 证据引用", "## 关键决策", "## 时间线", "## 来源"];
+// g-504 去冗余瘦身：确定性正文只保留「终态交付快照」四节。
+// 旧六节里的 `## 关键决策`（评论区 + 3000 字指令原文）与 `## 时间线`（30 条事件）是**整体搬运**，
+// 本就在目标弹窗「详情」「活动」Tab 可见 ⇒ 已删除。本清单是**强契约**：多一节（回归倾倒）或少一节都判红。
+const SECTIONS = ["## 交付快照", "## 判据达成", "## 证据引用", "## 来源"];
+/** g-504 反回归：这些节**不得**再出现（旧版的体积膨胀来源）。 */
+const REMOVED_SECTIONS = ["## 关键决策", "## 时间线", "## 改动与影响", "## 结论"];
 
 function setup({ withVersion = true }: { withVersion?: boolean } = {}) {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-f2-"));
@@ -75,7 +82,7 @@ function seed(root: string, goal: string) {
 // 判据 4-a：由目标历史确定性重写（节齐全、机器头完整、非覆盖式说明）
 // ============================================================================
 
-test("g-374 F2：由目标历史重写 results.md——六节齐全 + 规范化机器头 + 生成时间与来源节", () => {
+test("g-374 F2/g-504：由目标历史重写 results.md——终态交付四节齐全 + 反回归（旧胖节不得复活）", () => {
   const { root, goal, goalFile } = setup();
   const attempt = seed(root, goal);
 
@@ -91,6 +98,8 @@ test("g-374 F2：由目标历史重写 results.md——六节齐全 + 规范化�
 
   const raw = readFileSync(file, "utf8");
   for (const s of SECTIONS) assert.ok(raw.includes(s), `缺小节：${s}`);
+  // g-504 反回归（负向对照）：旧版的体积膨胀节一旦被改回来（倾倒评论/指令/事件），本断言必红。
+  for (const s of REMOVED_SECTIONS) assert.ok(!raw.includes(s), `g-504 瘦身后不得再出现小节：${s}`);
   assert.match(raw, /^<!-- dsh-graph:results:begin -->/, "机器头起始标记");
   for (const field of [
     "kind: summary", "generated_at: ", `goal: ${goal}`, "title: 规范化摘要", "status: ",
@@ -103,14 +112,22 @@ test("g-374 F2：由目标历史重写 results.md——六节齐全 + 规范化�
   assert.ok(raw.includes("旧版自动归档") || raw.includes("本次为首版"), "必须说明归档策略");
   assert.ok(raw.includes("零 LLM 拼装"), "必须声明零 LLM 来源");
   assert.ok(raw.includes("✅") && raw.includes("⬜"), "判据达成如实转述 goal.md 的 ✅已验 标记（不做语义判定）");
-  assert.ok(raw.includes("交付正文第一行"), "最近交付取自 attempt 结果文件");
+  assert.ok(raw.includes("交付正文第一行"), "交付快照的终态交付取自 attempt 结果文件");
   assert.ok(raw.includes(`\`${attempt}\``), "证据引用列出 attempt");
-  assert.ok(raw.includes("关键决策：先做 F1。"), "关键决策含评论");
   // 判据 4：证据引用必须带上 attempt 的提交与基线（commit 来源，零 git 调用）
-  assert.ok(raw.includes("baseline=deadbeefcafe0123456789abcdef0123456789ab"), "证据引用含基线 commit");
-  assert.ok(/attempt=`att-001`；executor=/.test(raw), "证据引用列出 attempt 与执行者");
-  assert.ok(raw.includes("只做规范化摘要。"), "关键决策含最近指令");
-  assert.ok(raw.includes("goal.created"), "时间线含事件");
+  assert.ok(raw.includes("baseline=`deadbeefcafe0123456789abcdef0123456789ab"), "证据引用含基线 commit");
+  assert.ok(new RegExp(`^- attempt=\`${attempt}\`(；commit=[0-9a-f]+)?；终态=`, "m").test(raw),
+    "证据引用为单行紧凑索引：attempt（+ 可选 commit）+ 终态");
+  // g-504 反回归：前序 attempt 的 brief 与验收项不得再逐条展开（旧版在结论与证据引用里各展开一次）。
+  assert.ok(!raw.includes("任务 brief："), "g-504：证据引用不再展开 attempt brief");
+  assert.ok(!raw.includes("本次验收项："), "g-504：证据引用不再展开验收项");
+  // g-504：终态成果绝不因瘦身而丢失 —— 结果文件的一手交付首句仍必须在正文里。
+  assert.ok(raw.includes("结果文件="), "交付快照含结果文件定位");
+  assert.ok(raw.includes("事件留痕："), "事件改为单行计数（不再列 30 条时间线）");
+  assert.ok(raw.includes("明细见目标弹窗"), "必须指路弹窗详情/活动 Tab，说明明细未丢只是不再搬运");
+  // g-504：事件不再逐条列时间线 —— 但「事件台账」这一事实仍须可见（改为计数），不得整体消失。
+  assert.ok(/事件留痕：.*×/.test(raw), "事件以计数留痕（旧版逐条列 30 条时间线）");
+  assert.ok(!/^- \d{4}-\d{2}-\d{2}T.*｜.*｜goal\./.test(raw), "g-504：不得再逐条列事件时间线（反回归）");
 
   // 事件先行：写入事件载荷完整
   const evs = summaryEvents(root, "goal.results_summary_written");
@@ -201,9 +218,12 @@ test("g-374 F2：重复刷新 = 每次重写 + 每次归档；旧版逐字保留
 
   // 旧版逐字保留（这就是「不丢历史」的判据）
   assert.equal(readFileSync(second.archive!, "utf8"), v1, "归档内容必须与旧版逐字一致");
-  // 新版已更新（含新评论），且归档与 attempt 结果文件互不干扰
+  // 新版已更新（g-504 起评论**正文不再倾倒**，故以「单行计数」为可见变化信号 —— 比断言评论原文更稳，
+  // 且同样能证伪「第二次刷新没重写」。计数不入评论区正文，但如实反映历史变化。）
   const v2 = readFileSync(second.file, "utf8");
-  assert.ok(v2.includes("第二次决策。"));
+  assert.ok(v1.includes("评论 1 条") && v2.includes("评论 2 条"),
+    "g-504：评论区改为单行计数，新评论仍必须体现为可见变化");
+  assert.ok(!v2.includes("第二次决策。"), "g-504：评论正文不得再被全量倾倒进完成摘要（反回归）");
   assert.notEqual(v2, v1);
   assert.deepEqual(
     readdirSync(dir).filter((n) => RESULTS_ARCHIVE_PATTERN.test(n)),
@@ -390,9 +410,14 @@ test("g-374 F2：读取总量预算——超预算的 attempt 结果文件不下
 
 test("g-374 F2：summary 截断——超上限时截断并在机器头与文件内双标注（不切坏多字节字符）", () => {
   const { root, goal, goalFile } = setup();
-  // 造一个超长指令（> maxBytes），使规范化正文必然超上限
-  setGoalDirective(root, goal, "长指令".repeat(4000), "human:gui");
-  const res = refreshGoalResults(root, goal, { actor: "human:gui", maxBytes: 2048 });
+  // g-504：确定性正文已被压到 5 KiB 以内，**不再可能**靠「超长指令」撑爆正文（那正是被删掉的倾倒面）。
+  // 截断是写入器的**通用**防线（对 llm / manual 正文同样生效），故改用调用方正文作为超限载体 —— 口径不变、
+  // 且比旧写法更能覆盖真实超限来源。
+  const res = refreshGoalResults(root, goal, {
+    actor: "human:gui", maxBytes: 2048,
+    content: "长正文".repeat(4000),
+    source: RESULTS_SOURCE_LLM,
+  });
   assert.equal(res.written, true);
   assert.equal(res.truncated, true);
   assert.ok(res.bytes <= 2048 && res.bytes >= 2044, `截断后字节数应贴近上限（实际 ${res.bytes}）`);
@@ -403,4 +428,138 @@ test("g-374 F2：summary 截断——超上限时截断并在机器头与文件�
   assert.ok(!raw.includes("\uFFFD"), "不得切坏多字节字符");
   assert.equal(goalResults(root, goal).summary!.truncated, true, "回读标注一致");
   assert.ok(raw.includes(OVERWRITE_NOTE));
+});
+
+test("g-504 判据 1：中长目标确定性正文 ≤5 KiB——旧版会把评论/指令/事件倾倒回 26–94 KB（反回归）", () => {
+  const { root, goal } = setup();
+  seed(root, goal);
+  // 造出典型「中长目标」的历史：大量评论 + 超长指令 + 更多 attempt。
+  for (let i = 0; i < 40; i++) appendGoalComment(root, goal, `评论 ${i}：` + "历史讨论内容与裁决。".repeat(40), "human:gui");
+  setGoalDirective(root, goal, "## 本次任务\n" + "很长的指令沿革正文。".repeat(300), "human:gui");
+  const res = refreshGoalResults(root, goal, { actor: "human:gui" });
+  assert.equal(res.written, true);
+  assert.equal(res.truncated, false, "中长目标不应触发截断（说明正文本身已足够小）");
+  assert.ok(res.bytes <= GOAL_RESULTS_BODY_MAX_BYTES,
+    `中长目标正文必须 ≤ ${GOAL_RESULTS_BODY_MAX_BYTES} 字节（实际 ${res.bytes}）：旧版此规模即 26–94 KB`);
+  const raw = readFileSync(res.file, "utf8");
+  // 「瘦身」不得靠丢终态成果实现：终态交付、判据、证据三样必须仍在。
+  for (const s of SECTIONS) assert.ok(raw.includes(s), `瘦身后仍必须含：${s}`);
+  assert.ok(raw.includes("交付正文第一行"), "终态交付成果不得因瘦身而丢失");
+  assert.ok(!raw.includes("评论 39："), "40 条评论的正文不得被倾倒（只留计数）");
+  assert.ok(!raw.includes("很长的指令沿革正文"), "最近指令原文不得被照搬（只留有无）");
+  assert.ok(raw.includes("评论 41 条"), "评论改为单行计数，仍如实反映历史规模");
+});
+
+// ============================================================================
+// g-504 att-002 修复：终态交付快照定序错配（三要素必须同源同一 attempt 实体）
+// ============================================================================
+
+/** 造出多 attempt 目标：每个 attempt 各有**可区分的 baseline / commit / 结果文件正文**。 */
+function seedTwoAttempts(root: string, goal: string) {
+  const baseline = (n: number) => String(n).repeat(40);
+  const a1 = startAttempt(root, goal, { executor: "agent:e1", actor: "human:gui", baselineCommit: baseline(1) });
+  writeAttemptResults(root, {
+    goal, attempt: a1, source: "subagent/end", childId: "c1", stopReason: "completed",
+    text: "第一次交付：旧成果",
+  });
+  const a2 = startAttempt(root, goal, { executor: "agent:e2", actor: "human:gui", baselineCommit: baseline(2) });
+  writeAttemptResults(root, {
+    goal, attempt: a2, source: "subagent/end", childId: "c2", stopReason: "completed",
+    text: "第二次交付：新成果",
+  });
+  return { a1, a2, baseline };
+}
+
+test("g-504 att-002：交付快照三要素与最新 attempt **严格同源**——两个投影定序相反也不得首末倒置", () => {
+  const { root, goal } = setup();
+  const { a1, a2, baseline } = seedTwoAttempts(root, goal);
+
+  // 事故根因先钉死：两个投影的**定序方向相反**（这正是旧实现各自下标取首即错配的原因）。
+  const detail = goalDetail(root, goal);
+  assert.deepEqual(detail.attempts.map((a: any) => a.id), [a1, a2],
+    "goalDetail.attempts 为升序（readdirSync 序）——最老的在前");
+  assert.deepEqual(detail.results.attempts.map((a: any) => a.attempt), [a2, a1],
+    "results.attempts 为降序（最新优先）——与上面相反");
+
+  const res = refreshGoalResults(root, goal, { actor: "human:gui" });
+  const raw = readFileSync(res.file, "utf8");
+
+  // ① 终态交付行必须绑定**最新** attempt（旧实现绑 att-001 ⇒ 本断言必红）。
+  const deliver = raw.split("\n").find((l) => l.includes("- 终态交付（"))!;
+  assert.ok(deliver.includes(`attempt=\`${a2}\``), `终态交付必须指向最新 attempt：${deliver}`);
+  assert.ok(!deliver.includes(`attempt=\`${a1}\``), "终态交付不得再指向最老 attempt");
+  assert.ok(deliver.includes("第二次交付：新成果"), "终态交付成果取自最新 attempt 的结果文件");
+  assert.ok(!deliver.includes("第一次交付：旧成果"), "旧 attempt 的成果不得冒充终态交付");
+
+  // ② 交付定位（commit / baseline / 结果文件）每一项都必须来自**同一个**最新 attempt 实体。
+  const locate = raw.split("\n").find((l) => l.includes("- 交付定位："))!;
+  assert.ok(locate.includes(`baseline=\`${baseline(2)}\``), `baseline 必须是最新 attempt 的：${locate}`);
+  assert.ok(!locate.includes(baseline(1)), "baseline 不得混入最老 attempt 的值");
+  assert.ok(locate.includes(`结果文件=\`results-${a2}.md\``), `结果文件必须是 att-002 的：${locate}`);
+  assert.ok(!locate.includes(`results-${a1}.md`), "结果文件不得混入最老 attempt 的");
+
+  // ③ 三要素**同源一致性**：从「交付定位」里解析出的 attempt / baseline / 结果文件必须自洽互指。
+  const mAtt = /attempt=`([^`]+)`/.exec(deliver)!;
+  const mBase = /baseline=`([^`]+)`/.exec(locate)!;
+  const mFile = /结果文件=`([^`]+)`/.exec(locate)!;
+  assert.equal(mAtt[1], a2);
+  assert.equal(mFile[1], `results-${mAtt[1]}.md`, "结果文件名必须与被绑定 attempt 严格同源（同名映射）");
+  assert.equal(mBase[1], baseline(2));
+  const a2Meta = detail.attempts.find((a: any) => a.id === a2)!;
+  assert.equal(mBase[1], a2Meta.baseline_commit, "baseline 必须逐字等于该 attempt 记录里的值（不得取自他者）");
+  assert.equal(baseline(1), detail.attempts.find((a: any) => a.id === a1)!.baseline_commit,
+    "对照：att-001 的 baseline 确实不同（证明上面的断言非同值恒真）");
+});
+
+test("g-504 att-002：证据引用按最新优先定序，且逐 attempt 结果文件一一对应（不张冠李戴）", () => {
+  const { root, goal } = setup();
+  const { a1, a2 } = seedTwoAttempts(root, goal);
+  const res = refreshGoalResults(root, goal, { actor: "human:gui" });
+  const raw = readFileSync(res.file, "utf8");
+
+  const rows = raw.split("\n").filter((l) => /^- attempt=`/.test(l));
+  assert.equal(rows.length, 2, "两个 attempt 各一行紧凑索引");
+  // 证据引用与终态快照**共用同一份已定序序列**（最新在前）——旧实现此处为升序，与快照不一致。
+  assert.ok(rows[0].includes(`attempt=\`${a2}\``), `证据引用首行应为最新 attempt：${rows[0]}`);
+  assert.ok(rows[1].includes(`attempt=\`${a1}\``), `证据引用末行应为最老 attempt：${rows[1]}`);
+
+  // 逐行「attempt ↔ 结果文件」必须一一对应（旧实现用未定序序列查找，仍会对，但这里锁死契约）。
+  assert.ok(rows[0].includes(`结果=\`results-${a2}.md\``), "最新 attempt 行必须指向自己的结果文件");
+  assert.ok(!rows[0].includes(`results-${a1}.md`), "最新 attempt 行不得指向他者的结果文件");
+  assert.ok(rows[1].includes(`结果=\`results-${a1}.md\``), "最老 attempt 行必须指向自己的结果文件");
+
+  // 交付快照与证据引用**首行同指**最新 attempt（同源、同序）。
+  const deliver = raw.split("\n").find((l) => l.includes("- 终态交付（"))!;
+  assert.ok(deliver.includes(`\`${a2}\``) && rows[0].includes(`\`${a2}\``),
+    "交付快照与证据引用必须同指最新 attempt（消除首末倒置）");
+});
+
+test("g-504 att-002 反回归：result 文件与 attempt 的映射按 id **精确匹配**——错配版本必红", () => {
+  const { root, goal } = setup();
+  const { a1, a2 } = seedTwoAttempts(root, goal);
+  const res = refreshGoalResults(root, goal, { actor: "human:gui" });
+  const raw = readFileSync(res.file, "utf8");
+  const deliver = raw.split("\n").find((l) => l.includes("- 终态交付（"))!;
+  const locate = raw.split("\n").find((l) => l.includes("- 交付定位："))!;
+
+  // 负向对照：显式构造「旧错配形态」的字符串，证明上面的断言**不是恒真**——
+  // 若实现退回 `attempts[0]` + `resultsFiles[0]` 拼装，产出的正是这一行，且会被 ① 判红。
+  const mismatched = `- 终态交付（attempt=\`${a1}\`）：${a2}`;
+  assert.ok(!deliver.startsWith(`- 终态交付（attempt=\`${a1}\``),
+    `不得产出「最老 attempt 混搭最新结果文件」的错配形态（旧版即 ${mismatched}）`);
+  assert.ok(!/attempt=`att-001`[\s\S]*结果文件=`results-att-002\.md`/.test(deliver + locate),
+    "同一快照内 attempt=att-001 与 results-att-002.md 不得共存（三要素张冠李戴）");
+
+  // 单 attempt 目标仍工作（边界：无多 attempt 可比时不得崩、不得空态化）。
+  const solo = setup();
+  const only = startAttempt(solo.root, solo.goal, {
+    executor: "agent:e1", actor: "human:gui", baselineCommit: "c".repeat(40),
+  });
+  writeAttemptResults(solo.root, {
+    goal: solo.goal, attempt: only, source: "subagent/end", childId: "s1", stopReason: "completed",
+    text: "唯一交付",
+  });
+  const soloRaw = readFileSync(refreshGoalResults(solo.root, solo.goal, { actor: "human:gui" }).file, "utf8");
+  assert.ok(soloRaw.includes(`attempt=\`${only}\``), "单 attempt 目标仍绑定该 attempt");
+  assert.ok(soloRaw.includes(`结果文件=\`results-${only}.md\``), "单 attempt 目标的结果文件仍同源");
 });
