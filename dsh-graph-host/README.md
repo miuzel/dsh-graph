@@ -40,7 +40,7 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.21.0（本版发布候选串；开发线此前沿用的版本串为 `0.20.2`）。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.22.0。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
 **宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
@@ -50,17 +50,17 @@ dsh plugin --profile <profile-name> add dsh-graph
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；H 系列共享探针在本版全绿） |
 | 原生 Windows | ⏳ **本版结论一律以台账为准**：真机轮次结论（逐版本、逐宿主代际）登记在 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（该文档**不随包发布**）—— **本行不预称任何轮次结果，也不得读出「已通过」**。台账中已完成的历史轮次示例：`v0.20.1`（2026-10-10，`win32/x64` + Node `v24.21.0`，宿主 `0.2.0-rc.2` 与 `0.2.1-alpha.2` 两代际，T1–T5 = 通过 15 / 失败 0 / 告警 1、T3 = 32/32 步）—— 历史轮次**只覆盖安装 / 启动 / REST 层**，且只覆盖该版本的产品代码，**不替代**本版结论。 |
-| macOS | ⏳ **本版未验证**：`v0.21.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（不随包发布）为准。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖各自版本的产品代码。 |
+| macOS | ⏳ **本版未验证**：`v0.22.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（不随包发布）为准。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖各自版本的产品代码。 |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.21.0）**
+**最新亮点（v0.22.0）**
 
-- **全新「📖 使用说明」中心与 Graph Engineering 体系**：看板顶栏新增一体化使用说明弹窗，包含五大主题页签（使用说明、提示词模板、工具清单、常见问题与 Graph 设计）；完整阐述 Graph Engineering（图工程）设计理念，并提供全部 51 个工具的分类表格与简称速查。
-- **提示词渐进式披露与单源化重构**：全面精简每轮恒定注入的系统提示词，主管常驻纪律削减超过 58%；所有提示词正文统一收口至 Markdown 资产单一真源，消除硬编码副本，杜绝中英文不对称。
-- **工作区级模块真裁剪**：支持在工作区按需关闭标签、记忆、共享卡片、附件等功能模块；关闭后对应工具从模型工具集中彻底移除、系统提示词段同步隐去，且看板相关入口自动隐藏。
-- **设置弹窗信息架构升级与双语无缝热重载**：设置弹窗全面 Tab 化，说明文字 Tooltip 化；提示词与技能指南全面跟随 DSH 语言偏好，并支持在线热切换中英文实时生效。
-- **多处健壮性与操作体验优化**：修复判据反馈在无执行会话时的转交路由、放宽评审 Markdown 标题解析容错、加固多实例本地插件软链冲突检测，并优化大屏与窄屏下的双栏独立滚动交互。
+- **完成摘要去冗余瘦身与交回报文精简**：目标弹窗的「完成摘要」页签全面重构，告别动辄数十 KB 的历史评论与流程沿革全量搬运，收敛为聚焦最新成果、判据达成与自动化证据引用的「终态交付快照」；子代理交回报文骨架彻底解耦执行者与评审者结构，阅读负担与无谓 Token 消耗直降 90% 以上。
+- **目标删除与隔离工作树清理防护闭环**：删除已归档目标前主动检测其关联的 Git 隔离工作树，存在未清理分支树时严格阻断，防止残留失控；同时支持安全清理已删除目标的残留孤儿工作树，彻底消解真实宿主归属标记下的清理死锁。
+- **共享卡片全生命周期与保底解除通道**：工具层补齐安全删除零引用共享卡片的能力（非零引用严格拒绝）；在工作区按需裁剪关闭共享卡片模块后，依然为目标保留保底解除引用的操作手段，彻底根除模块裁剪时的配置死锁。
+- **目标流转评审记录自愈消除死链**：目标在跨版本排期、移回独立目录或归档/取消归档移动过程中，其历史独立评审记录自动同步重写文件新路径，根除因目标物理搬迁导致的评审报告死链。
+- **全新官方插件图标与评审统计口径披露**：新增符合 DSH 插件规范的高质感拓扑看板官方矢量图标（`icon.svg`）；并在使用说明中完整披露代码评审变更规模统计中非产品路径（如 `docs/*`）的白名单判定与计算规则，消除认知与策略偏差。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -283,7 +283,7 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.21.0 (this release-candidate string; `0.20.2` was the development version string carried by the dev line). **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.22.0. **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
 **Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
@@ -293,17 +293,17 @@ dsh plugin --profile <profile-name> add dsh-graph
 |----------|-------------------------|
 | Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures; the shared H-series probes are all green on this release) |
 | Native Windows | ⏳ **The verdict for this release is the ledger, and only the ledger**: on-device round results (per version, per host DSH generation) are recorded in the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (**that document is not shipped inside the package**) — **this row pre-claims no round result and must not be read as "passed"**. Example of a completed historical round in that ledger: `v0.20.1` (2026-10-10, `win32/x64` + Node `v24.21.0`, host DSH generations `0.2.0-rc.2` and `0.2.1-alpha.2`; T1–T5 15 passed / 0 failed / 1 warning, T3 32/32 steps) — historical rounds **cover the install / boot / REST layers only** and only that version's product code, so they **do not substitute** for this release's verdict. |
-| macOS | ⏳ **Not verified for this release**: `v0.21.0` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**; the verdict likewise comes from the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (not shipped in the package). Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and cover each of those versions' product code only. |
+| macOS | ⏳ **Not verified for this release**: `v0.22.0` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**; the verdict likewise comes from the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (not shipped in the package). Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and cover each of those versions' product code only. |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.21.0)**
+**What's new (v0.22.0)**
 
-- **All-new "📖 Usage Guide" center & Graph Engineering architecture**: adds an integrated help modal to the kanban header with five themed tabs (Usage, Prompt templates, Tool reference, FAQ, and Graph design); comprehensively articulates the Graph Engineering methodology and provides categorized tables with aliases for all 51 tools.
-- **Progressive disclosure & single-source prompt refactoring**: dramatically streamlines system prompt sections constantly injected each turn, slashing standing supervisor discipline by >58%; consolidates all prompt bodies into single-source Markdown assets, eliminating hardcoded duplicates and en/zh divergence.
-- **Workspace-level real module trimming**: supports on-demand deactivation of tags, memory, shared cards, and attachments at the workspace level; turning a module off completely removes its tools from model visibility, elides corresponding prompt sections, and hides related UI entrances.
-- **Settings modal IA upgrade & seamless bilingual hot-reloading**: tabifies settings dialog with tooltips; ensures prompt and skill guides strictly follow DSH language preferences and hot-reload dynamically when toggling languages on the fly.
-- **Robustness & UX enhancements**: fixes criteria feedback routing when live execution sessions are absent, enhances resilience in parsing review Markdown headings, hardens dev instance symlink collision detection, and delivers independent dual-pane scrolling across viewport sizes.
+- **Concise Results Summaries & Streamlined Report Skeletons**: Completely redesigned the goal completion summary modal tab, moving away from bloating dozens of kilobytes of verbatim historical comments and timeline logs to a lean "Final Deliverable Snapshot" focusing on latest attempt accomplishments, criteria verifications, and automated test evidence; decoupled the child agent report skeleton between executor and reviewer structures, reducing cognitive overhead and token waste by over 90%.
+- **Worktree Orphan Cleanup & Goal Deletion Protection**: Proactively inspects associated Git isolated worktrees before deleting archived goals, strictly blocking deletion when active/uncleaned trees remain; safely cleans orphan worktrees from previously deleted goals, fully resolving cleanup deadlocks caused by host attribution markers.
+- **Shared Card Full Lifecycle & Fallback Detachment**: Enhances tooling to safely delete zero-reference shared cards (strictly rejecting deletion when references exist); retains a fallback detachment mechanism for goals even when the `shared_cards` module is deactivated in the workspace, eliminating configuration deadlocks.
+- **Self-Healing Review Report Paths on Goal Relocation**: Automatically rewrites relative/absolute paths of historical review reports when goals are scheduled across versions, moved back to standalone goals, or archived/unarchived, completely eliminating dead links caused by directory moves.
+- **Official Plugin Icon & Review Scale Classification Disclosure**: Ships a high-quality topological kanban vector icon (`icon.svg`) matching DSH plugin specifications; thoroughly documents non-product path rules (such as `docs/*` counting as 0 product lines) in the usage guide to align user expectations with code review policies.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
 
