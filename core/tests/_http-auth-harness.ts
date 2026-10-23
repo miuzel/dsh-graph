@@ -22,6 +22,14 @@ import assert from "node:assert/strict";
 export const NAMESPACE = "/api/dsh-graph";
 
 /** 测试自有 owner 凭证夹具：请求带 `x-dsh-graph-test-owner: 1` 即被视作已认证 owner Peer。 */
+/** 测试自有的真实宿主栈（真实 cordis Context + 真实 WebServer + 真实 HostConnectionService）。
+ *  只读引用**已安装**的 0.2.1-rc.2 公开包：不是 mock，也不是产品依赖（仅测试文件使用）。 */
+export const HOST_STACK = Object.freeze({
+  context: "/home/miuzel/.local/share/fnm/node-versions/v26.7.0/installation/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/cordis/lib/index.js",
+  webserver: "/home/miuzel/.local/share/fnm/node-versions/v26.7.0/installation/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-webserver/lib/index.js",
+  connection: "/home/miuzel/.local/share/fnm/node-versions/v26.7.0/installation/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js",
+});
+
 export const OWNER_HEADER = "x-dsh-graph-test-owner";
 
 /**
@@ -107,4 +115,31 @@ export function matchEndpoint(
 /** 取唯一的命名空间入口**定义**（kind/path/handler）；未注册或多注册即判红。 */
 export function singleEntry(routes: any[]) {
   return assertSingleProtectedEntry(routes);
+}
+
+/**
+ * g-507 B 层用：在**真实** cordis Context 上按「独立 fiber」装配一个真实服务（白盒小适配）。
+ *
+ * 为什么需要：`ctx.extend()` 是**原型继承的视图**，与父上下文共享同一个 `fiber`；对它调用
+ * `fiber.dispose()` 会连带解绑根上下文上的其它服务（实测：释放 connection 会顺带关掉 webServer
+ * 监听）。宿主的真实形态是**每个插件一条独立 fiber**（`ctx.plugin(...)`），因此测试也用同一形态：
+ * 回调拿到插件自己的 `ctx`，在其中 `new` 真实服务并通过 `ctx.effect` 绑定生命周期。
+ *
+ * @param root 真实根 Context
+ * @param name 插件名（仅诊断用）
+ * @param setup 在该插件的独立 ctx 上装配服务
+ * @returns `{ ctx, fiber, service }` —— `fiber.dispose()` 即真实卸载
+ */
+export async function loadServicePlugin(root: any, name: string, setup: (ctx: any) => unknown) {
+  let captured: unknown = null;
+  let pluginCtx: any = null;
+  const fiber = root.plugin({
+    name,
+    apply: (ctx: any) => {
+      pluginCtx = ctx;
+      captured = setup(ctx);
+    },
+  });
+  await fiber;
+  return { ctx: pluginCtx, fiber, service: captured };
 }
