@@ -15,6 +15,7 @@ import { readEvents } from "../events.ts";
 import { execSync } from "node:child_process";
 import { apply as applyHost } from "../../dist/index.js";
 import { ownerConnectionStub, entryHandler, createRegisterStub, assertSingleProtectedEntry, OWNER_HEADER } from "./_http-auth-harness.ts";
+import { buildRouteTable, lookupRoute } from "../../dist/index.js";
 
 /** g-507：直连请求补测试自有 owner 凭证头（经唯一门禁入口鉴权）。 */
 const withOwner = (req: any): any => ({ ...req, headers: { ...(req?.headers ?? {}), [OWNER_HEADER]: "1" } });
@@ -124,11 +125,13 @@ test("g-149 apply 有绝对 config.root 时仍正常 init（管理员覆盖）",
 test("g-149 apply 有 sandboxPolicy.workspaceRoot 时正常 init", () => {
   const base = mkdtempSync(join(tmpdir(), "g149-sandbox-init-"));
   // 模拟 sandboxPolicy 提供 workspace——需要覆盖 mockCtx 的 get
-  const webServer = { register: () => () => {} };
+  // g-507 返工：不再声明局部 webServer 遮蔽模块级同名变量（遮蔽会让后续逐端点断言读到未注册的假服务）
+  const stub = createRegisterStub();
+  routeDefs = stub.routes;
   const sandboxPolicy = { workspaceRoot: base };
   const ctx: any = {
     get: (name: string) => {
-      if (name === "webServer") return webServer;
+      if (name === "webServer") return stub.webServer;
       if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return sandboxPolicy;
       return undefined;
@@ -145,7 +148,9 @@ test("g-149 apply 有 sandboxPolicy.workspaceRoot 时正常 init", () => {
 test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路由）两个半边", () => {
   const registered: any[] = [];
   const routes = new Map<string, any>();
-  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
+  const stub = createRegisterStub(); // g-507 返工：提升作用域（逐端点断言需要入口表）
+  routeDefs = stub.routes;
+  webServer = stub.webServer;
   const ctx: any = {
     get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined),
     effect: (fn: () => unknown) => fn(),
@@ -170,7 +175,10 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     "/api/dsh-graph/archive", "/api/dsh-graph/unarchive",
     "/api/dsh-graph/delete", "/api/dsh-graph/set-description",
     "/api/dsh-graph/version-goals", "/api/dsh-graph/backlog-goals"]) {
-    assert.ok(p === "/api/dsh-graph" || p.startsWith("/api/dsh-graph/"), `端点 ${p} 在唯一受保护命名空间内`);
+    // g-507 返工：恢复基线逐端点强度（此前只判常量前缀，恒真）。判定口径与 dispatcher 一致：
+    // lookupRoute 在入口表里查该 path，未命中 ⇒ 认证后分发 404 ⇒ 判红。
+    const hit = lookupRoute(buildRouteTable(stub.routes), p);
+    assert.equal(hit.defined, true, `端点 ${p} 经唯一入口分发可命中业务定义（实际：${hit.defined ? hit.matchedPath : "未命中 ⇒ 404"}）`);
   }
 });
 

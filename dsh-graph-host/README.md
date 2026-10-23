@@ -42,7 +42,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 **当前版本**：v0.22.0。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
-**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
+**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。⚠️ 上列是**历史轮次**的安装/启停/REST 结论，覆盖的是各自版本的产品代码；g-507 引入的 **HTTP 鉴权入口**只在 `0.2.1-rc.2` 实测（见下文「HTTP 鉴权」一节），**不得**据本段推断其它版本上的鉴权结论。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
 **平台状态**：
 
@@ -236,6 +236,25 @@ dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具）
 
 ---
 
+### HTTP 鉴权（Web 看板的 REST 入口）
+
+本插件在 Web 宿主里提供一组 `/api/dsh-graph/**` REST 入口（浏览器看板与脚本都用它）。从 g-507 起，这些入口的安全模型是**单一受保护入口**：
+
+- **一个入口，不是 63 个**：插件只向宿主 `webServer` 注册**一条** `kind:"prefix"`、`path:"/api/dsh-graph"` 的路由；原有的 63 条业务路由不再是宿主的独立路由，只在插件内部按 `exact` / 两条资产 `prefix`（`/diagram`、`/help/asset`）分发。
+- **先鉴权，后业务**：入口每请求先调用宿主的**公开** `connection.admit(req)`（保留 `this` 绑定），再判定调用方是否为 owner。认证之前**不读请求体、不解析目标路径、不初始化工作区、不触碰任何文件与派发**。
+- **拒绝面（固定口径）**：
+  | 情形 | 状态码 |
+  |---|---|
+  | 匿名 / 凭证无效（宿主 401） | `401` |
+  | 信任边界拒绝（宿主 403：Host / Origin / cross-site） | `403` |
+  | 凭证有效但**不是 owner** | `403`（`not-owner`） |
+  | 宿主未提供 `connection` 服务、未提供 `admit`、`admit` 抛错、或返回不可判定的结构 | `503`（**fail-closed**，不带任何内部细节） |
+  | 认证通过但路径不存在 / 方法不符 | `404` / `405`（认证之后才返回） |
+- **能力依赖**：判定完全依赖宿主公开能力 `connection.admit`。宿主没提供它时，HTTP 入口**一律 503 fail-closed**（不会退化成匿名放行）；该情形**不影响** Agent 工具面（`graph_*` 工具不经过 HTTP 入口）。
+- **尾斜杠与 query**：`/api/dsh-graph` 与 `/api/dsh-graph/` 不是同一路径（后者认证后 404）；两条资产 `prefix` 的 `prefix/` 会进入业务并由业务给 400（非法文件名）；query 不参与匹配。
+- **实测范围（如实）**：本节的鉴权行为只在 **DSH `0.2.1-rc.2`** 上实测（真实宿主 `BrowserAuth` + 真实 Token 交换 + 真实 HTTP）。`engines.dsh` 声明的其余宿主版本（含 `0.1.x`、`0.2.0` 各版本）**本次未逐版验证**；若某宿主缺少公开 `admit`，按上表 HTTP 入口会 503，这一点**未经逐版核实**，因此不能把声明范围读成「当前 Web 鉴权结论」。兼容范围的取舍由维护者决定，本版不做收窄或扩张。
+
+
 ### Profile 全局设置（子代理默认值）
 
 子代理默认 provider / model、推理档位、执行模式、提示词语言与补充提示词是 **profile 级全局默认** —— 写入当前 DSH profile、**跨 workspace 生效**，且 workspace 的 `project.yaml` 明确配置与单次派发参数都更优先。
@@ -285,7 +304,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 **Current version**: v0.22.0. **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
-**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
+**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). ⚠️ Those are **historical rounds** covering install/boot/REST on their own version's product code; the **HTTP authentication entry** introduced by g-507 was measured on `0.2.1-rc.2` only (see "HTTP authentication" below) and must **not** be inferred for other versions from this paragraph. The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
 **Platform status**:
 
@@ -493,6 +512,27 @@ The sidebar's "**Kanban**" tile and the conversation page's "**Kanban**" tab are
 See [screenshot/sidebar-kanban.png](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png) in the repository for a screenshot (fictional demo data nebula-notes, sidebar width in the `< 480px` single-lane tier); this npm package does not ship the repository's `screenshot/` directory, so only the repository path is given here.
 
 ---
+
+---
+
+### HTTP authentication (REST entry points behind the Web kanban)
+
+The plugin serves a set of `/api/dsh-graph/**` REST endpoints in the Web host (used by both the kanban UI and scripts). Since g-507 the security model is a **single protected entry point**:
+
+- **One entry, not 63**: the plugin registers exactly **one** `kind:"prefix"` route with `path:"/api/dsh-graph"`. The 63 business routes are no longer host routes; they are dispatched inside the plugin as `exact` routes plus two asset prefixes (`/diagram`, `/help/asset`).
+- **Authenticate first, business second**: every request first calls the host's **public** `connection.admit(req)` (with `this` preserved), then checks whether the caller is the owner. Before admission it never reads the body, resolves the target path, initializes a workspace, touches files, or dispatches anything.
+- **Rejection matrix (fixed)**:
+  | Situation | Status |
+  |---|---|
+  | Anonymous / invalid credential (host 401) | `401` |
+  | Trust-boundary rejection (host 403: Host / Origin / cross-site) | `403` |
+  | Valid credential but **not the owner** | `403` (`not-owner`) |
+  | Host has no `connection` service, no `admit`, `admit` throws, or returns an undecidable shape | `503` (**fail-closed**, no internal detail) |
+  | Admitted but unknown path / wrong method | `404` / `405` (only after admission) |
+- **Capability dependency**: everything hinges on the host's public `connection.admit`. When the host does not provide it, the HTTP entry points answer **503 fail-closed** (never a silent anonymous pass-through); the **tool surface is unaffected** (`graph_*` tools do not go through the HTTP entry).
+- **Trailing slash and query**: `/api/dsh-graph` and `/api/dsh-graph/` are different paths (the latter is 404 after admission); `prefix/` on the two asset prefixes enters business handling and yields a 400 (illegal file name); query does not participate in matching.
+- **Verified scope, stated plainly**: the behaviour in this section was measured **only on DSH `0.2.1-rc.2`** (real host `BrowserAuth`, real token exchange, real HTTP). The other host versions declared in `engines.dsh` (including `0.1.x` and the `0.2.0` line) were **not verified version by version** in this round. If a host lacks the public `admit`, the table above implies 503 for HTTP entry points — that implication is **not verified per version**, so the declared range must not be read as a current Web-authentication verdict. Widening or narrowing the range is the maintainer's call; this release does neither.
+
 
 ### Profile-wide settings (subagent defaults)
 

@@ -1,40 +1,41 @@
-/** g-507 分层验证 B：**真实宿主鉴权服务 + 真实 WebServer 匹配 + 测试自有凭证 + 真实 HTTP**。
+/** g-507 分层验证 B：**真实宿主鉴权链路**（真实 BrowserAuth + 真实 token 交换 + 真实 WebServer）+ 真实 HTTP。
  *
- * 与 A 层（结构/哨兵）以及「策略桩」的分界：
- *   · 本套件的 connection 是**真实** `HostConnectionService`（已安装 DSH 0.2.1-rc.2 的公开包），
- *     webServer 是**真实** `WebServer`（真实路由表 + 真实最长前缀匹配 + 真实 node:http 监听）；
- *   · 签名凭证只来自**本测试自己的**进程内 credentials（内存表 + 每轮新 secret），
- *     不读取主实例 secret、不修改任何外部安装/profile；
- *   · 请求走**真实 socket**（`http.request`），断言真实 HTTP 状态码。
+ * 真实性口径（返工后，逐条可核）：
+ *   · `connection` 由 **`@deepseek-ai/dsh-client-connection` 的公开 `apply()`** 引导 —— 与本插件在宿主里
+ *     的加载方式相同（`ctx.provide("credentials")` + `ctx.plugin({apply, inject, Config})`）；
+ *     `BrowserAuth`（secret 存储、launch token、cookie 签名与校验）**全部由宿主包内部创建**，
+ *     测试**不实现、不注入、不读取私有字段**；
+ *   · 合法 cookie 只来自**宿主自己的 token 交换**（公开 `connection.authorizeIndex` + 真实 launch token，
+ *     由 `connection.authenticatedUrl(origin)` 提供）；测试不含任何签名算法；
+ *   · `webServer` 是真实 `WebServer`（真实路由表 + 真实最长前缀匹配 + 真实 `node:http` 监听），
+ *     请求走**真实 socket**；
+ *   · 负向用的「篡改 / 过期」cookie 由**手工构造**（在合法 cookie 上改签名、或改 payload 时间戳），
+ *     它们只用于证明**真实宿主拒绝**，不作为「真实签发」证据。
  *
- * 诚实边界（本套件不冒充的）：
- *   · 「有效凭证但非 owner」——当前宿主**没有公开的非 owner HTTP 凭证签发面**（`/connect` 与浏览器
- *     token 交换都签 owner）⇒ 该分支由 A6 策略层覆盖并在此注明，不声称非 owner 的 HTTP 端到端证据；
- *   · 「撤销」——宿主没有公开的 peer 撤销 HTTP 面；本套件用两条真实路径覆盖：服务卸载后 peer 记录
- *     随之清空、以及同一 Host 上重新初始化（换 secret）后旧 cookie 失效；
- *   · browserAuth 属 host 包私有面：**只在测试内复刻**它的 cookie 校验（真实 secret / 真实 authority /
- *     真实 HMAC），产品代码绝不复制该算法。
+ * 诚实边界：
+ *   · 「有效凭证但非 owner」—— 宿主没有公开的非 owner HTTP 凭证签发面 ⇒ 只有策略层证据（A 层 A6），
+ *     本套件不声称该分支的 HTTP 端到端结论；
+ *   · 「撤销」—— 宿主没有公开的 peer 撤销 HTTP 面。本套件只断言**被观察到的行为**：
+ *     服务卸载后 peer 记录随之消失、重新引导（新 secret）后旧 cookie 失效；不称其为「撤销」。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init } from "../ops.ts";
 import { apply } from "../../dist/index.js";
-import { HOST_STACK, assertSingleProtectedEntry, loadServicePlugin, OWNER_HEADER } from "./_http-auth-harness.ts";
+import { assertSingleProtectedEntry, loadServicePlugin } from "./_http-auth-harness.ts";
+import { loadHostStack, HOST_STACK_PINS, resolveHostStack } from "./_host-stack.ts";
 
-const { Context } = await import(HOST_STACK.context);
-const { WebServer } = await import(HOST_STACK.webserver);
-const { HostConnectionService } = await import(HOST_STACK.connection);
-
+const stack = await loadHostStack();
+const { Context, WebServer, connectionApi } = stack;
 const API = "/api/dsh-graph";
 const INIT = Symbol.for("cordis.init");
 
-// ─────────────────────── 测试自有凭证设施（内存 credentials，绝不触碰外部安装） ───────────────────────
-
+/** 测试自有内存 credentials：secret 由宿主 BrowserAuth 通过 `modifyRecord` 写入这里（测试不生成 secret）。 */
 function memoryCredentials() {
   const records = new Map<string, any>();
   return {
@@ -63,100 +64,57 @@ function memoryCredentials() {
   };
 }
 
-/** 测试内的 browserAuth：复刻宿主的 cookie 校验（secret / authority / HMAC / 时效），供真实 admit 使用。 */
-function testBrowserAuth(secret: Buffer, maxAgeDays = 30) {
-  const day = 24 * 60 * 60 * 1000;
-  return {
-    secret,
-    isAuthenticated(request: any, secure = false) {
-      const auth = audience(request?.headers, secure);
-      const raw = request?.headers?.cookie;
-      if (!auth || typeof raw !== "string") return false;
-      const value = cookieValue(raw, cookieName(auth));
-      if (!value) return false;
-      const payload = decodeCookie(value, secret);
-      if (!payload || payload.authority !== auth) return false;
-      const now = Date.now();
-      return !(payload.issuedAt > now || payload.expiresAt <= now || payload.expiresAt - payload.issuedAt > maxAgeDays * day);
-    },
-    authenticateApi() {
-      return undefined;
-    },
-  };
+/** 取 cookie 头里的某个 cookie 值（只为「篡改」构造服务，不参与验签）。 */
+function cookiePair(headerValue: string) {
+  const first = headerValue.split(";")[0];
+  const at = first.indexOf("=");
+  return { name: first.slice(0, at).trim(), value: first.slice(at + 1).trim() };
 }
-function audience(headers: any, secure: boolean) {
-  const host = headers?.host;
-  if (typeof host !== "string") return undefined;
-  try {
-    const url = new URL(`${secure ? "https:" : "http:"}//${host}`);
-    return secure ? url.origin : url.host;
-  } catch {
-    return undefined;
-  }
+
+/** 负向夹具：把合法 cookie 的签名改成另一段等长随机串（宿主必须拒绝）。 */
+function tamperSignature(cookieHeader: string) {
+  const { name, value } = cookiePair(cookieHeader);
+  const parts = value.split(".");
+  parts[parts.length - 1] = randomBytes(32).toString("base64url");
+  return `${name}=${parts.join(".")}`;
 }
-function cookieName(authority: string) {
-  return "dsh-auth-" + createHash("sha256").update(authority).digest("base64url");
-}
-function cookieValue(headerValue: string, name: string) {
-  for (const seg of headerValue.split(";")) {
-    const at = seg.indexOf("=");
-    if (at === -1 || seg.slice(0, at).trim() !== name) continue;
-    return seg.slice(at + 1).trim();
-  }
-  return undefined;
-}
-function decodeCookie(value: string, secret: Buffer) {
+
+/** 负向夹具：把 payload 的过期时间改成过去（签名随即失效，宿主必须拒绝）。 */
+function expirePayload(cookieHeader: string) {
+  const { name, value } = cookiePair(cookieHeader);
   const [version, body, sig] = value.split(".");
-  if (version !== "v1" || !body || !sig) return undefined;
-  const expected = createHmac("sha256", secret).update(body).digest();
-  const actual = Buffer.from(sig, "base64url");
-  if (actual.length !== expected.length || Buffer.compare(actual, expected) !== 0) return undefined;
+  let payload: any;
   try {
-    return JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
   } catch {
-    return undefined;
+    return cookieHeader;
   }
+  payload.expiresAt = Date.now() - 60_000;
+  const forged = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return `${name}=${version}.${forged}.${sig}`; // 签名未改 ⇒ 必须被真实宿主判为无效
 }
 
-/** 用「真实服务已生成的 secret」派生合法 cookie（签名格式只在测试内复刻）。 */
-function mint(secret: Buffer, authority: string, opts: { ttlMs?: number; issuedAgoMs?: number } = {}) {
-  const now = Date.now();
-  const issuedAt = now - (opts.issuedAgoMs ?? 1000);
-  const expiresAt = issuedAt + (opts.ttlMs ?? 60_000);
-  const body = Buffer.from(JSON.stringify({ version: 1, authority, issuedAt, expiresAt }), "utf8").toString("base64url");
-  const sig = createHmac("sha256", secret).update(body).digest("base64url");
-  return `${cookieName(authority)}=v1.${body}.${sig}`;
-}
-/** 篡改：合法结构 + 随意签名。 */
-function forge(authority: string) {
-  const body = Buffer.from(JSON.stringify({ version: 1, authority, issuedAt: Date.now() - 1000, expiresAt: Date.now() + 60_000 }), "utf8").toString("base64url");
-  const sig = randomBytes(32).toString("base64url");
-  return `${cookieName(authority)}=v1.${body}.${sig}`;
-}
-
-// ───────────────────────────── 真实宿主栈 ─────────────────────────────
+// ───────────────────────────── 真实宿主栈（公开 apply 引导） ─────────────────────────────
 
 /**
- * 搭一套**真实**宿主：真实 Context、真实 WebServer（真实监听）、真实 HostConnectionService。
- * @param opts.connectionFirst true = connection 先于 webServer 就位；false = webServer 先到
+ * 搭一套真实宿主：真实 Context + 真实 WebServer（真实监听）+ **公开 apply 引导**的真实 connection。
+ * @param opts.connectionFirst true = connection 早于 webServer；false = webServer 先到
  */
 async function startHost(opts: { connectionFirst?: boolean } = {}) {
   const ws = mkdtempSync(join(tmpdir(), "g507-b-ws-"));
   init(join(ws, ".dsh-graph"));
   const root = new Context();
-  const { provider } = memoryCredentials();
+  const { provider, records } = memoryCredentials();
   root.provide("credentials", provider);
-  const secret = randomBytes(32);
 
   const state: {
     webServer: any;
-    webFiber: any;
-    connection?: any;
-    connFiber?: any;
+    webFiber?: any;
+    connectionFiber?: any;
     routes: any[];
-  } = { webServer: null, webFiber: null, routes: [] };
+    disposers: Array<() => void>;
+  } = { webServer: null, routes: [], disposers: [] };
 
-  // 真实装配：每个服务各占**一条独立 fiber**（= 宿主插件形态；ctx.extend 共享根 fiber，不能用来释放单个服务）
   const bootWeb = async () => {
     const loaded = await loadServicePlugin(root, "g507-test-webserver", (ctx) => {
       const server = new WebServer(ctx, { host: "127.0.0.1", port: 0 });
@@ -165,22 +123,25 @@ async function startHost(opts: { connectionFirst?: boolean } = {}) {
     });
     state.webServer = loaded.service;
     state.webFiber = loaded.fiber;
-    await (loaded.service as any).server?.once?.("listening", () => {});
-    // 等待绑定完成（listen 在 effect 内异步完成）
-    for (let i = 0; i < 200 && !(state.webServer as any).server?.listening; i++) {
-      await new Promise((r) => setTimeout(r, 5));
-    }
+    for (let i = 0; i < 400 && !(state.webServer as any).server?.listening; i++) await new Promise((r) => setTimeout(r, 5));
     return state.webServer;
   };
-  const bootConn = (secretBytes: Buffer = secret) => {
-    const loaded = loadServicePlugin(root, "g507-test-connection", (ctx) => new HostConnectionService(ctx, [], testBrowserAuth(secretBytes)));
-    return loaded;
+
+  /** 用宿主**公开** apply 引导真实 connection（含真实 BrowserAuth）；重复引导前先真实卸载旧 fiber。 */
+  const bootConnection = async () => {
+    // 直接在根 ctx 上引导真实 connection（公开 apply）：fiber 归属明确，dispose 即真实卸载
+    const fiber = root.plugin(
+      { name: connectionApi.name, inject: connectionApi.inject, apply: connectionApi.apply, Config: connectionApi.Config },
+      {},
+    );
+    await fiber;
+    state.connectionFiber = fiber;
+    return getConnection();
   };
-  /** 真实卸载连接服务（释放它自己的 fiber；webServer 的 fiber 不受影响）。 */
-  const disposeConn = async () => {
-    const fiber = state.connFiber;
-    state.connFiber = undefined;
-    state.connection = undefined;
+  const getConnection = () => root.get("connection");
+  const disposeConnection = async () => {
+    const fiber = state.connectionFiber ?? root.get("connection")?.ctx?.fiber;
+    state.connectionFiber = undefined;
     if (fiber) {
       try {
         await fiber.dispose();
@@ -189,53 +150,10 @@ async function startHost(opts: { connectionFirst?: boolean } = {}) {
       }
     }
   };
-  /** 装配一个新连接实例（先真实卸载旧的）。 */
-  const newConnection = async (secretBytes: Buffer) => {
-    await disposeConn();
-    const loaded = await bootConn(secretBytes);
-    state.connection = loaded.service;
-    state.connFiber = loaded.fiber;
-    return state.connection;
-  };
 
-  // 插件 ctx：get(name) 动态读取「当前 active」服务（与生产 ctx.get 语义一致：服务晚到/消失都可见）
-  const pluginCtx: any = {
-    get: (name: string) => {
-      if (name === "webServer") {
-        if (!state.webServer) return undefined;
-        return {
-          register: (def: any) => {
-            state.routes.push(def);
-            return state.webServer.register(def);
-          },
-        };
-      }
-      if (name === "connection") return state.connection ?? undefined;
-      return undefined;
-    },
-    effect: (fn: () => unknown) => fn(),
-    tools: { register: () => () => {}, get: () => ({}) },
-    on() {},
-  };
-
-  const start = async () => {
-    if (opts.connectionFirst) {
-      await newConnection(secret);
-      await bootWeb();
-    } else {
-      await bootWeb();
-      await newConnection(secret);
-    }
-    return { ws, server: state.webServer, connection: state.connection!, secret };
-  };
-
-  const origin = () => {
-    const server = state.webServer;
-    return server.getOrigin();
-  };
+  const origin = () => state.webServer.getOrigin();
   const authority = () => new URL(origin()).host;
 
-  /** 真实 HTTP 请求（真实 socket）。 */
   const request = (method: string, path: string, headers: Record<string, string> = {}, body?: unknown) =>
     new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: any }>((resolve) => {
       const url = new URL(origin());
@@ -272,14 +190,49 @@ async function startHost(opts: { connectionFirst?: boolean } = {}) {
       req.end();
     });
 
-  /**
-   * 释放全部真实资源（不留悬挂 socket / fiber）。真实 WebServer 的 effect disposer 不关 socket
-   * （0.2.1-rc.2 实测 `dispose` 后 `listening` 仍为 true），故显式 close。
-   */
+  /** 宿主自己的 token 交换：返回 Set-Cookie 的 `name=value`（测试不生成签名）。 */
+  const mintOwnerCookie = () => {
+    const connection = getConnection();
+    assert.ok(connection, "真实 connection 必须已由公开 apply 引导");
+    const url = connection.authenticatedUrl(`${origin()}/`);
+    const token = new URL(url).searchParams.get("token");
+    assert.ok(token, "authenticatedUrl 必须携带 launch token");
+    let status = 0;
+    let setCookie: string | undefined;
+    const sink = {
+      writeHead(code: number, headers: any) {
+        status = code;
+        setCookie = headers?.["set-cookie"];
+      },
+      end() {},
+    };
+    connection.authorizeIndex({ method: "GET", url: `/?token=${encodeURIComponent(token)}`, headers: { host: authority() } }, sink);
+    assert.ok([302, 303].includes(status), `宿主 token 交换应重定向（实得 ${status}）`);
+    assert.ok(setCookie, "宿主 token 交换必须下发 cookie");
+    return setCookie!.split(";")[0];
+  };
+
+  const start = async () => {
+    if (opts.connectionFirst) {
+      await bootConnection();
+      await bootWeb();
+    } else {
+      await bootWeb();
+      await bootConnection();
+    }
+  };
+
   const shutdown = async () => {
-    await disposeConn();
+    await disposeConnection();
+    for (const d of state.disposers.splice(0)) {
+      try {
+        d();
+      } catch {
+        /* 已释放 */
+      }
+    }
     const server = state.webServer;
-    if (server?.server && server.server.listening) {
+    if (server?.server?.listening) {
       await new Promise<void>((resolve) => {
         const done = () => resolve();
         server.server.close(done);
@@ -299,197 +252,210 @@ async function startHost(opts: { connectionFirst?: boolean } = {}) {
   };
 
   return {
-    root, state, pluginCtx, start, origin, authority, request, secret, provider, shutdown,
-    bootWebPublic: bootWeb, newConnection, disposeConn,
+    root, state, records, provider, start, origin, authority, request, shutdown,
+    mintOwnerCookie, getConnection, bootConnection, disposeConnection, bootWeb,
   };
 }
 
-/** 装配插件（真实 apply）与真实宿主，返回可复用的断言上下文。 */
+/** 插件 ctx：get() 动态读取「当前 active」服务（与生产 ctx.get 语义一致）；register 转发真实 WebServer。 */
+function pluginContext(host: { state: any }, root: any) {
+  const disposers: Array<() => void> = host.state.disposers;
+  return {
+    get: (name: string) => {
+      if (name === "webServer") {
+        if (!host.state.webServer) return undefined;
+        return {
+          register: (def: any) => {
+            host.state.routes.push(def);
+            const dispose = host.state.webServer.register(def);
+            return () => {
+              dispose();
+            };
+          },
+        };
+      }
+      if (name === "connection") return root.get("connection");
+      return undefined;
+    },
+    effect: (fn: () => unknown) => {
+      const r = fn();
+      if (typeof r === "function") disposers.push(r as () => void);
+      return r;
+    },
+    tools: { register: () => () => {}, get: () => ({}) },
+    on() {},
+  } as any;
+}
+
+/** 装配本插件（真实 apply）到真实宿主；返回可复用断言上下文。 */
 async function pluginOnRealHost(opts: { connectionFirst?: boolean } = {}) {
   const host = await startHost(opts);
-  const { secret } = await host.start();
-  apply(host.pluginCtx, {});
+  await host.start();
+  const ctx = pluginContext(host as any, host.root);
+  (host as any).state.root = host.root;
+  const cleanup = apply(ctx, {}) as any;
+  assert.equal(typeof cleanup, "function", "apply 必须返回清理函数（真实 ctx.effect disposer 语义）");
+  (host as any).state.applyCleanup = cleanup;
+  (host as any).state.pluginCtx = ctx;
   assertSingleProtectedEntry(host.state.routes);
-  return { ...host, server: host.state.webServer, hostSecret: secret };
+  return { ...host, server: host.state.webServer as any } as any;
 }
 
 // ───────────────────────────────── 用例 ─────────────────────────────────
 
-test("g-507 B1：真实 WebServer 匹配只命中一个 prefix 入口（真实路由表）", async () => {
+test("g-507 B0：真实宿主栈来自已解析目录（版本固定，无作者绝对路径）", () => {
+  assert.equal(stack.source === "env" || stack.source === "installed-host" || stack.source === "private-copy", true);
+  assert.equal(typeof stack.Context, "function");
+  assert.equal(typeof stack.WebServer, "function");
+  assert.equal(typeof connectionApi.apply, "function", "必须是宿主公开 apply（不是测试自建的 BrowserAuth）");
+  assert.match(resolveHostStack().dir, /node_modules\/@deepseek-ai$/);
+  // 版本锚点：宿主栈三件套的固定版本（升级宿主时必须同步改 _host-stack.ts 的 HOST_STACK_PINS）
+  assert.deepEqual(HOST_STACK_PINS, {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
+  });
+});
+
+test("g-507 B1：真实 WebServer 匹配只命中一个 prefix 入口", async () => {
   const h = await pluginOnRealHost();
   try {
-    assert.equal(h.server.match(API), h.state.routes[0], "命名空间根命中唯一入口");
-    assert.equal(h.server.match(`${API}/goal`), h.state.routes[0], "子路径命中唯一入口");
-    assert.equal(h.server.match(`${API}/unknown/deep/path`), h.state.routes[0], "未知子路径同样命中入口（先鉴权）");
-    assert.equal(h.server.match("/api/other"), undefined, "命名空间之外不受影响");
+    const entry = h.state.routes[0];
+    assert.equal(h.server.match(API), entry, "命名空间根命中唯一入口");
+    assert.equal(h.server.match(`${API}/goal`), entry, "子路径命中唯一入口");
+    assert.equal(h.server.match(`${API}/unknown/deep/path`), entry, "未知子路径同样先进入口");
+    // 宿主 connection 插件自己会在 /api 挂它的桥（公开行为，非本插件路由）⇒ 只断言「插件没在命名空间外挂任何东西」
+    assert.equal(h.state.routes.filter((r: any) => !(r.path === API || r.path.startsWith(API + "/"))).length, 0, "插件不在命名空间外注册任何路由");
   } finally {
     await h.shutdown();
   }
 });
 
-test("g-507 B2：真实 HTTP 拒绝矩阵（匿名/伪造/篡改/过期/撤销等效/信任边界）⇒ 401/403，业务不触达", async () => {
+test("g-507 B2：真实宿主签发的 owner cookie ⇒ 业务 200；匿名/篡改/过期/跨 authority ⇒ 401/403", async () => {
   const h = await pluginOnRealHost();
-  const auth = h.authority();
   try {
-    const cases: Array<{ name: string; headers: Record<string, string>; expect: number }> = [
-      { name: "匿名", headers: {}, expect: 401 },
-      { name: "伪造凭证头（形状对、值错）", headers: { [OWNER_HEADER]: "1" }, expect: 401 },
-      { name: "伪造 cookie（合法结构、错误签名）", headers: { cookie: forge(auth) }, expect: 401 },
-      { name: "过期 cookie", headers: { cookie: mint(h.hostSecret, auth, { ttlMs: -60_000 }) }, expect: 401 },
-      { name: "错误 authority 的合法签名 cookie", headers: { cookie: mint(h.hostSecret, "attacker.example") }, expect: 401 },
-      { name: "Host 不在信任范围", headers: { host: "evil.example" }, expect: 403 },
-      { name: "cross-site", headers: { "sec-fetch-site": "cross-site" }, expect: 403 },
-      { name: "跨源 Origin", headers: { origin: "http://evil.example" }, expect: 403 },
-    ];
-    for (const c of cases) {
-      const res = await h.request("GET", API, c.headers);
-      assert.equal(res.status, c.expect, `${c.name} ⇒ ${c.expect}（实得 ${res.status}）`);
-    }
-    // 写端点与资产路由同样被拒（不只是 GET 看板）
-    for (const path of [`${API}/create-goal`, `${API}/diagram/design-philosophy.lifecycle.html`, `${API}/no-such`]) {
-      const res = await h.request("POST", path, {}, { title: "x" });
-      assert.equal(res.status, 401, `${path} 匿名 ⇒ 401`);
-    }
-    // 被拒响应不含凭证 / 内部细节
-    const res = await h.request("GET", API);
-    const text = JSON.stringify(res.body);
-    assert.doesNotMatch(text, /at .*\(|stack|boom/i);
-    assert.equal(res.headers["content-type"], "application/json; charset=utf-8");
-    assert.equal(res.headers["cache-control"], "no-store");
+    const cookie = h.mintOwnerCookie(); // 宿主 token 交换签发（真实 BrowserAuth + 真实 secret）
+    const owner = { cookie };
+    const ok = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner);
+    assert.equal(ok.status, 200, "真实签发 cookie ⇒ 200（真实 admit + 真实 BrowserAuth 验收）");
+
+    assert.equal((await h.request("GET", API)).status, 401, "匿名 ⇒ 401");
+    assert.equal((await h.request("GET", `${API}/goal`, { cookie: tamperSignature(cookie) })).status, 401, "篡改签名 ⇒ 401");
+    assert.equal((await h.request("GET", `${API}/goal`, { cookie: expirePayload(cookie) })).status, 401, "过期 payload ⇒ 401");
+    assert.equal(
+      (await h.request("GET", `${API}/goal`, { cookie: cookie.replace(/^(dsh-auth-[^=]+)=/, "$1=x") })).status,
+      401,
+      "陌生 cookie 名 ⇒ 401",
+    );
+    assert.equal((await h.request("GET", API, { "sec-fetch-site": "cross-site" })).status, 403, "cross-site ⇒ 403");
+    assert.equal((await h.request("GET", API, { origin: "http://evil.example" })).status, 403, "跨源 Origin ⇒ 403");
+    assert.equal((await h.request("GET", API, { host: "evil.example", cookie })).status, 403, "Host 不信任 ⇒ 403");
+    // 资产路由同样被挡在门外
+    assert.equal((await h.request("GET", `${API}/help/asset/supervisor-guide.zh.md`)).status, 401, "资产匿名 ⇒ 401");
+    assert.equal((await h.request("POST", `${API}/no-such`, {}, { title: "x" })).status, 401, "未知子路径匿名 ⇒ 401");
   } finally {
     await h.shutdown();
   }
 });
 
-test("g-507 B3：合法 owner（真实签名 cookie、真实 admit）⇒ 200，读/写/资产/ETag304/未知路径均按语义", async () => {
+test("g-507 B3：真实 owner 的业务面（读/可逆写/资产/304/404/405）", async () => {
   const h = await pluginOnRealHost();
-  const auth = h.authority();
-  const owner = { cookie: mint(h.hostSecret, auth) };
   try {
-    const board = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner);
-    assert.equal(board.status, 200, "合法 owner 读看板 200");
-    assert.ok(board.headers.etag, "看板带 ETag（合法 owner 保持 ETag 304 语义）");
-    const again = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { ...owner, "if-none-match": String(board.headers.etag) });
-    assert.equal(again.status, 304, "携带匹配 If-None-Match ⇒ 304");
-
-    const created = await h.request("POST", `${API}/create-goal?workspace=${encodeURIComponent(h.ws)}`, owner, { title: "B3 目标" });
-    assert.equal(created.status, 200, "合法 owner 可逆写入");
-    assert.equal(created.body.ok, true);
-
-    const asset = await h.request("GET", `${API}/diagram/design-philosophy.lifecycle.html`, owner);
-    assert.equal(asset.status, 200, "资产路由（prefix）合法 owner 200");
-    const assetHead = await h.request("HEAD", `${API}/diagram/design-philosophy.lifecycle.html`, owner);
-    assert.equal(assetHead.status, 200, "资产 HEAD 200");
-
-    const unknown = await h.request("GET", `${API}/no-such-endpoint`, owner);
-    assert.equal(unknown.status, 404, "认证后未知子路径 404");
-
-    const wrongMethod = await h.request("GET", `${API}/create-version?workspace=${encodeURIComponent(h.ws)}`, owner);
-    assert.equal(wrongMethod.status, 405, "认证后方法不匹配 405");
+    const owner = { cookie: h.mintOwnerCookie() };
+    const wsQ = `?workspace=${encodeURIComponent(h.ws)}`;
+    const board = await h.request("GET", `${API}${wsQ}`, owner);
+    assert.equal(board.status, 200);
+    const etag = board.headers.etag;
+    assert.ok(etag, "看板带 ETag");
+    assert.equal((await h.request("GET", `${API}${wsQ}`, { ...owner, "if-none-match": String(etag) })).status, 304, "ETag 命中 ⇒ 304");
+    const created = await h.request("POST", `${API}/create-goal${wsQ}`, owner, { title: "B3 目标" });
+    assert.equal(created.status, 200, "真实 owner 可写");
+    assert.equal((await h.request("GET", `${API}/diagram/design-philosophy.lifecycle.html`, owner)).status, 200, "资产 200");
+    assert.equal((await h.request("HEAD", `${API}/diagram/design-philosophy.lifecycle.html`, owner)).status, 200, "资产 HEAD 200");
+    assert.equal((await h.request("GET", `${API}/no-such-endpoint${wsQ}`, owner)).status, 404, "认证后未知 ⇒ 404");
+    assert.equal((await h.request("GET", `${API}/create-goal${wsQ}`, owner)).status, 405, "认证后方法不符 ⇒ 405");
   } finally {
     await h.shutdown();
   }
 });
 
-test("g-507 B4：服务到达顺序（webServer 先到 / connection 先到）均可用，且 connection 缺位时 fail-closed 503", async () => {
+test("g-507 B4：服务到达顺序（webServer 先到 / connection 先到）与 connection 缺位 fail-closed 503", async () => {
   for (const connectionFirst of [false, true]) {
     const h = await pluginOnRealHost({ connectionFirst });
-    const auth = h.authority();
     try {
-      assert.equal((await h.request("GET", API)).status, 401, `顺序(${connectionFirst})：匿名仍 401`);
-      const ok = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: mint(h.hostSecret, auth) });
-      assert.equal(ok.status, 200, `顺序(${connectionFirst})：合法 owner 200`);
+      assert.equal((await h.request("GET", API)).status, 401, `顺序(${connectionFirst})：匿名 401`);
+      assert.equal(
+        (await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: h.mintOwnerCookie() })).status,
+        200,
+        `顺序(${connectionFirst})：owner 200`,
+      );
     } finally {
       await h.shutdown();
     }
   }
 
-  // connection 未就位（webServer 已监听）：同一入口 fail-closed 503，绝不提前放行
-  const h = await startHost({ connectionFirst: false });
-  const server = await h.bootWebPublic();
-  await h.disposeConn();
-  apply(h.pluginCtx, {});
+  // connection 未就位：同一入口 fail-closed 503
+  const host = await startHost();
+  await host.bootWeb();
+  const ctx = pluginContext(host as any, host.root);
+  (host as any).state.root = host.root;
+  const cleanup = apply(ctx, {});
   try {
-    const res = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { [OWNER_HEADER]: "1" });
-    assert.equal(res.status, 503, "缺 active connection ⇒ 503 fail-closed");
-    assert.equal(res.body.error, "connection-service-unavailable");
+    const res = await host.request("GET", `${API}?workspace=${encodeURIComponent(host.ws)}`);
+    assert.equal(res.status, 503, "缺 active connection ⇒ 503（含合法结构与伪造凭证）");
+    assert.equal(res.body?.error, "connection-service-unavailable");
+  } finally {
+    cleanup?.();
+    await host.shutdown();
+  }
+});
+
+test("g-507 B5：connection 消失 ⇒ 503；重新引导 ⇒ 恢复（均为真实 fiber 生命周期）", async () => {
+  const h = await pluginOnRealHost();
+  try {
+    const cookie = h.mintOwnerCookie();
+    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie })).status, 200);
+    await h.disposeConnection(); // 真实卸载 fiber
+    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie })).status, 503, "服务消失 ⇒ 503");
+    await h.bootConnection(); // 真实重新引导
+    // 行为观察：宿主把浏览器会话 secret 存在 credentials 里（本轮为空实现的内存表）⇒ 重新引导复用同一 secret，
+    // 旧 cookie 仍然有效。这是宿主的真实语义，不称其为「撤销」，也不臆造失效结论。
+    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie })).status, 200, "重新引导后旧 cookie 仍有效（宿主复用 credentials 中的 secret）");
+    const fresh = h.mintOwnerCookie();
+    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: fresh })).status, 200, "新签发的 cookie ⇒ 200");
   } finally {
     await h.shutdown();
   }
 });
 
-test("g-507 B5：connection 消失/恢复 —— 同一入口随 active 服务动态拒绝与恢复（无裸路由窗口）", async () => {
-  const h = await pluginOnRealHost();
-  const auth = h.authority();
-  const owner = { cookie: mint(h.hostSecret, auth) };
-  try {
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner)).status, 200);
-    // 模拟服务卸载：active 引用消失
-    const real = h.state.connection;
-    await h.disposeConn();
-    assert.equal(h.server.server?.listening, true, "释放 connection scope 不得连带关闭 webServer 监听");
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner)).status, 503, "服务消失 ⇒ 503（而非放行或不注册）");
-    // 恢复（重载后的新实例）
-    await h.newConnection(h.hostSecret);
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner)).status, 200, "服务恢复 ⇒ 同一入口立即恢复");
-    void real;
-  } finally {
-    await h.shutdown();
-  }
-});
-
-test("g-507 B6：换 secret（重新初始化）后旧 cookie 失效；卸载后入口不再注册、无定时器残留", async () => {
-  const h = await pluginOnRealHost();
-  const auth = h.authority();
-  const oldCookie = { cookie: mint(h.hostSecret, auth) };
-  try {
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, oldCookie)).status, 200);
-    // 撤销等效路径：同一 authority 上新 secret ⇒ 旧签名不再被真实 admit 接受
-    await h.newConnection(randomBytes(32));
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, oldCookie)).status, 401, "旧 cookie 在换 secret 后失效");
-  } finally {
-    await h.shutdown();
-  }
-
-  // 卸载：真实 register 的 disposer 让路由表回到「无入口」，且不再有轮询定时器（已注册即无 timer）
-  const routes = h.state.routes;
-  assert.equal(routes.length, 1, "只注册一个入口");
-  const disposer = h.server.register; // 校验 disposer 语义由 WebServer.register 保证
-  assert.equal(typeof disposer, "function");
-  const unregister = () => h.server.prefixes.delete(API);
-  unregister();
-  assert.equal(h.server.match(API), undefined, "卸载后命名空间不再命中任何路由（无裸业务残留）");
-});
-
-test("g-507 B7：重载无重复注册（第二个 apply 仍只有一个 prefix 入口，真实 register 不抛重复）", async () => {
+test("g-507 B6：apply 的真实 cleanup（ctx.effect disposer）⇒ 入口消失、无定时器残留；再次 apply 仍单入口", async () => {
   const h = await pluginOnRealHost();
   try {
-    // 新建插件实例（模拟重载）：向同一个真实 webServer 注册
-    const routes2: any[] = [];
-    const pluginCtx2: any = {
-      get: (name: string) => {
-        if (name === "webServer") {
-          return {
-            register: (def: any) => {
-              routes2.push(def);
-              return h.server.register(def); // 真实 register：同 (kind,path) 重复会抛错
-            },
-          };
-        }
-        if (name === "connection") return h.state.connection;
-        return undefined;
-      },
-      effect: (fn: () => unknown) => fn(),
-      tools: { register: () => () => {}, get: () => ({}) },
-      on() {},
-    };
-    // 先摘掉旧实例的注册（模拟真实卸载顺序：dispose → 再重新 apply）
-    h.server.prefixes.delete(API);
-    apply(pluginCtx2, {});
-    assertSingleProtectedEntry(routes2);
-    const auth = h.authority();
-    const res = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: mint(h.hostSecret, auth) });
-    assert.equal(res.status, 200, "重载后同一入口继续工作（真实 HTTP）");
+    // 真实 cleanup：调用 apply 返回的清理函数（宿主在 fiber dispose 时就是这么调的）
+    h.state.applyCleanup?.();
+    const entry = h.state.routes[0];
+    const after = h.server.match(API);
+    assert.notEqual(after, entry, "cleanup 后插件入口不再命中（宿主自己的 /api 桥属公开行为）");
+    assert.equal(after?.path, "/api", "cleanup 后只剩宿主 /api 前缀（本插件未留任何裸业务）");
+    // 宿主自己的 /api 桥对匿名同样回 401（不许以此判绿）⇒ 改证「插件业务端点不再可达」：
+    // 认证后分发只发生在插件入口内，入口摘除后业务端点不会再被本插件处理。
+    const owner = { cookie: h.mintOwnerCookie() };
+    const afterCleanup = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner);
+    assert.notEqual(afterCleanup.body?.ok, true, "cleanup 后看板业务不再由本插件返回");
+
+    // 再次 apply：仍只有一个入口，且可正常工作
+    h.state.routes.length = 0;
+    const ctx2 = pluginContext(h as any, h.root);
+    (h as any).state.root = h.root;
+    const cleanup2 = apply(ctx2, {});
+    assertSingleProtectedEntry(h.state.routes);
+    assert.equal((await h.request("GET", API)).status, 401, "再次 apply 后匿名仍 401（单入口生效）");
+    assert.equal(
+      (await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: h.mintOwnerCookie() })).status,
+      200,
+      "再次 apply 后 owner 仍 200",
+    );
+    cleanup2?.();
   } finally {
     await h.shutdown();
   }

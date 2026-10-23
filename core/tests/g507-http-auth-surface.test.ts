@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init, createGoal } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { apply, API_NAMESPACE, DESIGN_DIAGRAM_ROUTE, HELP_ASSET_ROUTE, HELP_CATALOG_ROUTE } from "../../dist/index.js";
+import { apply, API_NAMESPACE, DESIGN_DIAGRAM_ROUTE, HELP_ASSET_ROUTE, HELP_CATALOG_ROUTE, getRegisteredRoutes } from "../../dist/index.js";
 import { createRegisterStub, assertSingleProtectedEntry, OWNER_HEADER } from "./_http-auth-harness.ts";
 
 /** 基线路由全集（g-507 之前 63 条：61 exact + 2 prefix 资产路由），逐条在此登记。 */
@@ -224,7 +224,7 @@ test("g-507 A1：唯一受保护入口 —— 注册集合恰为 1 个 prefix，
   assert.equal(typeof entry, "function");
 });
 
-test("g-507 A2：基线 63 条路由全集（61 exact + 2 prefix）仍全部可达路径覆盖", () => {
+test("g-507 A2：基线路由全集与**实现快照**双向对账（单行新增/删除都会判红）", () => {
   // 数量锚：基线 63 = 61 exact + 2 prefix；任一清单漂移都会在此判红（需人工确认新增/删除理由）。
   assert.equal(BASELINE_EXACT.length, 61, "基线 exact 路由 61 条");
   assert.equal(BASELINE_PREFIX.length, 2, "基线 prefix 资产路由 2 条");
@@ -233,9 +233,23 @@ test("g-507 A2：基线 63 条路由全集（61 exact + 2 prefix）仍全部可�
   for (const p of [...BASELINE_EXACT, ...BASELINE_PREFIX]) {
     assert.ok(p === API_NAMESPACE || p.startsWith(`${API_NAMESPACE}/`), `${p} 在受保护命名空间内`);
   }
-  // 未知子路径同样是「命名空间内」的请求：入口必须覆盖整个命名空间（prefix 语义），
-  // 否则 `/<端点>/xxx` 这类未登记路径会落到宿主其他 prefix 路由上。
   assert.deepEqual(allEndpointPaths().length, 63, "端点矩阵 = 63 条基线");
+
+  // g-507 返工：不再用源码文本计数（`\n    {\n` 对单行追加静默失聪），改用**真实注册时刻的快照**
+  // `getRegisteredRoutes()`（由插件在注册前生成，仅 path+kind）做**双向**对账：
+  //   ① 实现里的每条业务路由都必须在测试全集里（否则新增路由逃出拒绝矩阵）；
+  //   ② 测试全集里的每条都必须仍在实现里（否则删掉业务路由无人发现）。
+  // 先在本用例内真实装配一次（快照由注册动作产生，不依赖文件内其它用例的执行顺序）
+  makeEntry();
+  const registered = getRegisteredRoutes();
+  assert.ok(registered, "插件 apply 之后必须能取到真实注册快照");
+  const implExact = registered!.filter((r) => r.kind === "exact").map((r) => r.path).sort();
+  const implPrefix = registered!.filter((r) => r.kind === "prefix").map((r) => r.path).sort();
+  assert.deepEqual(implExact, [...BASELINE_EXACT].sort(), "实现 exact 集合必须与测试全集逐条一致");
+  assert.deepEqual(implPrefix, [...BASELINE_PREFIX].sort(), "实现 prefix 集合必须与测试全集逐条一致");
+  assert.equal(registered!.length, 63, "实现快照总数 = 63（单行新增一条也会在此判红）");
+  // 快照只含 path+kind，绝不含 handler（不得变成绕过门禁的调用面）
+  for (const r of registered!) assert.deepEqual(Object.keys(r).sort(), ["kind", "path"], "快照字段只允许 kind/path");
 });
 
 test("g-507 A3：全部 63 条端点 × 匿名/伪造/信任边界形态 ⇒ 一律拒绝，业务零触达", async () => {

@@ -242,11 +242,73 @@ export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 export const API_NAMESPACE = "/api/dsh-graph";
 // 认证后路径分发的尾斜杠策略（唯一真源，测试与实现共用）：
 //   - 尾斜杠**不做重定向、不做等价改写**：`/api/dsh-graph` 是看板首屏 exact 端点，`/api/dsh-graph/`
-//     不是它（认证后 404），与宿主 exact 表「路径逐字相等」口径一致；
-//   - 两条资产 prefix 只接受 `prefix/尾段`（`resolveDesignDiagramRequest` / `resolveHelpAssetRequest`
-//     在尾段为空时返回 404 name-required），故 `prefix/` 也是 404；
+//     不是它 ⇒ 分发按「规范路径逐字匹配」判定为未命中，认证后 404（与宿主 exact 表口径一致）；
+//   - 两条资产 prefix（diagram / help/asset）**接受** `prefix/` 进入业务，由业务侧名额校验
+//     返回 400（非法文件名），与逐条 exact 端点的 404 不同 —— 这是**有意的**差异：
+//     prefix 端点自己不定义「尾斜杠 = 端点本身」，尾段为空时由业务给出 400 而不是伪造 404；
 //   - query 不参与路径匹配（`?x=1` 不影响命中），认证后原样交给业务 handler 自行读取。
 export const ROUTE_TABLE_TAIL_SLASH = "literal";
+
+/**
+ * 业务路由表：把路由定义按**宿主同款匹配规则**分成 exact 表与 prefix 表。
+ *
+ * 显式元数据是唯一依据（`kind: "exact"` 或缺省 = exact；`kind: "prefix"` = 边界 prefix），
+ * 不靠字符串形状猜；baseline 只有两条 prefix（diagram / help/asset），其余 61 条一律 exact
+ * （原先 61 条省略 kind 被宿主当 prefix，会让 `/<端点>/xxx` 等未知子路径误中看板业务）。
+ * 重复 path 直接抛错（宿主 register 同款 fail-closed），避免后注册者静默覆盖前者。
+ * @param {Array<{path: string, kind?: string, handler: Function}>} defs 路由定义
+ * @returns {{exact: Map<string, object>, prefixes: Map<string, object>}} 路由表（每次调用新表，重载无残留）
+ */
+export const buildRouteTable = (defs) => {
+  const exact = new Map();
+  const prefixes = new Map();
+  for (const def of defs) {
+    // 命名空间根自身（看板首屏 `/api/dsh-graph`）与全体子路径都必须在命名空间内；
+    // 越界 path 一律判错 ⇒ 不注册（fail-closed，绝不把业务路由裸挂到命名空间之外）。
+    if (!def || typeof def.path !== "string" || !(def.path === API_NAMESPACE || def.path.startsWith(API_NAMESPACE + "/"))) {
+      throw new Error(`g-507: 非法路由定义（必须在 ${API_NAMESPACE} 命名空间内）：${String(def?.path)}`);
+    }
+    if (typeof def.handler !== "function") throw new Error(`g-507: 路由 ${def.path} 缺 handler`);
+    const table = def.kind === "prefix" ? prefixes : exact;
+    if (table.has(def.path)) throw new Error(`g-507: 重复路由 ${def.kind === "prefix" ? "prefix" : "exact"} "${def.path}"`);
+    table.set(def.path, def);
+  }
+  return { exact, prefixes };
+};
+
+/**
+ * 按**真实分发口径**在给定路由表里查一个 pathname（供测试断言「端点真的可达」）。
+ *
+ * 只做路径解析 + 表查找：**不调用 handler、不读 req 其它字段、不触达任何业务**。
+ * 返回 `{defined:false}` 表示该路径在表里没有业务定义（认证后分发会落到 404）。
+ * 这是纯查询（无副作用、不参与准入决策），不改变任何运行时行为。
+ * @param {{exact: Map<string, object>, prefixes: Map<string, object>}} table 由 buildRouteTable 构建的表
+ * @param {string} url 带 query 的完整 URL（query 不参与匹配）
+ * @returns {{defined: boolean, def?: object, matchedPath?: string}}
+ */
+/** 测试用：注册瞬间的业务路由清单（只含 path + kind，**不含 handler** ⇒ 不是可绕过门禁的调用面）。 */
+/**
+ * 最近一次**真实注册**时快照的业务路由清单（仅 path + kind）。
+ * 未注册（或已卸载/重载前）返回 `null`；它不是调用面，也不参与鉴权/分发。
+ */
+export const getRegisteredRoutes = () => (routeStateForReport.described ?? null);
+const routeStateForReport = { described: null };
+
+export const describeRoutes = (defs) =>
+  defs.map((def) => Object.freeze({ path: def.path, kind: def.kind === "prefix" ? "prefix" : "exact" }));
+
+export const lookupRoute = (table, url) => {
+  const pathname = new URL(url, "http://dsh-graph.invalid").pathname;
+  const exact = table.exact.get(pathname);
+  if (exact !== undefined) return { defined: true, def: exact, matchedPath: pathname };
+  // 段边界最长 prefix（与宿主 match 及 dispatchRequest 同口径）
+  let best;
+  for (const [prefix, def] of table.prefixes) {
+    if (pathname !== prefix && !pathname.startsWith(prefix + "/")) continue;
+    if (best === undefined || prefix.length > best[0].length) best = [prefix, def];
+  }
+  return best === undefined ? { defined: false } : { defined: true, def: best[1], matchedPath: best[0] };
+};
 
 // ===== g-462：设计哲学交互图的**只读** HTML 路由 =====
 // 现有路由全部返回 JSON；这是第一条 text/html 路由。图的产物由 g-460 定稿在
@@ -4744,13 +4806,13 @@ export function apply(ctx, config) {
   // ===== g-507：/api/dsh-graph 命名空间的唯一受保护入口 =====
   // 注册态（webServer 轮询注册 + 插件内部路由表）。**必须先于下方 dispatcher 定义**声明：
   // dispatcher 在请求期读 `routeState.table`，若声明在其后，handler 首调用会落进 TDZ（ReferenceError）。
-  const routeState = { registered: false, timer: null, table: null };
+  const routeState = { registered: false, timer: null, table: null, described: null };
 
   // 缺陷：g-505 之前 63 条业务路由逐条裸注册到宿主 webServer（61 条省略 kind ⇒ 宿主按 prefix 处理），
   // 任何能连到该端口的一方都可无凭证读取看板、写入目标、派发/清理子代理。本段只做一件事：
   // **把业务路由移到一个统一门禁之后**，业务 handler 本身不改（仍用原有 Node req/res、ETag、流式上传）。
   //
-  // 真实宿主契约（0.2.1-rc.2 只读核实，见 dsh-graph-host/README.md「HTTP 鉴权」一节）：
+  // 真实宿主契约（0.2.1-rc.2 只读核实；对外口径见 dsh-graph-host/README.md「HTTP 鉴权（Web 看板的 REST 入口）」一节）：
   //   - `ctx.get("connection")` 只返回**当前 active** 的 client-connection 服务；它晚到/消失/被重载时
   //     同一入口自动开始拒绝/恢复，不依赖注册时刻的服务快照（无「裸路由升级窗口」）。
   //   - `connection.admit(req)` 是**同步**方法，用宿主自己的签名凭证 + Host/Origin fence + live Peer
@@ -4841,32 +4903,6 @@ export function apply(ctx, config) {
   };
 
   /**
-   * 业务路由表：把 63 条定义按**宿主同款匹配规则**分成 exact 表与 prefix 表。
-   *
-   * 显式元数据是唯一依据（`kind: "exact"` 或缺省 = exact；`kind: "prefix"` = 边界 prefix），
-   * 不靠字符串形状猜；baseline 只有两条 prefix（diagram / help/asset），其余 61 条一律 exact
-   * （原先 61 条省略 kind 被宿主当 prefix，会让 `/<端点>/xxx` 等未知子路径误中看板业务）。
-   * 重复 path 直接抛错（宿主 register 同款 fail-closed），避免后注册者静默覆盖前者。
-   * @returns {{exact: Map<string, object>, prefixes: object[]}} 路由表（每次调用新表，重载无残留）。
-   */
-  const buildRouteTable = (defs) => {
-    const exact = new Map();
-    const prefixes = new Map();
-    for (const def of defs) {
-      // 命名空间根自身（看板首屏 `/api/dsh-graph`）与全体子路径都必须在命名空间内；
-      // 越界 path 一律判错 ⇒ 不注册（fail-closed，绝不把业务路由裸挂到命名空间之外）。
-      if (!def || typeof def.path !== "string" || !(def.path === API_NAMESPACE || def.path.startsWith(API_NAMESPACE + "/"))) {
-        throw new Error(`g-507: 非法路由定义（必须在 ${API_NAMESPACE} 命名空间内）：${String(def?.path)}`);
-      }
-      if (typeof def.handler !== "function") throw new Error(`g-507: 路由 ${def.path} 缺 handler`);
-      const table = def.kind === "prefix" ? prefixes : exact;
-      if (table.has(def.path)) throw new Error(`g-507: 重复路由 ${def.kind === "prefix" ? "prefix" : "exact"} "${def.path}"`);
-      table.set(def.path, def);
-    }
-    return { exact, prefixes };
-  };
-
-  /**
    * 唯一受保护入口的 handler：**先准入，后分发**。
    *
    * 「先准入」意味着认证之前只读得到 `req.method` / `req.url` 与 host 给予的 headers：
@@ -4879,7 +4915,8 @@ export function apply(ctx, config) {
    *     段边界保证 `/api/dsh-graph/diagramX` 不会误中 diagram prefix 路由）；
    *   - `/api/dsh-graph` 自身已作为 exact 路由登记（看板首屏），故不参与 prefix 匹配；
    *   - query 不参与路径匹配（原样交给业务 handler 自行读取）；尾斜杠策略见 ROUTE_TABLE_TAIL_SLASH；
-   *   - 未知子路径 ⇒ 404（认证后才返回，避免向未认证方泄漏命名空间结构）。
+   *   - 未知子路径 ⇒ 404（认证后才返回，避免向未认证方泄漏命名空间结构）；
+ *     尾斜杠与 query 的精确口径见 ROUTE_TABLE_TAIL_SLASH（exact 端点 `/` ⇒ 404；资产 prefix `/` ⇒ 业务 400）。
    *
    * @param {import("node:http").IncomingMessage} req
    * @param {import("node:http").ServerResponse} res
@@ -6829,7 +6866,12 @@ export function apply(ctx, config) {
       if (!webServer) return;
       try {
         // 路由表在注册时刻构建一次（重复 path / 越界 path / 缺 handler 判错 ⇒ 不注册，见 catch）。
-        const table = buildRouteTable(httpRoutes());
+        const defs = httpRoutes();
+        const table = buildRouteTable(defs);
+        // 测试用的只读快照（仅 path + kind）：让「测试全集 ↔ 实现全集」可以双向对账，且不暴露 handler。
+        // 必须放在真实注册之前 —— 若注册失败，快照也不会留下「看起来已注册」的状态。
+        routeState.described = describeRoutes(defs);
+        routeStateForReport.described = routeState.described;
         routeState.table = table;
         const disposer = webServer.register({ kind: "prefix", path: API_NAMESPACE, handler: dispatchRequest });
         disposers.push(disposer);
@@ -6878,6 +6920,8 @@ export function apply(ctx, config) {
     return () => {
       closeWatchers();
       invalidateBoardCache();
+      routeState.described = null;
+      routeStateForReport.described = null;
       if (routeState.timer) clearTimeout(routeState.timer);
       if (sectionState.timer) clearTimeout(sectionState.timer);
       disposers.forEach((d) => d());

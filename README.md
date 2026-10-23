@@ -37,6 +37,12 @@
 
 三平台共用同一安装包。已知限制：① macOS 默认文件系统 APFS 大小写不敏感——仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`，由 `process.cwd()` 推导的路径不受影响。
 
+## HTTP 鉴权（Web 入口）
+
+Web 宿主里的 `/api/dsh-graph/**` 走**单一受保护入口**：只注册一条 `prefix` 路由，每请求先由宿主公开的 `connection.admit` 鉴权、再判定 owner，之后才分发业务。未通过 ⇒ `401`（匿名/凭证无效）、`403`（信任边界或非 owner）、**`503`**（宿主没有 `admit` 等能力不可判定情形，fail-closed）。该入口**只影响 HTTP**：`graph_*` 工具面不经过它。
+
+鉴权行为只在 DSH `0.2.1-rc.2` 实测；`engines.dsh` 声明的其它宿主版本未逐版验证。完整口径见 [dsh-graph-host/README.md](dsh-graph-host/README.md#http-鉴权web-看板的-rest-入口)。
+
 ## 安装
 
 ```sh

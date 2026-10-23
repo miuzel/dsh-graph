@@ -16,7 +16,8 @@ import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transi
 import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
 import { apply, readRawBodyCapped, readBodyCapped, MAX_ATTACHMENT_JSON_BYTES } from "../../dist/index.js";
-import { createRegisterStub, entryHandler, ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+import { createRegisterStub, entryHandler, ownerConnectionStub, assertEndpointsDefined, OWNER_HEADER } from "./_http-auth-harness.ts";
+import { buildRouteTable, lookupRoute } from "../../dist/index.js";
 // g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
 let routeDefs: any[] = [];
 let webServer: any = null;
@@ -730,8 +731,18 @@ test("g-109 写端点全部注册（accept/edit-description/add-card/start-colle
     "/api/dsh-graph/edit-description", "/api/dsh-graph/add-card",
     "/api/dsh-graph/start-collection", "/api/dsh-graph/start-execution",
     "/api/dsh-graph/set-goal-type", "/api/dsh-graph/create-goal"]) {
-    assert.ok(routeDefs.some((r: any) => r.kind === "prefix" && r.path === "/api/dsh-graph"), `${p} 已注册`);
+    // g-507 返工：恢复基线逐端点强度 —— 用与 dispatcher 同口径的 lookupRoute 逐条判定「该 path 真的命中业务定义」。
+    // （此前写成与 p 无关的 some(...) 恒真式，删掉端点也不会判红。）
+    const hit = lookupRoute(buildRouteTable(routeDefs), p);
+    assert.equal(hit.defined, true, `${p} 经唯一入口分发可命中业务定义（实际：${hit.defined ? hit.matchedPath : "未命中 ⇒ 会 404"}）`);
   }
+  // 反向对照：把这批端点的定义全部摘掉后，同一判据必须判红（证明上面的断言不是恒真式）
+  const withoutWriteEndpoints = routeDefs.filter((r: any) => r.path !== "/api/dsh-graph/accept");
+  assert.throws(
+    () => assertEndpointsDefined(buildRouteTable(withoutWriteEndpoints), ["/api/dsh-graph/accept"], lookupRoute),
+    /不可达|未命中|dispatch/,
+    "摘掉 /api/dsh-graph/accept 后逐端点断言必须失败（否则断言形同虚设）",
+  );
 });
 
 test("add-card：建卡 + card.created 事件（事件先行）", async () => {

@@ -143,3 +143,60 @@ export async function loadServicePlugin(root: any, name: string, setup: (ctx: an
   await fiber;
   return { ctx: pluginCtx, fiber, service: captured };
 }
+
+/**
+ * **逐端点真实可达性**断言（g-507 返工，恢复基线 `routes.has(p)` 的强度）。
+ *
+ * 基线断言的是「这条 path 在宿主路由表里存在」；g-507 之后业务不再逐条注册，等价强度必须落在
+ * **插件自己的分发口径**上：对同一个入口表按 `lookupRoute`（与 `dispatchRequest` 同口径的纯查询）
+ * 逐条判定「这个 pathname 命中哪条业务定义」。
+ *
+ * 判定区分三种情况，**不使用**「status != 404」这类模糊口径：
+ *   - `"defined"`：该 path 在表里有业务定义（端点存在）；
+ *   - `"not-defined"`：表里没有任何定义命中 ⇒ 认证后分发会落到 404（端点缺失/被删）；
+ *     ⇒ 若期望端点存在，则**必红**。
+ *   - 端点存在但业务自身返回 404（如 `name-required`）不在此判定范围：本 helper 只看分发命中。
+ *
+ * @param table `buildRouteTable()` 的产物
+ * @param paths 期望**可达**的端点 pathname 列表
+ * @param lookup `lookupRoute` 实现（由调用方从产品模块导入，避免 helper 反向依赖产品）
+ */
+export function assertEndpointsDefined(table: any, paths: string[], lookup: (t: any, url: string) => { defined: boolean; matchedPath?: string }) {
+  const missing: string[] = [];
+  for (const p of paths) {
+    const hit = lookup(table, p);
+    // 端点必须**精确**命中自己（不能只是落进某个更宽 prefix 范围里被"兜住"）
+    if (!hit.defined || hit.matchedPath !== p) missing.push(`${p}${hit.defined ? `（实际命中 ${hit.matchedPath}）` : ""}`);
+  }
+  assert.deepEqual(missing, [], `以下端点经唯一入口分发不可达（分发会 404 或落进别的范围）：${missing.join(", ")}`);
+}
+
+/** 反向断言：这些路径在表里**没有**业务定义（用于证明「删掉/不存在」确实被判为不可达）。 */
+export function assertEndpointsUndefined(table: any, paths: string[], lookup: (t: any, url: string) => { defined: boolean }) {
+  const found = paths.filter((p) => lookup(table, p).defined);
+  assert.deepEqual(found, [], `以下路径本应无业务定义却仍被命中：${found.join(", ")}`);
+}
+
+/**
+ * 双向对账：实现路由集合 与 测试全集 必须逐条相等（任何一侧多/少一条都判红）。
+ *
+ * 用于把「新增路由逃出拒绝矩阵」与「删掉受测路由无人发现」两类漂移同时钉住；
+ * 判定基于**真实注册快照**（path + kind），不依赖源码文本形状（单行新增同样会被捕获）。
+ * @param impl 实现侧快照 `[{path, kind}]`
+ * @param expected 测试全集 `[{path, kind}]`（或 path 字符串数组，按 exact 处理）
+ */
+export function assertSameRouteSet(impl: Array<{ path: string; kind?: string }>, expected: Array<{ path: string; kind?: string }> | string[]) {
+  const norm = (list: Array<{ path: string; kind?: string }> | string[]) =>
+    list
+      .map((e) => (typeof e === "string" ? `${e}|exact` : `${e.path}|${e.kind ?? "exact"}`))
+      .sort();
+  const a = norm(impl);
+  const b = norm(expected);
+  const onlyImpl = a.filter((x) => !b.includes(x));
+  const onlyExpected = b.filter((x) => !a.includes(x));
+  assert.deepEqual(
+    { onlyImpl, onlyExpected },
+    { onlyImpl: [], onlyExpected: [] },
+    `路由集合漂移：实现独有=[${onlyImpl.join(", ")}] 测试独有=[${onlyExpected.join(", ")}]`,
+  );
+}
