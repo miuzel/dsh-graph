@@ -35,6 +35,11 @@ import { readEvents } from "../events.ts";
 import { validateSchema, versionSlugSchema, assertVersionSlug, isVersionSlug, VERSION_SLUG_PATTERN } from "../schema.ts";
 import { apply } from "../../dist/index.js";
 
+// g-507：捕获到的注册定义（setup 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+
 /** 会逃逸/破坏泳道不变式的 slug（每条都对应一个具体失败形态）。 */
 const ILLEGAL: Array<{ slug: string; why: string }> = [
   { slug: "../escaped", why: "上跳段逃出 versions/" },
@@ -50,8 +55,8 @@ const ILLEGAL: Array<{ slug: string; why: string }> = [
 
 const LEGAL = ["v0.19.4", "v-001", "V0.19.3", "release.2024-01", "standalone"];
 
-function fakeRequest(method: string) {
-  const req: any = { method, url: "", _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: any) { req._listeners[ev] = cb; } };
+function fakeRequest(method: string, path: string) {
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method, url: path, _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: any) { req._listeners[ev] = cb; } };
   return req;
 }
 function emitBody(req: any, body: unknown) { req._listeners.data?.(JSON.stringify(body)); req._listeners.end?.(); }
@@ -63,9 +68,9 @@ function setup() {
   init(root);
   const registered: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (n: string) => (n === "webServer" ? webServer : n === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (n: string) => (n === "webServer" ? webServer : n === "connection" ? ownerConnectionStub() : n === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
@@ -83,9 +88,9 @@ function setup() {
     }
   };
   const post = async (path: string, body: unknown) => {
-    const h = routes.get(path);
-    assert.ok(h, `路由 ${path} 已注册`);
-    const req = fakeRequest("POST");
+    const h = entryHandler(routeDefs); // g-507：唯一受保护入口（先 admit + owner，后按 url 分发）
+    assert.ok(typeof h === "function", `命名空间入口已注册（业务端点经门禁分发）：` + String(path));
+    const req = fakeRequest("POST", path);
     const res = fakeResponse();
     const p = h(req, res);
     emitBody(req, body);

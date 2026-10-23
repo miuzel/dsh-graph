@@ -21,6 +21,11 @@ import { parse as parseYaml } from "yaml";
 import { init, readProjectConfig, writeProjectConfig, GraphError } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+
+// g-507：捕获到的注册定义（hostHarness 内赋值；request() 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 // ---------------------------------------------------------------------------
 // 真实 host 接线：tool + REST /api/dsh-graph/settings（GET/POST），与 g435/g311 同款夹具。
@@ -29,16 +34,17 @@ import { apply } from "../../dist/index.js";
 function hostHarness(root: string) {
   const registered: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => (name === "webServer" ? webServer
+      : name === "connection" ? ownerConnectionStub()
       : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
   };
   apply(ctx, { root });
-  return routes;
+  return routeDefs;
 }
 
 function fakeRes() {
@@ -50,9 +56,10 @@ function fakeRes() {
 
 /** 真实 HTTP 入口：GET/POST /api/dsh-graph/settings。 */
 async function request(routes: Map<string, any>, method: string, body?: unknown) {
-  const handler = routes.get("/api/dsh-graph/settings");
-  assert.ok(handler, "settings 路由必须已注册");
+  const handler = entryHandler(routeDefs) /* /api/dsh-graph/settings */;
+  assert.ok(typeof handler === "function", "命名空间入口已注册（settings 经门禁分发）");
   const req: any = {
+    headers: { [OWNER_HEADER]: "1" },
     method,
     url: "/api/dsh-graph/settings",
     _l: {} as Record<string, (v?: any) => void>,

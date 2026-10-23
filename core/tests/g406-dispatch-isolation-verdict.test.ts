@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createGoal, findGoalFile, goalDetail, init, loadGoal, setCriteria } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 /**
  * g-406 回归：`graph_start_attempt` 的**隔离判定必须可据以判定，且必须与真实工作树状态一致**。
@@ -86,10 +90,11 @@ function createHarness({ gitRepo = false, providers = ["spawn"], providerHasPrep
   const spawnedAt: Array<{ label: string; trees: string[] }> = [];
   const registeredTools: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "subagents") {
@@ -314,6 +319,7 @@ test("g-406 判据 2：四条返回分支均携带隔离判定字段（成功 / 
 function fakeReq(method: string, query: string, body: any) {
   const listeners: Record<string, Function> = {};
   return {
+    headers: { [OWNER_HEADER]: "1" },
     method,
     url: query,
     on: (e: string, fn: Function) => { listeners[e] = fn; },
@@ -333,7 +339,7 @@ test("g-406 判据 2：HTTP/GUI 入口（第二处响应白名单）同样回传
   const h = createHarness({ gitRepo: true });
   writeFileSync(join(h.root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const goal = mkGoal(h.root, "HTTP 入口隔离", "feature");
-  const handler = h.routes.get("/api/dsh-graph/start-execution");
+  const handler = entryHandler(routeDefs) /* /api/dsh-graph/start-execution */;
   assert.ok(handler, "应注册 /api/dsh-graph/start-execution 路由");
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(h.ws), { goal, attempt_brief: "HTTP 派发" });
   const res = fakeRes();

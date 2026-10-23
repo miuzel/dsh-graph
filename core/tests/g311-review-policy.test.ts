@@ -48,6 +48,11 @@ import { GraphError } from "../machine.ts";
 import { apply } from "../../dist/index.js";
 import { makeFastTrackFixture, type FastTrackFixtureOptions } from "./fixtures/fast-track-fixture.ts";
 
+// g-507：捕获到的注册定义（setup 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+
 const repoRoot = join(import.meta.dirname, "../..");
 const VERIFIED = `${CRITERIA_VERIFIED_MARK}`;
 
@@ -614,9 +619,9 @@ test("g-311 判据 4（g-436 增量）：指南的派发入口陈述与实现一
 function hostHarness(root: string) {
   const registered: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
@@ -625,7 +630,7 @@ function hostHarness(root: string) {
   const byName = new Map(registered.map((d) => [d.name, d]));
   const exec = { agent: undefined, signal: new AbortController().signal };
   const callTool = (name: string, args: Record<string, unknown>) => byName.get(name)!.execute(args, exec);
-  return { byName, routes, callTool };
+  return { byName, routes: routeDefs, callTool };
 }
 
 function fakeResponse() {
@@ -636,9 +641,9 @@ function fakeResponse() {
 }
 
 async function postRoute(routes: Map<string, any>, path: string, body: unknown) {
-  const handler = routes.get(path);
-  assert.ok(handler, `路由 ${path} 必须已注册`);
-  const req: any = { method: "POST", _l: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._l[ev] = cb; } };
+  const handler = entryHandler(routeDefs); // g-507：唯一受保护入口（先 admit + owner，后按 url 分发）
+  assert.ok(typeof handler === "function", `路由 ${path} 必须已注册`);
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method: "POST", url: path, _l: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._l[ev] = cb; } };
   const res = fakeResponse();
   const p = handler(req, res);
   req._l.data?.(JSON.stringify(body));

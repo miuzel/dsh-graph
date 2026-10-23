@@ -31,6 +31,10 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 /** 临时图根 + mock ctx 应用插件，返回 { root, byName }。agents 可注入（live registry mock）。 */
 function setup(agents?: Record<string, unknown>) {
@@ -333,8 +337,8 @@ test("g-190 ⑫ 工具执行：supervisor 会话成功；agent 非 owner 拒绝�
 
 // ---- REST 端点 ----
 
-function fakeRequest(method: string, body: unknown) {
-  const req: any = { method, _listeners: {} as Record<string, (v?: any) => void>,
+function fakeRequest(method: string, body: unknown, path: string) {
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method, url: path, _listeners: {} as Record<string, (v?: any) => void>,
     on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; } };
   return req;
 }
@@ -352,9 +356,9 @@ function restSetup() {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-unbind-rest-"));
   init(root);
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "agents" ? { get: () => undefined } : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "agents" ? { get: () => undefined } : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -363,9 +367,9 @@ function restSetup() {
   return { root, routes };
 }
 const post = async (routes: Map<string, any>, path: string, body: unknown) => {
-  const handler = routes.get(path);
-  assert.ok(handler, "路由 " + path + " 已注册");
-  const req = fakeRequest("POST", body);
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/unbind */;
+  assert.equal(typeof handler, "function", "命名空间门禁入口可用（业务端点经其分发）：" + path);
+  const req = fakeRequest("POST", body, path);
   const res = fakeResponse();
   const p = handler(req, res);
   emitBody(req, body);
@@ -414,9 +418,9 @@ test("g-190 ⑭ REST：running live registry → 409；unknown registry → 400"
     const root = mkdtempSync(join(tmpdir(), "dsh-graph-unbind-run-"));
     init(root);
     const routes = new Map<string, any>();
-    const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+    { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
     const ctx: any = {
-      get: (name: string) => (name === "webServer" ? webServer : name === "agents" ? { get: () => ({ running: true }) } : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+      get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "agents" ? { get: () => ({ running: true }) } : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
       effect: (fn: () => unknown) => fn(),
       webServer,
       tools: { register: () => () => {}, get: () => ({}) },
@@ -434,9 +438,9 @@ test("g-190 ⑭ REST：running live registry → 409；unknown registry → 400"
     const root = mkdtempSync(join(tmpdir(), "dsh-graph-unbind-unk-"));
     init(root);
     const routes = new Map<string, any>();
-    const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+    { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
     const ctx: any = {
-      get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+      get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
       effect: (fn: () => unknown) => fn(),
       webServer,
       tools: { register: () => () => {}, get: () => ({}) },

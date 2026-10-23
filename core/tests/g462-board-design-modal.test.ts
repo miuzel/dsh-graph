@@ -45,6 +45,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { apply, DESIGN_DIAGRAM_ROUTE, DESIGN_DIAGRAM_FILES, resolveDesignDiagramRequest } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, singleEntry, NAMESPACE } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
@@ -66,18 +70,18 @@ const sha256 = (buf: Buffer | string) => createHash("sha256").update(buf).digest
 
 // ---------------------------------------------------------------- 宿主桩（只捕获路由）
 
-function captureRoutes(): Map<string, any> {
+function captureRoutes(): { route: { kind: string; path: string; handler: (req: any, res: any) => unknown } } {
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     inject: () => ctx,
     effect: (fn: any) => fn(),
-    get: (name: string) => (name === "webServer" ? webServer : null),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : null),
     tools: { register: () => {}, get: () => ({}) },
     webServer,
   };
   apply(ctx, {});
-  return routes;
+  return { route: singleEntry(routeDefs) };
 }
 
 function fakeRes() {
@@ -91,14 +95,15 @@ function fakeRes() {
 
 const routes = (() => {
   const r = captureRoutes();
-  const route = r.get(DIAGRAM_ROUTE);
-  assert.ok(route, `宿主必须注册只读图路由 ${DIAGRAM_ROUTE}`);
+  const route = r.route;
+  // g-507：业务定义不再逐条注册；唯一 prefix 入口覆盖整个命名空间（图路由经门禁后分发）
+  assert.equal(route.path, NAMESPACE, `唯一入口必须覆盖命名空间（图路由 ${DIAGRAM_ROUTE} 在其内）`);
   return { route };
 })();
 
 async function callDiagram(url: string, method = "GET") {
   const res = fakeRes();
-  await routes.route.handler({ method, url, headers: {} }, res);
+  await routes.route.handler({ headers: { [OWNER_HEADER]: "1" }, method, url }, res);
   return res;
 }
 
@@ -177,7 +182,7 @@ test("g-462 A2：未知名 / 目录穿越 / 绝对路径 / 编码变体 / 非 ht
 
 async function routeStatus(url: string): Promise<number> {
   const res = fakeRes();
-  await routes.route.handler({ method: "GET", url, headers: {} }, res);
+  await routes.route.handler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url }, res);
   return res.code;
 }
 

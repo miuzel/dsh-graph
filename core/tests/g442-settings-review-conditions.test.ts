@@ -48,6 +48,10 @@ import {
 } from "../review-policy.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const repoRoot = join(import.meta.dirname, "../..");
 const clientDir = join(repoRoot, "dsh-graph-host/lib/client");
@@ -332,9 +336,9 @@ function setupInstance(rootOverride?: string) {
   init(root);
   const routes = new Map<string, any>();
   const registered: any[] = [];
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
@@ -363,9 +367,9 @@ function fakeResponse() {
   return res;
 }
 async function request(routes: Map<string, any>, method: string, body?: unknown) {
-  const handler = routes.get("/api/dsh-graph/settings");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/settings */;
   assert.ok(handler, "settings 路由已注册");
-  const req: any = { method, url: "/api/dsh-graph/settings", _l: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._l[ev] = cb; } };
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method, url: "/api/dsh-graph/settings", _l: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._l[ev] = cb; } };
   const res = fakeResponse();
   const p = handler(req, res);
   if (body !== undefined) req._l.data?.(JSON.stringify(body));

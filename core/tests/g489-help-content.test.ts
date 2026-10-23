@@ -24,6 +24,10 @@ import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { apply, HELP_CATALOG_ROUTE } from "../../dist/index.js";
 import { HARNESS_MODULE_IDS } from "../ops.ts";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
@@ -50,6 +54,7 @@ function captureHost(): Capture {
     effect: (fn: any) => fn(),
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "skills") return { register: (def: any) => { skills.push(def); return () => {}; } };
       return null;
     },
@@ -283,8 +288,9 @@ test("g-489 A1：分类表 + 简称/类别文案 ≡ 注册真源（51，双向�
   }
   // 目录端点：分类 + 每条工具的 category/short/description + taxonomy_problems。
   const { routes } = captureHostRoutes();
-  const route = routes.get(HELP_CATALOG_ROUTE);
-  assert.ok(route, `宿主必须注册 ${HELP_CATALOG_ROUTE}`);
+  // g-507：业务定义不再逐条注册 —— 目录端点经唯一受保护入口分发（入口覆盖整个命名空间）
+  const route = { path: HELP_CATALOG_ROUTE, handler: entryHandler(routes) };
+  assert.ok(route.handler, `宿主必须注册 ${HELP_CATALOG_ROUTE}（经唯一受保护入口分发）`);
   const body = await callRoute(route);
   assert.equal(body.taxonomy_problems.length, 0, "目录端点的运行期守卫必须为空");
   assert.equal(body.tools.length, 51, "目录端点的工具条目数必须等于注册真源");
@@ -438,18 +444,18 @@ test("g-489 D1：看板设置仍是五个页签（无「关于」），说明文
 
 // ---------------------------------------------------------------- 路由桩（A1 用）
 
-function captureHostRoutes(): { routes: Map<string, any> } {
+function captureHostRoutes(): { routes: any[] } {
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     inject: () => ctx,
     effect: (fn: any) => fn(),
-    get: (name: string) => (name === "webServer" ? webServer : null),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : null),
     tools: { register: () => () => {}, get: () => ({}) },
     webServer,
   };
   apply(ctx, {});
-  return { routes };
+  return { routes: routeDefs };
 }
 
 async function callRoute(route: any): Promise<any> {
@@ -458,6 +464,6 @@ async function callRoute(route: any): Promise<any> {
     writeHead() {},
     end(b: any) { body = b; },
   };
-  await route.handler({ method: "GET", url: HELP_CATALOG_ROUTE, headers: {} }, res);
+  await route.handler({ method: "GET", url: HELP_CATALOG_ROUTE, headers: { [OWNER_HEADER]: "1" } }, res);
   return JSON.parse(String(body));
 }

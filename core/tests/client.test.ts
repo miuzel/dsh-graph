@@ -16,6 +16,10 @@ import { init, createGoal, findGoalFile, loadGoal, saveGoal, setCriteria, transi
 import { criteriaItems, replaceSection, sectionText } from "../model.ts";
 import { readEvents } from "../events.ts";
 import { apply, readRawBodyCapped, readBodyCapped, MAX_ATTACHMENT_JSON_BYTES } from "../../dist/index.js";
+import { createRegisterStub, entryHandler, ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 /** g-442：加载 settings-modal.js 的客户端 payload 段（草稿归一化 + 稀疏 patch + 保存前校验）的**真实源码**，
  *  供行为断言使用（不再用源码字符串匹配替代「保存写入了哪些叶子」这类行为断言）。 */
@@ -38,16 +42,26 @@ const plainJson = (x: any): any => JSON.parse(JSON.stringify(x));
  *  （如「旧式只钳 `vw - 16` …」）不得被误判成回退；只有代码里真的复活旧式样才算回退。 */
 const stripLineComments = (src: string): string => src.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
 
-function fakeRequest(method: string, body: unknown) {
+// g-507：业务调用一律经**唯一受保护入口**（entryHandler = 真实注册的命名空间 dispatcher）：
+// 先过宿主公开 admit + owner 门禁，再在插件内部按显式 exact/prefix 元数据分发到业务 handler。
+// 请求带测试自有 owner 凭证头（真实宿主签名凭证的验证见 g507-http-auth-real-host.test.ts），
+// 业务回归因此不再「绕过门禁直调 handler」，产品侧也没有任何测试绕过开关。
+const OWNER_HEADERS = { [OWNER_HEADER]: "1" };
+
+const fakeRequestWithPath = (method: string, path: string, body: unknown) => {
   const req: any = {
     method,
+    url: path,
+    headers: { ...OWNER_HEADERS },
     _listeners: {} as Record<string, (v?: any) => void>,
     on(ev: string, cb: (v?: any) => void) {
       req._listeners[ev] = cb;
     },
   };
   return req;
-}
+};
+
+const fakeRequest = (method: string, body: unknown) => fakeRequestWithPath(method, "/", body);
 
 function emitBody(req: any, body: unknown) {
   req._listeners.data?.(JSON.stringify(body));
@@ -65,30 +79,28 @@ function setup() {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-host-"));
   init(root);
   const goalId = createGoal(root, { title: "测试目标", version: "v-t", actor: "test" });
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined), // 无 subagents/agents 服务 → 降级分支
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined), // 无 subagents/agents 服务 → 降级分支
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, { root });
-  return { root, routes, goalId };
+  return { root, routeDefs, goalId };
 }
 
 // g-113：无 config.root 的 apply（完全由请求 workspace 决定 root，与生产默认一致）
 function setupNoConfigRoot(workspace?: string) {
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? (workspace ? { workspaceRoot: workspace } : undefined) : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? (workspace ? { workspaceRoot: workspace } : undefined) : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, {});
-  return { routes };
+  return { routeDefs };
 }
 
 function makeProject(base: string, name: string, title: string): { ws: string; goalId: string; title: string } {
@@ -107,46 +119,49 @@ function boardGoalTitles(body: any): string[] {
   ].map((g: any) => g.title);
 }
 
-const post = async (routes: Map<string, any>, path: string, body: unknown) => {
-  const handler = routes.get(path);
-  assert.ok(handler, `路由 ${path} 已注册`);
-  const req = fakeRequest("POST", body);
+const post = async (entry: (req: any, res: any) => unknown, path: string, body: unknown) => {
+  assert.ok(typeof entry === "function", `写入入口 ${path} 经唯一门禁入口可达`);
+  const req = fakeRequestWithPath("POST", path, body);
   const res = fakeResponse();
-  const p = handler(req, res);
+  const p = entry(req, res);
   emitBody(req, body);
   await p;
   return { code: res._code, body: res._body };
 };
 
-const get = async (routes: Map<string, any>, path: string) => {
-  const purePath = path.split("?")[0];
-  const handler = routes.get(purePath);
-  assert.ok(handler, `路由 ${purePath} 已注册`);
-  const req: any = fakeRequest("GET", null);
-  req.url = path;
+/** 走唯一门禁入口发一次 GET（带测试自有 owner 凭证），返回 {code, body}。 */
+const get = async (routes: any[] | ((req: any, res: any) => unknown), path: string) => {
+  const entry = typeof routes === "function" ? routes : entryHandler(routes);
+  const req: any = fakeRequestWithPath("GET", path, null);
   const res = fakeResponse();
-  await handler(req, res);
+  await entry(req, res);
   return { code: res._code, body: res._body };
 };
 
+/** 直接构造请求对象的用例：补测试自有 owner 凭证头（其余字段/形态保持原样）。 */
+const withOwner = (req: any): any => ({ ...req, headers: { ...(req?.headers ?? {}), ...OWNER_HEADERS } });
+
+/** 需要自己驱动 req/res 的用例：取唯一门禁入口函数（后续 handler(withOwner(req),res) 仍走 admit+owner 门禁）。 */
+const handlerFor = (routes: any[]) => entryHandler(routes);
+
 test("g-132 settings 端点：GET 回填当前配置、POST 写回并保留值，不半写入", async () => {
-  const { root, routes } = setup();
-  const empty = await get(routes, "/api/dsh-graph/settings");
+  const { root, routeDefs } = setup();
+  const empty = await get(entryHandler(routeDefs), "/api/dsh-graph/settings");
   assert.equal(empty.code, 200);
   assert.deepEqual(empty.body.executor, { provider: null, model: null, mode: null });
   // att-002：GET 下发当前 canonical workspace 的 project.yaml 绝对路径
   assert.equal(empty.body.configFile, join(root, "project.yaml"));
-  const write = await post(routes, "/api/dsh-graph/settings",
+  const write = await post(entryHandler(routeDefs), "/api/dsh-graph/settings",
     { executor: { provider: "openai-codex", model: "gpt-5.6-luna" }, prompt_overrides: { subagent: { state: "override", value: "子代理补充" } } });
   assert.equal(write.code, 200);
   assert.equal(write.body.ok, true);
-  const again = await get(routes, "/api/dsh-graph/settings");
+  const again = await get(entryHandler(routeDefs), "/api/dsh-graph/settings");
   assert.equal(again.code, 200);
   assert.deepEqual(again.body.executor, { provider: "openai-codex", model: "gpt-5.6-luna", mode: null });
   assert.deepEqual(again.body.prompt_overrides.subagent, { state: "override", value: "子代理补充" });
   assert.equal(again.body.configFile, join(root, "project.yaml"));
   // 非法值 → 400 且不半写入
-  const bad = await post(routes, "/api/dsh-graph/settings", { defaults: { pk: { lanes: 0 } } });
+  const bad = await post(entryHandler(routeDefs), "/api/dsh-graph/settings", { defaults: { pk: { lanes: 0 } } });
   assert.equal(bad.code, 400);
   assert.equal(readProjectConfig(root).defaults.pk.lanes, null);
   assert.equal(readEvents(root).filter((e) => e.event === "project.config_set").length, 1);
@@ -710,19 +725,19 @@ test("g-165 各类列空白区域拖拽目标与离列清除源契约", () => {
 });
 
 test("g-109 写端点全部注册（accept/edit-description/add-card/start-collection）", () => {
-  const { routes } = setup();
+  const { routeDefs } = setup();
   for (const p of ["/api/dsh-graph/accept", "/api/dsh-graph/resolve-accept",
     "/api/dsh-graph/edit-description", "/api/dsh-graph/add-card",
     "/api/dsh-graph/start-collection", "/api/dsh-graph/start-execution",
     "/api/dsh-graph/set-goal-type", "/api/dsh-graph/create-goal"]) {
-    assert.ok(routes.has(p), `${p} 已注册`);
+    assert.ok(routeDefs.some((r: any) => r.kind === "prefix" && r.path === "/api/dsh-graph"), `${p} 已注册`);
   }
 });
 
 test("add-card：建卡 + card.created 事件（事件先行）", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
-  const { code, body } = await post(routes, "/api/dsh-graph/add-card",
+  const { code, body } = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card",
     { goal: goalId, title: "调研 A", kind: "text", scope: "goal" });
   assert.equal(code, 200);
   assert.equal(body.ok, true);
@@ -738,18 +753,18 @@ test("add-card：建卡 + card.created 事件（事件先行）", async () => {
 // g-219：delete-card 端点回归——删除后 goal 详情不再含该卡片（弹窗数据源），
 // collecting 卡片删除被拒且带明确提示（事件结果驱动，UI 以 data.ok 为准）。
 test("delete-card：删除后 goal 详情卡片消失 + card.deleted 事件（事件先行）", async () => {
-  const { root, routes, goalId } = setup();
-  const { body } = await post(routes, "/api/dsh-graph/add-card",
+  const { root, routeDefs, goalId } = setup();
+  const { body } = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card",
     { goal: goalId, title: "调研 A", kind: "text", scope: "goal" });
   const card = body.card;
-  const goalHandler = routes.get("/api/dsh-graph/goal");
+  const goalHandler = handlerFor(routeDefs); // /api/dsh-graph/goal
   const goalDetail = () => {
     const res = fakeResponse();
-    goalHandler({ method: "GET", url: `/api/dsh-graph/goal?id=${goalId}`, on: () => {} }, res);
+    goalHandler(withOwner({ method: "GET", url: `/api/dsh-graph/goal?id=${goalId}`, on: () => {} }), res);
     return res._body;
   };
   assert.ok(goalDetail().cards.some((c: any) => c.id === card), "删除前详情含该卡片");
-  const r = await post(routes, "/api/dsh-graph/delete-card", { goal: goalId, card });
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/delete-card", { goal: goalId, card });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
   assert.ok(!goalDetail().cards.some((c: any) => c.id === card), "删除后详情不再含该卡片");
@@ -760,14 +775,14 @@ test("delete-card：删除后 goal 详情卡片消失 + card.deleted 事件（�
 });
 
 test("delete-card：collecting 卡片删除被拒（400 + 明确提示）", async () => {
-  const { root, routes, goalId } = setup();
-  const { body } = await post(routes, "/api/dsh-graph/add-card",
+  const { root, routeDefs, goalId } = setup();
+  const { body } = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card",
     { goal: goalId, title: "收集中", kind: "text" });
   const card = body.card;
   // 模拟 collecting（绑定子代理）
   const { bindCardChild } = await import("../ops.ts");
   await bindCardChild(root, goalId, card, { childId: "child-x", actor: "test" });
-  const r = await post(routes, "/api/dsh-graph/delete-card", { goal: goalId, card });
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/delete-card", { goal: goalId, card });
   assert.equal(r.code, 400);
   assert.ok(String(r.body.error).includes("正在收集"), "被拒提示应包含收集原因");
   // 无 card.deleted 事件
@@ -776,20 +791,20 @@ test("delete-card：collecting 卡片删除被拒（400 + 明确提示）", asyn
 });
 
 test("delete-card：删除不存在的卡片 → 400 不崩溃（幂等健壮）", async () => {
-  const { routes, goalId } = setup();
-  const r = await post(routes, "/api/dsh-graph/delete-card",
+  const { routeDefs, goalId } = setup();
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/delete-card",
     { goal: goalId, card: "card-nonexist" });
   assert.equal(r.code, 400);
   assert.ok(String(r.body.error).length > 0);
 });
 
 test("start-collection 无 subagents：child_error 上报、卡片不误翻 collecting且不创建 attempt", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
-  const { body } = await post(routes, "/api/dsh-graph/add-card",
+  const { body } = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card",
     { goal: goalId, title: "c", kind: "text", scope: "goal" });
   const card = body.card;
-  const r = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card });
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/start-collection", { goal: goalId, card });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
   assert.equal(r.body.card, card);
@@ -820,11 +835,11 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
     },
   };
 
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "subagents") return subagentsService;
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
@@ -837,16 +852,16 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
   apply(ctx, {});
 
   // add-card 必须带 workspace，否则卡片建到 process.cwd()
-  const addRes = await post(routes, "/api/dsh-graph/add-card",
+  const addRes = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card",
     { goal: goalId, title: "测试卡片", kind: "text", workspace: ws, scope: "goal" });
   assert.equal(addRes.code, 200);
   const card = addRes.body.card;
 
   // start-collection
-  const handler = routes.get("/api/dsh-graph/start-collection");
-  const req = fakeRequest("POST", { goal: goalId, card, workspace: ws });
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/start-collection
+  const req = fakeRequestWithPath("POST", "/api/dsh-graph/start-collection", { goal: goalId, card, workspace: ws });
   const res = fakeResponse();
-  const p = handler(req, res);
+  const p = handler(withOwner(req), res);
   emitBody(req, { goal: goalId, card, workspace: ws });
   await p;
   assert.equal(res._code, 200);
@@ -880,11 +895,11 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
     },
   };
 
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "subagents") return subagentsService;
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
@@ -896,16 +911,16 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
   };
   apply(ctx, {});
 
-  const addRes = await post(routes, "/api/dsh-graph/add-card",
+  const addRes = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card",
     { goal: goalId, title: "用户提示卡", kind: "text", workspace: ws, scope: "goal" });
   assert.equal(addRes.code, 200);
   const card = addRes.body.card;
 
   const userPrompt = "请重点关注技术实现细节和性能指标";
-  const handler = routes.get("/api/dsh-graph/start-collection");
-  const req = fakeRequest("POST", { goal: goalId, card, prompt: userPrompt, workspace: ws });
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/start-collection
+  const req = fakeRequestWithPath("POST", "/api/dsh-graph/start-collection", { goal: goalId, card, prompt: userPrompt, workspace: ws });
   const res = fakeResponse();
-  const p = handler(req, res);
+  const p = handler(withOwner(req), res);
   emitBody(req, { goal: goalId, card, prompt: userPrompt, workspace: ws });
   await p;
   assert.equal(res._code, 200);
@@ -919,8 +934,8 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
 });
 
 test("accept（非 force）：写 review.requested 事件", async () => {
-  const { root, routes, goalId } = setup();
-  const r = await post(routes, "/api/dsh-graph/accept", { goal: goalId });
+  const { root, routeDefs, goalId } = setup();
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/accept", { goal: goalId });
   assert.equal(r.code, 200);
   assert.equal(r.body.pending, true);
   const ev = readEvents(root).filter((e) => e.event === "review.requested");
@@ -930,8 +945,8 @@ test("accept（非 force）：写 review.requested 事件", async () => {
 });
 
 test("edit-description：改目标描述 + goal.amended 事件", async () => {
-  const { root, routes, goalId } = setup();
-  const r = await post(routes, "/api/dsh-graph/edit-description",
+  const { root, routeDefs, goalId } = setup();
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/edit-description",
     { goal: goalId, text: "新描述内容" });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
@@ -944,8 +959,8 @@ test("edit-description：改目标描述 + goal.amended 事件", async () => {
 // ---- g-170：判据编辑保存端点（方案 A） ----
 
 test("g-170 set-criteria：保存成功 trim/去重拒绝/1..N 重排 + criteria.updated（不冒充 confirmed）", async () => {
-  const { root, routes, goalId } = setup();
-  const r = await post(routes, "/api/dsh-graph/set-criteria",
+  const { root, routeDefs, goalId } = setup();
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: ["  甲  ", "", "乙", "丙  "], base_items: [] });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
@@ -958,35 +973,35 @@ test("g-170 set-criteria：保存成功 trim/去重拒绝/1..N 重排 + criteria
 });
 
 test("g-170 set-criteria：重复文本拒绝（400）", async () => {
-  const { routes, goalId } = setup();
-  const r = await post(routes, "/api/dsh-graph/set-criteria",
+  const { routeDefs, goalId } = setup();
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: ["甲", " 甲 "], base_items: [] });
   assert.equal(r.code, 400);
   assert.match(r.body.error, /重复/);
 });
 
 test("g-170 set-criteria：D3 空列表——planning 允许，in_progress 拒绝", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   // setup() 目标带 version → planning；清空允许
-  const clear = await post(routes, "/api/dsh-graph/set-criteria",
+  const clear = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: [], base_items: [] });
   assert.equal(clear.code, 200);
   // 进 in_progress 后再清空 → 400
-  await post(routes, "/api/dsh-graph/set-criteria", { goal: goalId, items: ["判据"], base_items: [] });
-  await post(routes, "/api/dsh-graph/transition", { goal: goalId, to: "collecting" });
-  await post(routes, "/api/dsh-graph/transition", { goal: goalId, to: "ready" });
-  await post(routes, "/api/dsh-graph/transition", { goal: goalId, to: "in_progress", force: true });
-  const reject = await post(routes, "/api/dsh-graph/set-criteria",
+  await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria", { goal: goalId, items: ["判据"], base_items: [] });
+  await post(entryHandler(routeDefs), "/api/dsh-graph/transition", { goal: goalId, to: "collecting" });
+  await post(entryHandler(routeDefs), "/api/dsh-graph/transition", { goal: goalId, to: "ready" });
+  await post(entryHandler(routeDefs), "/api/dsh-graph/transition", { goal: goalId, to: "in_progress", force: true });
+  const reject = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: [], base_items: ["1. 判据"] });
   assert.equal(reject.code, 400);
   assert.match(reject.body.error, /不允许清空质量判据/);
 });
 
 test("g-170 set-criteria：D8 base_items 不一致 → 409；force=true → 200 覆盖并记 conflicted", async () => {
-  const { root, routes, goalId } = setup();
-  await post(routes, "/api/dsh-graph/set-criteria", { goal: goalId, items: ["甲", "乙"], base_items: [] });
+  const { root, routeDefs, goalId } = setup();
+  await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria", { goal: goalId, items: ["甲", "乙"], base_items: [] });
   // 并发冲突（base 过期）
-  const conflict = await post(routes, "/api/dsh-graph/set-criteria",
+  const conflict = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: ["丙"], base_items: ["1. 旧甲"] });
   assert.equal(conflict.code, 409);
   assert.match(conflict.body.error, /并发冲突/);
@@ -994,7 +1009,7 @@ test("g-170 set-criteria：D8 base_items 不一致 → 409；force=true → 200 
   let doc = loadGoal(findGoalFile(root, goalId));
   assert.deepEqual(criteriaItems(doc.body), ["1. 甲", "2. 乙"]);
   // force=true 覆盖
-  const overwrite = await post(routes, "/api/dsh-graph/set-criteria",
+  const overwrite = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: ["丙"], base_items: ["1. 旧甲"], force: true });
   assert.equal(overwrite.code, 200);
   assert.equal(overwrite.body.conflicted, true);
@@ -1005,29 +1020,29 @@ test("g-170 set-criteria：D8 base_items 不一致 → 409；force=true → 200 
 });
 
 test("g-170 set-criteria：保留小节注释；goal 端点下发 criteria_items（base_items 数据源）", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   const goalFile = findGoalFile(root, goalId);
   const doc = loadGoal(goalFile);
   doc.body = replaceSection(doc.body, "质量判据",
     sectionText(doc.body, "质量判据")! + "\n<!-- 备注 -->\n");
   saveGoal(goalFile, doc);
-  const r = await post(routes, "/api/dsh-graph/set-criteria",
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: ["甲"], base_items: [] });
   assert.equal(r.code, 200);
   assert.ok(loadGoal(goalFile).body.includes("<!-- 备注 -->"));
   // goal 端点下发 criteria_items
-  const handler = routes.get("/api/dsh-graph/goal");
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/goal
   const res = fakeResponse();
-  handler({ method: "GET", url: `/api/dsh-graph/goal?id=${goalId}`, on: () => {} }, res);
+  handler(withOwner({ method: "GET", url: `/api/dsh-graph/goal?id=${goalId}`, on: () => {} }), res);
   assert.equal(res._code, 200);
   assert.deepEqual(res._body.criteria_items, ["1. 甲"]);
 });
 
 test("g-170 set-criteria：缺 items / 非字符串数组 → 400", async () => {
-  const { routes, goalId } = setup();
-  const missing = await post(routes, "/api/dsh-graph/set-criteria", { goal: goalId });
+  const { routeDefs, goalId } = setup();
+  const missing = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria", { goal: goalId });
   assert.equal(missing.code, 400);
-  const badType = await post(routes, "/api/dsh-graph/set-criteria",
+  const badType = await post(entryHandler(routeDefs), "/api/dsh-graph/set-criteria",
     { goal: goalId, items: [1, 2] });
   assert.equal(badType.code, 400);
 });
@@ -1129,11 +1144,11 @@ test("g-170 constants：criteria.updated 事件有标签并计入近期动态", 
 });
 
 test("spawn-options：无 llm 服务时容错返回（重新执行选择器数据源）", async () => {
-  const { routes } = setup();
-  const handler = routes.get("/api/dsh-graph/spawn-options");
+  const { routeDefs } = setup();
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/spawn-options
   assert.ok(handler, "spawn-options 路由已注册");
   const res = fakeResponse();
-  await handler({ method: "GET", on: () => {} }, res);
+  await handler(withOwner({ method: "GET", url: "/api/dsh-graph/spawn-options", on: () => {} }), res);
   assert.equal(res._code, 200);
   // modelGroups 无 llm 服务 → null；default 读 project.yaml（temp root 无 → null）
   assert.equal(res._body.modelGroups, null);
@@ -1163,11 +1178,11 @@ test("g-231 spawn-options：resolveModelInfo 补充 per-model reasoning.efforts 
     },
   };
 
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "llm") return llmService;
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       return undefined;
@@ -1178,9 +1193,9 @@ test("g-231 spawn-options：resolveModelInfo 补充 per-model reasoning.efforts 
   };
   apply(ctx, {});
 
-  const handler = routes.get("/api/dsh-graph/spawn-options");
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/spawn-options
   const res = fakeResponse();
-  await handler({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }, res);
+  await handler(withOwner({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }), res);
   assert.equal(res._code, 200);
   assert.ok(Array.isArray(res._body.modelGroups), "modelGroups 应为数组");
   assert.equal(res._body.modelGroups.length, 2);
@@ -1218,11 +1233,11 @@ test("g-231 spawn-options：无 resolveModelInfo 时模型只含 id/name（向�
     // 无 resolveModelInfo 方法（旧版 llm 服务）
   };
 
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "llm") return llmService;
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       return undefined;
@@ -1233,9 +1248,9 @@ test("g-231 spawn-options：无 resolveModelInfo 时模型只含 id/name（向�
   };
   apply(ctx, {});
 
-  const handler = routes.get("/api/dsh-graph/spawn-options");
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/spawn-options
   const res = fakeResponse();
-  await handler({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }, res);
+  await handler(withOwner({ method: "GET", url: "/api/dsh-graph/spawn-options?workspace=" + encodeURIComponent(ws), on: () => {} }), res);
   assert.equal(res._code, 200);
   assert.equal(res._body.modelGroups.length, 1);
   assert.equal(res._body.modelGroups[0].models[0].id, "legacy-model");
@@ -1280,10 +1295,10 @@ test("g-231 loadHostCatalog REST fallback 保留 spawn-options 中的 reasoning 
 });
 
 test("start-execution 无 subagents：attempt 本地创建、child_error 上报（带 provider/model 参数不炸）", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   // g-237：派发前有执行准入门禁，fixture 需先登记判据
   setCriteria(root, goalId, ["测试判据"], "test");
-  const r = await post(routes, "/api/dsh-graph/start-execution",
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/start-execution",
     { goal: goalId, provider: "spawn", model: "deepseek-v4-flash", mode: "minimal" });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
@@ -1316,11 +1331,11 @@ test("g-148 GUI 两步执行链：force ready→in_progress + start-execution �
     getProvider: () => ({ prepareContinuable: () => {} }),
     startContinuable: async () => ({ childId: "c-g148", parentSessionId: "p-g148" }),
   };
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "subagents") return subagentsService;
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
@@ -1333,13 +1348,13 @@ test("g-148 GUI 两步执行链：force ready→in_progress + start-execution �
   apply(ctx, {});
 
   // Step 1：GUI 模拟 force transition ready → in_progress
-  const tr = await post(routes, "/api/dsh-graph/transition",
+  const tr = await post(entryHandler(routeDefs), "/api/dsh-graph/transition",
     { goal: goalId, to: "in_progress", force: true, workspace: ws });
   assert.equal(tr.code, 200);
   assert.equal(tr.body.ok, true, "force ready→in_progress 成功");
 
   // Step 2：start-execution
-  const exec = await post(routes, "/api/dsh-graph/start-execution",
+  const exec = await post(entryHandler(routeDefs), "/api/dsh-graph/start-execution",
     { goal: goalId, workspace: ws });
   assert.equal(exec.code, 200);
   assert.equal(exec.body.ok, true);
@@ -1368,10 +1383,9 @@ test("g-148 GUI 两步执行链：transition 端点校验缺失参数", async ()
   init(root);
   createGoal(root, { title: "g-148 失败测试", version: "v-t", actor: "test" });
 
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -1379,13 +1393,13 @@ test("g-148 GUI 两步执行链：transition 端点校验缺失参数", async ()
   apply(ctx, {});
 
   // 缺少 goal 参数 → 400
-  const tr = await post(routes, "/api/dsh-graph/transition",
+  const tr = await post(entryHandler(routeDefs), "/api/dsh-graph/transition",
     { to: "in_progress", force: true, workspace: ws });
   assert.equal(tr.code, 400, "缺失 goal 返回 400");
   assert.ok(tr.body.error, "错误信息存在");
 
   // 不存在的目标 → 400
-  const tr2 = await post(routes, "/api/dsh-graph/transition",
+  const tr2 = await post(entryHandler(routeDefs), "/api/dsh-graph/transition",
     { goal: "g-nonexist", to: "in_progress", force: true, workspace: ws });
   assert.equal(tr2.code, 400, "不存在的目标返回 400");
 });
@@ -1396,18 +1410,18 @@ test("g-113 board 端点跟随 ?workspace=：读该项目自己的 .dsh-graph，
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const a = makeProject(base, "proj-a", "A 项目目标");
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot(b.ws);
-  const handler = routes.get("/api/dsh-graph");
+  const { routeDefs } = setupNoConfigRoot(b.ws);
+  const handler = handlerFor(routeDefs); // /api/dsh-graph
   const res = fakeResponse();
-  handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(b.ws) }, res);
+  handler(withOwner({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(b.ws) }), res);
   assert.equal(res._code, 200);
   const titles = boardGoalTitles(res._body);
   assert.ok(titles.includes(b.title), "board 含 workspace 项目的目标");
   assert.ok(!titles.includes(a.title), "board 不含其他项目目标");
   // 反向：workspace=a 使用独立请求上下文授权
-  const handlerA = setupNoConfigRoot(a.ws).routes.get("/api/dsh-graph");
+  const handlerA = entryHandler(setupNoConfigRoot(a.ws).routeDefs); // 独立 apply 实例的唯一门禁入口
   const res2 = fakeResponse();
-  handlerA({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(a.ws) }, res2);
+  handlerA(withOwner({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(a.ws) }), res2);
   const titles2 = boardGoalTitles(res2._body);
   assert.ok(titles2.includes(a.title));
   assert.ok(!titles2.includes(b.title));
@@ -1416,11 +1430,11 @@ test("g-113 board 端点跟随 ?workspace=：读该项目自己的 .dsh-graph，
 test("g-113 写端点跟随 body.workspace：add-card 写到该项目 .dsh-graph（事件落该项目）", async () => {
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot(b.ws);
-  const handler = routes.get("/api/dsh-graph/add-card");
-  const req = fakeRequest("POST", { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
+  const { routeDefs } = setupNoConfigRoot(b.ws);
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/add-card
+  const req = fakeRequestWithPath("POST", "/api/dsh-graph/add-card", { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws });
   const res = fakeResponse();
-  const p = handler(req, res);
+  const p = handler(withOwner(req), res);
   emitBody(req, { goal: b.goalId, title: "收集卡", kind: "text", workspace: b.ws, scope: "goal" });
   await p;
   assert.equal(res._code, 200);
@@ -1434,12 +1448,12 @@ test("g-113 写端点跟随 body.workspace：add-card 写到该项目 .dsh-graph
 test("g-113 写端点同时接受 query 参数 workspace（前端 POST 也走 ?workspace=）", async () => {
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot(b.ws);
-  const handler = routes.get("/api/dsh-graph/accept");
-  const req = fakeRequest("POST", { goal: b.goalId });
+  const { routeDefs } = setupNoConfigRoot(b.ws);
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/accept
+  const req = fakeRequestWithPath("POST", "/api/dsh-graph/accept", { goal: b.goalId });
   req.url = "/api/dsh-graph/accept?workspace=" + encodeURIComponent(b.ws);
   const res = fakeResponse();
-  const p = handler(req, res);
+  const p = handler(withOwner(req), res);
   emitBody(req, { goal: b.goalId });
   await p;
   assert.equal(res._code, 200);
@@ -1452,10 +1466,10 @@ test("g-113 board 端点接受 ?root= 别名（与 ?workspace= 等价，均指 w
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-ws-"));
   const a = makeProject(base, "proj-a", "A 项目目标");
   const b = makeProject(base, "proj-b", "B 项目目标");
-  const { routes } = setupNoConfigRoot(b.ws);
-  const handler = routes.get("/api/dsh-graph");
+  const { routeDefs } = setupNoConfigRoot(b.ws);
+  const handler = handlerFor(routeDefs); // /api/dsh-graph
   const res = fakeResponse();
-  handler({ method: "GET", url: "/api/dsh-graph?root=" + encodeURIComponent(b.ws) }, res);
+  handler(withOwner({ method: "GET", url: "/api/dsh-graph?root=" + encodeURIComponent(b.ws) }), res);
   assert.equal(res._code, 200);
   const titles = boardGoalTitles(res._body);
   assert.ok(titles.includes(b.title), "?root= 读到 workspace 项目目标");
@@ -1463,20 +1477,20 @@ test("g-113 board 端点接受 ?root= 别名（与 ?workspace= 等价，均指 w
 });
 
 test("g-113 无 workspace 参数时回退 config.root（现有行为不回归）", async () => {
-  const { root, routes, goalId } = setup(); // config.root = temp
-  const handler = routes.get("/api/dsh-graph/goal");
+  const { root, routeDefs, goalId } = setup(); // config.root = temp
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/goal
   const res = fakeResponse();
-  handler({ method: "GET", url: "/api/dsh-graph/goal?id=" + encodeURIComponent(goalId) }, res);
+  handler(withOwner({ method: "GET", url: "/api/dsh-graph/goal?id=" + encodeURIComponent(goalId) }), res);
   assert.equal(res._code, 200);
   assert.equal(res._body.meta?.id, goalId, "无 workspace 时按 config.root 解析（绝对 root 覆盖兜底）");
 });
 
 test("g-113 端点触达全新 workspace 时自动 init 骨架（开箱即用，不落 profile 骨架）", () => {
   const freshWs = join(mkdtempSync(join(tmpdir(), "dsh-graph-fresh-")), "brand-new-proj");
-  const { routes } = setupNoConfigRoot(freshWs);
-  const handler = routes.get("/api/dsh-graph");
+  const { routeDefs } = setupNoConfigRoot(freshWs);
+  const handler = handlerFor(routeDefs); // /api/dsh-graph
   const res = fakeResponse();
-  handler({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(freshWs) }, res);
+  handler(withOwner({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(freshWs) }), res);
   assert.equal(res._code, 200);
   assert.deepEqual(boardGoalTitles(res._body), [], "全新项目 board 返回空看板");
   for (const d of ["backlog", "goals", "versions", "memory/long-term"]) {
@@ -1497,11 +1511,11 @@ test("g-113 start-execution 注入目标相对路径以请求 workspace 为基�
   setCriteria(join(ws, ".dsh-graph"), goalId, ["测试判据"], "test");
   writeFileSync(join(ws, ".dsh-graph", "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   let capturedPrompt = "";
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "subagents") return {
         list: () => ["spawn"],
         getProvider: () => ({ prepareContinuable: () => {} }),
@@ -1519,11 +1533,11 @@ test("g-113 start-execution 注入目标相对路径以请求 workspace 为基�
     tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, {});
-  const handler = routes.get("/api/dsh-graph/start-execution");
-  const req = fakeRequest("POST", { goal: goalId });
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/start-execution
+  const req = fakeRequestWithPath("POST", "/api/dsh-graph/start-execution", { goal: goalId });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
   const res = fakeResponse();
-  const p = handler(req, res);
+  const p = handler(withOwner(req), res);
   emitBody(req, { goal: goalId });
   await p;
   assert.equal(res._code, 200);
@@ -1663,27 +1677,27 @@ test("g-154 编译产物契约：dsh-graph-host/core/ops.js goalCards 输出含 
 
 // g-158：REST 端到端——create-goal type 透传 + set-goal-type 事件
 test("g-158 create-goal REST 透传 type（默认 task/指定/非法回退）", async () => {
-  const { root, routes } = setup();
+  const { root, routeDefs } = setup();
   // 指定 type
-  const r1 = await post(routes, "/api/dsh-graph/create-goal", { title: "Feature", type: "feature" });
+  const r1 = await post(entryHandler(routeDefs), "/api/dsh-graph/create-goal", { title: "Feature", type: "feature" });
   assert.equal(r1.code, 200);
   const f = findGoalFile(root, r1.body.goal);
   assert.equal(loadGoal(f).meta.type, "feature", "create-goal 应持久化指定 type");
   // 缺省 type → task
-  const r2 = await post(routes, "/api/dsh-graph/create-goal", { title: "默认" });
+  const r2 = await post(entryHandler(routeDefs), "/api/dsh-graph/create-goal", { title: "默认" });
   const f2 = findGoalFile(root, r2.body.goal);
   assert.equal(loadGoal(f2).meta.type, "task", "缺省 type 应为 task");
   // 非法 type → task
-  const r3 = await post(routes, "/api/dsh-graph/create-goal", { title: "非法", type: "nope" });
+  const r3 = await post(entryHandler(routeDefs), "/api/dsh-graph/create-goal", { title: "非法", type: "nope" });
   const f3 = findGoalFile(root, r3.body.goal);
   assert.equal(loadGoal(f3).meta.type, "task", "非法 type 应回退 task");
 });
 
 test("g-158 set-goal-type REST：更新 type + 记 goal.type_changed 事件 + no-op", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   const before = loadGoal(findGoalFile(root, goalId));
   assert.equal(before.meta.type, "task");
-  const r = await post(routes, "/api/dsh-graph/set-goal-type", { goal: goalId, type: "bug" });
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/set-goal-type", { goal: goalId, type: "bug" });
   assert.equal(r.code, 200);
   assert.equal(r.body.ok, true);
   assert.equal(r.body.old_type, "task");
@@ -1695,7 +1709,7 @@ test("g-158 set-goal-type REST：更新 type + 记 goal.type_changed 事件 + no
   assert.equal(ev.details.new_type, "bug");
   // no-op：相同类型不写事件
   const beforeCount = readEvents(root).filter((e) => e.event === "goal.type_changed").length;
-  const r2 = await post(routes, "/api/dsh-graph/set-goal-type", { goal: goalId, type: "bug" });
+  const r2 = await post(entryHandler(routeDefs), "/api/dsh-graph/set-goal-type", { goal: goalId, type: "bug" });
   assert.equal(r2.body.old_type, "bug");
   assert.equal(r2.body.new_type, "bug");
   const afterCount = readEvents(root).filter((e) => e.event === "goal.type_changed").length;
@@ -2968,7 +2982,6 @@ test("g-223 行为契约：hidden-versions-changed 自定义事件非数组/畸�
   assert.match(helpers, /if \(Array\.isArray\(rawHidden\)\)/);
   assert.match(helpers, /rawHidden\.filter\(\(s\) => typeof s === "string"\)/);
 
-
  test("g-223 att-005 workspace isolation contracts: fail-closed, malformed records, parent chain, and bound actions", () => {
    const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
    const kanban = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/kanban.js"), "utf8");
@@ -3173,12 +3186,11 @@ test("g-189 REST fixture：标准 attempt worktree 可发现且 foreign 分支�
   const attId = startAttempt(join(ws, ".dsh-graph"), goalId, { executor: "test", actor: "test" });
   const worktree = join(ws, ".worktrees", `${goalId}-att-01`);
   execFileSync("git", ["-C", ws, "worktree", "add", "-q", "-b", `${goalId}-att-01`, worktree]);
-  const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
-  const ctx: any = { get: (name: string) => name === "webServer" ? webServer : undefined, effect: (fn: any) => fn(), webServer, tools: { register: () => () => {}, get: () => ({}) } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
+  const ctx: any = { get: (name: string) => name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined, effect: (fn: any) => fn(), webServer, tools: { register: () => () => {}, get: () => ({}) } };
   apply(ctx, {});
   const req: any = fakeRequest("GET", null); req.url = `/api/dsh-graph/goal?id=${goalId}&workspace=${encodeURIComponent(ws)}`;
-  const res = fakeResponse(); routes.get("/api/dsh-graph/goal")(req, res);
+  const res = fakeResponse(); entryHandler(routeDefs)(req, res);
   assert.equal(res._code, 200); assert.equal(res._body.attempts[0].id, attId);
   assert.equal(res._body.worktrees.items[attId].path, `.worktrees/${goalId}-att-01`);
 });
@@ -3296,76 +3308,76 @@ test("g-191 client：设置页与重新执行均使用受控模式枚举并显�
 // ---- g-183：共享卡 REST 端点契约 ----
 
 test("g-183 shared-card REST：创建→挂 goal→列表→解引用→删除 全链路", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   // 创建共享卡
-  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 共享", kind: "text" });
+  const create = await post(entryHandler(routeDefs), "/api/dsh-graph/create-shared-card", { title: "REST 共享", kind: "text" });
   assert.equal(create.code, 200);
   const sid = create.body.card;
   assert.ok(sid.startsWith("shared-"), "REST 创建共享卡应带 shared- 前缀");
   // 挂到 goal
-  const attach = await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  const attach = await post(entryHandler(routeDefs), "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
   assert.equal(attach.code, 200);
   // 列表含 refCount=1
-  const list = await get(routes, "/api/dsh-graph/shared-cards");
+  const list = await get(entryHandler(routeDefs), "/api/dsh-graph/shared-cards");
   assert.equal(list.code, 200);
   assert.equal(list.body.cards.length, 1);
   assert.equal(list.body.cards[0].id, sid);
   assert.equal(list.body.cards[0].refCount, 1);
   // boardPayload 顶层也下发 sharedCards
-  const board = await get(routes, "/api/dsh-graph");
+  const board = await get(entryHandler(routeDefs), "/api/dsh-graph");
   assert.equal(board.code, 200);
   assert.equal(board.body.sharedCards.length, 1);
   // 解引用 → refCount 0
-  const unref = await post(routes, "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
+  const unref = await post(entryHandler(routeDefs), "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
   assert.equal(unref.code, 200);
-  const list2 = await get(routes, "/api/dsh-graph/shared-cards");
+  const list2 = await get(entryHandler(routeDefs), "/api/dsh-graph/shared-cards");
   assert.equal(list2.body.cards[0].refCount, 0);
   // 删除零引用共享卡
-  const del = await post(routes, "/api/dsh-graph/delete-shared-card", { card: sid });
+  const del = await post(entryHandler(routeDefs), "/api/dsh-graph/delete-shared-card", { card: sid });
   assert.equal(del.code, 200);
-  const list3 = await get(routes, "/api/dsh-graph/shared-cards");
+  const list3 = await get(entryHandler(routeDefs), "/api/dsh-graph/shared-cards");
   assert.equal(list3.body.cards.length, 0);
 });
 
 test("g-183 shared-card REST：被引用删除被拒；转换端点 200", async () => {
-  const { root, routes, goalId } = setup();
-  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 保护", kind: "text" });
+  const { root, routeDefs, goalId } = setup();
+  const create = await post(entryHandler(routeDefs), "/api/dsh-graph/create-shared-card", { title: "REST 保护", kind: "text" });
   const sid = create.body.card;
-  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  await post(entryHandler(routeDefs), "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
   // 被引用删除 → 400
-  const del = await post(routes, "/api/dsh-graph/delete-shared-card", { card: sid });
+  const del = await post(entryHandler(routeDefs), "/api/dsh-graph/delete-shared-card", { card: sid });
   assert.equal(del.code, 400);
   assert.ok(String(del.body.error).includes("引用"), "被引用删除应提示引用");
   // 共享→自有转换：引用计数 1 → 成功
-  const toOwned = await post(routes, "/api/dsh-graph/convert-card-to-owned", { goal: goalId, card: sid });
+  const toOwned = await post(entryHandler(routeDefs), "/api/dsh-graph/convert-card-to-owned", { goal: goalId, card: sid });
   assert.equal(toOwned.code, 200);
   // 转换后该卡已非共享卡
-  const list = await get(routes, "/api/dsh-graph/shared-cards");
+  const list = await get(entryHandler(routeDefs), "/api/dsh-graph/shared-cards");
   assert.equal(list.body.cards.length, 0);
   // 自有→共享转换：goal 自有卡转换为共享（默认 add-card 为 shared；此处显式建自有卡）
-  const addOwned = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "自有转共享", kind: "text", scope: "goal" });
+  const addOwned = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card", { goal: goalId, title: "自有转共享", kind: "text", scope: "goal" });
   assert.equal(addOwned.code, 200);
   const ocId = addOwned.body.card;
   assert.ok(ocId.startsWith("card-"), "显式 scope=goal 的 add-card 应为 goal 自有");
-  const toShared = await post(routes, "/api/dsh-graph/convert-card-to-shared", { goal: goalId, card: ocId });
+  const toShared = await post(entryHandler(routeDefs), "/api/dsh-graph/convert-card-to-shared", { goal: goalId, card: ocId });
   assert.equal(toShared.code, 200);
   const oldOwnedFile = join(dirname(findGoalFile(root, goalId)), "cards", `${ocId}.md`);
   assert.ok(!existsSync(oldOwnedFile), "转换后旧自有副本应删除（不留双副本）");
-  const list2 = await get(routes, "/api/dsh-graph/shared-cards");
+  const list2 = await get(entryHandler(routeDefs), "/api/dsh-graph/shared-cards");
   assert.equal(list2.body.cards.length, 1, "转换后共享池恰 1 张");
   assert.ok(list2.body.cards[0].id.startsWith("shared-"), "转换后应以 shared-* 新 id 落入共享池");
 });
 
 test("g-275 card REST：单卡读取端点 /api/dsh-graph/card 支持共享卡与自有卡查询", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   // 1. 创建共享卡并挂到 goal
-  const create = await post(routes, "/api/dsh-graph/create-shared-card", { title: "共享卡只读测试", kind: "text" });
+  const create = await post(entryHandler(routeDefs), "/api/dsh-graph/create-shared-card", { title: "共享卡只读测试", kind: "text" });
   assert.equal(create.code, 200);
   const sid = create.body.card;
-  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  await post(entryHandler(routeDefs), "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
 
   // 2. GET /api/dsh-graph/card?id=<sid> 读共享卡（无 goal）
-  const getShared = await get(routes, `/api/dsh-graph/card?id=${sid}`);
+  const getShared = await get(routeDefs, `/api/dsh-graph/card?id=${sid}`);
   assert.equal(getShared.code, 200);
   assert.equal(getShared.body.ok, true);
   assert.equal(getShared.body.card.id, sid);
@@ -3377,10 +3389,10 @@ test("g-275 card REST：单卡读取端点 /api/dsh-graph/card 支持共享卡�
   assert.equal(getShared.body.card.referencingGoals[0].id, goalId);
 
   // 3. GET /api/dsh-graph/card?id=<cid>&goal=<goalId> 读目标自有卡
-  const addOwned = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "自有卡测试", kind: "text", scope: "goal" });
+  const addOwned = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card", { goal: goalId, title: "自有卡测试", kind: "text", scope: "goal" });
   assert.equal(addOwned.code, 200);
   const cid = addOwned.body.card;
-  const getOwned = await get(routes, `/api/dsh-graph/card?id=${cid}&goal=${goalId}`);
+  const getOwned = await get(routeDefs, `/api/dsh-graph/card?id=${cid}&goal=${goalId}`);
   assert.equal(getOwned.code, 200);
   assert.equal(getOwned.body.ok, true);
   assert.equal(getOwned.body.card.id, cid);
@@ -3388,145 +3400,145 @@ test("g-275 card REST：单卡读取端点 /api/dsh-graph/card 支持共享卡�
   assert.equal(getOwned.body.goal.id, goalId);
 
   // 4. 卡片不存在时返回 404
-  const notFound = await get(routes, "/api/dsh-graph/card?id=non-existent-card");
+  const notFound = await get(entryHandler(routeDefs), "/api/dsh-graph/card?id=non-existent-card");
   assert.equal(notFound.code, 404);
   assert.ok(String(notFound.body.error).includes("不存在"));
 
   // 5. 目标下不存在的卡片返回 404
-  const notFoundInGoal = await get(routes, `/api/dsh-graph/card?id=non-existent-card&goal=${goalId}`);
+  const notFoundInGoal = await get(routeDefs, `/api/dsh-graph/card?id=non-existent-card&goal=${goalId}`);
   assert.equal(notFoundInGoal.code, 404);
   assert.ok(String(notFoundInGoal.body.error).includes("不存在"));
 
   // 6. 缺失 id 返回 400
-  const missingId = await get(routes, "/api/dsh-graph/card");
+  const missingId = await get(entryHandler(routeDefs), "/api/dsh-graph/card");
   assert.equal(missingId.code, 400);
 
   // 7. 非 GET 方法返回 405
-  const notAllowed = await post(routes, "/api/dsh-graph/card", { id: sid });
+  const notAllowed = await post(entryHandler(routeDefs), "/api/dsh-graph/card", { id: sid });
   assert.equal(notAllowed.code, 405);
 });
 
 test("g-183 attachment REST：存储/路径安全/删除引用守卫", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   // 正常存储
-  const store = await post(routes, "/api/dsh-graph/store-attachment", { name: "note.md", content: "正文\n引用 @att/note.md" });
+  const store = await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "note.md", content: "正文\n引用 @att/note.md" });
   assert.equal(store.code, 200);
   assert.equal(store.body.name, "note.md");
   assert.equal(store.body.ref, "@att/note.md");
   assert.ok(typeof store.body.digest === "string" && store.body.digest.length === 16, "应返回 16 位审计摘要");
   assert.ok(existsSync(join(root, "attachments", "note.md")));
-  const list = await get(routes, "/api/dsh-graph/attachments");
+  const list = await get(entryHandler(routeDefs), "/api/dsh-graph/attachments");
   assert.ok(list.body.attachments.includes("note.md"));
   assert.ok(list.body.infos.some((i: any) => i.name === "note.md" && i.exists && i.size > 0), "列表应含附件存在性信息");
   // 路径安全：穿越/绝对路径/反斜杠/子目录越界 → 400
-  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "../../etc/passwd", content: "x" })).code, 400);
-  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "/abs/x", content: "x" })).code, 400);
-  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a\\b", content: "x" })).code, 400);
-  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "a/../b", content: "x" })).code, 400);
+  assert.equal((await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "../../etc/passwd", content: "x" })).code, 400);
+  assert.equal((await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "/abs/x", content: "x" })).code, 400);
+  assert.equal((await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "a\\b", content: "x" })).code, 400);
+  assert.equal((await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "a/../b", content: "x" })).code, 400);
   // 安全子目录允许
-  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "sub/docs.md", content: "子目录" })).code, 200);
+  assert.equal((await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "sub/docs.md", content: "子目录" })).code, 200);
   // 引用守卫：把引用写进一个 goal 正文，再尝试删除被引用附件 → 400
   const goalFile = findGoalFile(root, goalId);
   const goalDoc = loadGoal(goalFile);
   goalDoc.body += "\n附件见 @att/note.md\n";
   saveGoal(goalFile, goalDoc);
-  const delRef = await post(routes, "/api/dsh-graph/delete-attachment", { name: "note.md" });
+  const delRef = await post(entryHandler(routeDefs), "/api/dsh-graph/delete-attachment", { name: "note.md" });
   assert.equal(delRef.code, 400, "仍被引用的附件禁止删除");
   // 移除引用后可删除
   const doc2 = loadGoal(goalFile);
   doc2.body = doc2.body.replace(/附件见 @att\/note\.md/, "");
   saveGoal(goalFile, doc2);
-  const delOk = await post(routes, "/api/dsh-graph/delete-attachment", { name: "note.md" });
+  const delOk = await post(entryHandler(routeDefs), "/api/dsh-graph/delete-attachment", { name: "note.md" });
   assert.equal(delOk.code, 200);
   assert.ok(!existsSync(join(root, "attachments", "note.md")));
 });
 
 test("g-183 attachment REST：base64 二进制上传（图片/Excel）与稳定引用", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   const b64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64");
-  const store = await post(routes, "/api/dsh-graph/store-attachment", { name: "chart.png", base64: b64 });
+  const store = await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "chart.png", base64: b64 });
   assert.equal(store.code, 200);
   assert.equal(store.body.name, "chart.png");
   assert.equal(store.body.ref, "@att/chart.png");
   const bytes = readFileSync(join(root, "attachments", "chart.png"));
   assert.deepEqual(Array.from(bytes), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "应按二进制落盘");
   // 缺 content/base64 → 400
-  assert.equal((await post(routes, "/api/dsh-graph/store-attachment", { name: "x.md" })).code, 400);
+  assert.equal((await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "x.md" })).code, 400);
 });
 
 test("g-183 membership REST：未引用共享卡的 goal 无法 start-collection（400）", async () => {
-  const { root, routes, goalId } = setup();
-  const sid = (await post(routes, "/api/dsh-graph/create-shared-card", { title: "守卫 REST", kind: "text" })).body.card;
+  const { root, routeDefs, goalId } = setup();
+  const sid = (await post(entryHandler(routeDefs), "/api/dsh-graph/create-shared-card", { title: "守卫 REST", kind: "text" })).body.card;
   // 挂到一个 goal（setup 的 goalId）
-  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  await post(entryHandler(routeDefs), "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
   // 建第二个 goal，未引用该共享卡
   const other = createGoal(root, { title: "其他", version: "v-t", actor: "test" });
   // 未引用 goal 对共享卡 start-collection → 400（resolveCard 成员校验拒绝）
-  const r = await post(routes, "/api/dsh-graph/start-collection", { goal: other, card: sid });
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/start-collection", { goal: other, card: sid });
   assert.equal(r.code, 400);
   assert.ok(String(r.body.error).includes("未被目标"), "未引用 goal 应被拒绝: " + r.body.error);
   // 已引用 goal 正常（无 subagents → child_error 字符串）
-  const ok = await post(routes, "/api/dsh-graph/start-collection", { goal: goalId, card: sid });
+  const ok = await post(entryHandler(routeDefs), "/api/dsh-graph/start-collection", { goal: goalId, card: sid });
   assert.equal(ok.code, 200);
   assert.ok(typeof ok.body.child_error === "string");
 });
 
 test("add-card REST：kind 可选（goal-actions 已不发 kind），omission 建卡成功", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   // 不传 kind
-  const r = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "无 kind 任务" });
+  const r = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card", { goal: goalId, title: "无 kind 任务" });
   assert.equal(r.code, 200, "kind omission 应成功: " + r.body.error);
   assert.ok(typeof r.body.card === "string");
   // 显式传 kind 也能建
-  const r2 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "带 kind", kind: "text" });
+  const r2 = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card", { goal: goalId, title: "带 kind", kind: "text" });
   assert.equal(r2.code, 200);
   // 无效 kind 类型 → 400
-  const r3 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "x", kind: 123 });
+  const r3 = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card", { goal: goalId, title: "x", kind: 123 });
   assert.equal(r3.code, 400);
   // 缺失 goal → 400
-  const r4 = await post(routes, "/api/dsh-graph/add-card", { title: "x" });
+  const r4 = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card", { title: "x" });
   assert.equal(r4.code, 400);
   // 非法 scope（enum 校验）→ 400（不再静默建自有卡）
-  const r5 = await post(routes, "/api/dsh-graph/add-card", { goal: goalId, title: "x", scope: "bogus" });
+  const r5 = await post(entryHandler(routeDefs), "/api/dsh-graph/add-card", { goal: goalId, title: "x", scope: "bogus" });
   assert.equal(r5.code, 400, "非法 scope 应被拒: " + r5.body.error);
   assert.ok(String(r5.body.error).includes("非法卡片 scope"), "应提示非法 scope");
 });
 
 test("g-183 attachment REST：安全下载端点（canonical读、content-type、拒绝越界 name）", async () => {
-  const { root, routes } = setup();
-  await post(routes, "/api/dsh-graph/store-attachment", { name: "doc.md", content: "hello 附件" });
-  const handler = routes.get("/api/dsh-graph/attachment");
+  const { root, routeDefs } = setup();
+  await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "doc.md", content: "hello 附件" });
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/attachment
   // 正常读取
   const res = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
   const req = fakeRequest("GET", null); req.url = "/api/dsh-graph/attachment?name=doc.md";
-  await handler(req, res);
+  await handler(withOwner(req), res);
   assert.equal(res._code, 200, "应能下载附件");
   assert.equal(res._headers["content-type"], "text/plain");
   assert.equal(res._body.toString(), "hello 附件");
   // Markdown 也强制 attachment（不内联）
   assert.ok(String(res._headers["content-disposition"]).startsWith("attachment"), "Markdown 应强制下载");
   // HTML/Markdown 等强制 attachment 不 inline
-  await post(routes, "/api/dsh-graph/store-attachment", { name: "bad.html", content: "<script>alert(1)</script>" });
+  await post(entryHandler(routeDefs), "/api/dsh-graph/store-attachment", { name: "bad.html", content: "<script>alert(1)</script>" });
   const res2 = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
   const req2 = fakeRequest("GET", null); req2.url = "/api/dsh-graph/attachment?name=bad.html";
-  await handler(req2, res2);
+  await handler(withOwner(req2), res2);
   assert.equal(res2._code, 200);
   assert.ok(String(res2._headers["content-disposition"]).startsWith("attachment"), "危险类型应强制下载");
   // 越界 name → 400
   const res3 = { _code: 0, _headers: null, _body: null, writeHead(c: number, h: any) { this._code = c; this._headers = h; }, end(s: any) { this._body = s; } };
   const req3 = fakeRequest("GET", null); req3.url = "/api/dsh-graph/attachment?name=../x";
-  await handler(req3, res3);
+  await handler(withOwner(req3), res3);
   assert.equal(res3._code, 400, "越界 name 应拒绝");
 });
 
 test("g-183 collecting：unreference-shared-card 对 collected 共享卡返回 400（API 守卫）", async () => {
-  const { root, routes, goalId } = setup();
-  const sid = (await post(routes, "/api/dsh-graph/create-shared-card", { title: "REST 收集守卫" })).body.card;
-  await post(routes, "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
+  const { root, routeDefs, goalId } = setup();
+  const sid = (await post(entryHandler(routeDefs), "/api/dsh-graph/create-shared-card", { title: "REST 收集守卫" })).body.card;
+  await post(entryHandler(routeDefs), "/api/dsh-graph/attach-shared-card", { goal: goalId, card: sid });
   // 模拟收集绑定：直接 bindCardChild 核心层（无 subagents 时 start-collection 不会绑定）
   const { bindCardChild } = await import("../ops.ts");
   bindCardChild(root, goalId, sid, { childId: "child-c", actor: "test" });
-  const unref = await post(routes, "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
+  const unref = await post(entryHandler(routeDefs), "/api/dsh-graph/unreference-shared-card", { goal: goalId, card: sid });
   assert.equal(unref.code, 400);
   assert.ok(String(unref.body.error).includes("正在收集中"), "collecting 共享卡解除引用应被拒");
 });
@@ -3574,12 +3586,12 @@ test("流式读取累计超过上限立即拒绝并暂停（不销毁 socket，r
 });
 
 test("store-attachment 原始上传：无 content-length + 超过上限 → 400 且无文件/事件", async () => {
-  const { root, routes } = setup();
-  const handler = routes.get("/api/dsh-graph/store-attachment");
+  const { root, routeDefs } = setup();
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/store-attachment
   // 无 content-length（模拟 chunked），超大 raw body
   const s = mkStreamReq({ contentType: "application/octet-stream", url: "/api/dsh-graph/store-attachment?name=big.bin" });
   const res = fakeResponse();
-  const p = handler(s.req, res);
+  const p = handler(withOwner(s.req), res);
   s.emit("data", Buffer.alloc(51 * 1024 * 1024, 0x41)); // ≈51MB > MAX_ATTACHMENT_BYTES(50MB)
   s.emit("end");
   await p;
@@ -3590,11 +3602,11 @@ test("store-attachment 原始上传：无 content-length + 超过上限 → 400 
 });
 
 test("store-attachment JSON：无 content-length + chunked 在限内 → 成功（流式解析）", async () => {
-  const { root, routes } = setup();
-  const handler = routes.get("/api/dsh-graph/store-attachment");
+  const { root, routeDefs } = setup();
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/store-attachment
   const s = mkStreamReq({ contentType: "application/json", url: "/api/dsh-graph/store-attachment" });
   const res = fakeResponse();
-  const p = handler(s.req, res);
+  const p = handler(withOwner(s.req), res);
   s.emit("data", JSON.stringify({ name: "chunked.md", content: "流式内容" }).slice(0, 20));
   s.emit("data", JSON.stringify({ name: "chunked.md", content: "流式内容" }).slice(20));
   s.emit("end");
@@ -3619,12 +3631,12 @@ test("source-contract：shared-panel 附件逐项渲染为节点；card-drawer o
 });
 
 test("普通 JSON endpoint：超大 chunked（无 content-length）→ 400 且无副作用", async () => {
-  const { root, routes, goalId } = setup();
+  const { root, routeDefs, goalId } = setup();
   // 所有普通 JSON REST 走 capped readBody（MAX_JSON_BODY_BYTES=1MB）
-  const handler = routes.get("/api/dsh-graph/add-card");
+  const handler = handlerFor(routeDefs); // /api/dsh-graph/add-card
   const s = mkStreamReq({ contentType: "application/json", url: "/api/dsh-graph/add-card" });
   const res = fakeResponse();
-  const p = handler(s.req, res);
+  const p = handler(withOwner(s.req), res);
   s.emit("data", Buffer.alloc(1024 * 1024 + 1024, 0x41)); // >1MB
   s.emit("end");
   await p;
@@ -4277,7 +4289,6 @@ test("g-259 行为模拟：判据 1~4 全覆盖（成功生效、校验失败零
   }
 });
 
-
 // ===== g-323 att-002：单卡「接受」按钮的主管通知（goal-actions.js AcceptFeedback.doAccept） =====
 // att-001 只修了批量接受（batch-accept.js）；单卡接受是同形同根因的第二处：
 //   0.1.6-alpha.2 的 ClientSessions.binding(id) 只借用**已存在**的保留代际且类中无 get(id)，
@@ -4494,7 +4505,6 @@ test("g-323 单卡接受：0.1.6 有 using 的宿主优先走 using，恰好一�
   assert.match(String(prompts[0].parts[0].text), /「g-7」/);
   assert.equal(record.releases, 1, "release 必须恰好一次（无代际泄漏）");
 });
-
 
 // ===== g-327：定义/润色「发送给主管」——能直发就直发，不能直发完整退回 g-168 复制契约 =====
 // 能力分流（using / retain / 0.1.5 被动回退）全部在共享 helper promptSessionQueue 内部按**能力**判定；

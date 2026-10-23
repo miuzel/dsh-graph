@@ -36,6 +36,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apply } from "../../dist/index.js";
 import { MEMORY_LIMITS, HARNESS_MODULE_IDS } from "../ops.ts";
+import { ownerConnectionStub } from "./_http-auth-harness.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const ROOT_README = join(repoRoot, "README.md");
@@ -61,7 +62,7 @@ function registeredTools(): string[] {
   const webServer = { register: () => () => {} };
   const ctx: any = {
     get: (name: string) =>
-      name === "sandboxPolicy" ? { workspaceRoot: root } : name === "webServer" ? webServer : undefined,
+      name === "sandboxPolicy" ? { workspaceRoot: root } : name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined,
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: {

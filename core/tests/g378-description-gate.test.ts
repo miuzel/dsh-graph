@@ -40,12 +40,13 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { descriptionPresent } from "../model.ts";
+import { entryHandler } from "./_http-auth-harness.ts";
 
 const REPO = join(import.meta.dirname, "../..");
 type Harness = ReturnType<typeof createHarness>;
 
 function routeOf(h: Harness, path: string) {
-  const route = h.routes.find((r: any) => r.path === path);
+  const route = { path: path, handler: entryHandler(h.routes) }; // g-507：唯一门禁入口（按 path 分发）
   assert.ok(route, `REST 路由未注册：${path}`);
   return route;
 }

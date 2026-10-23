@@ -17,10 +17,15 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function fakeReq(method: string, queryParams: string, body: any) {
   const listeners: Record<string, Function> = {};
   return {
+    headers: { [OWNER_HEADER]: "1" },
     method,
     url: queryParams,
     on: (e: string, fn: Function) => { listeners[e] = fn; },
@@ -57,11 +62,12 @@ function createHarness({
   const interruptCalls: any[] = [];
   const registeredTools: any[] = [];
   const registeredRoutes = new Map<string, any>();
-  const webServer = { register: (def: any) => { registeredRoutes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
 
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "subagents") {
@@ -121,7 +127,7 @@ async function httpDispatch(
   h: ReturnType<typeof createHarness>,
   body: any,
 ) {
-  const handler = h.registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = entryHandler(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(h.ws), body);
   const res = fakeRes();
   const p = handler(req, res);

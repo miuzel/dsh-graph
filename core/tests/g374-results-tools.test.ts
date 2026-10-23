@@ -18,6 +18,7 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { entryHandler, ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
 
 // g-374 F3/F4：两个**新工具**（单目标 + 批量）与 REST 端点的行为契约，外加 F3-b
 // 「仅注册不告知视为未完成」的**提示面源契约**（discipline / guide-hint / usage / help / tool description）。
@@ -43,6 +44,7 @@ function createHarness() {
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具
       if (name === "subagents") {
         return {
           list: () => ["spawn"],
@@ -94,7 +96,7 @@ function restCall(route: any, body: any, method = "POST") {
   const req: any = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
   req.method = method;
   req.url = route.path;
-  req.headers = {};
+  req.headers = { [OWNER_HEADER]: "1" }; // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
   const res: any = {
     code: 0, payload: null,
     writeHead(code: number) { this.code = code; },
@@ -303,7 +305,7 @@ test("g-374 F2/F3-a：POST /api/dsh-graph/refresh-results 与工具共用同一�
   h.call("graph_write_results", { goal, attempt, text: "交付内容" });
   appendGoalComment(h.root, goal, "REST 用例。", "human:gui");
 
-  const route = h.routes.find((r: any) => r.path === "/api/dsh-graph/refresh-results");
+  const route = { path: "/api/dsh-graph/refresh-results", handler: entryHandler(h.routes) }; // g-507：唯一门禁入口（按 path 分发）
   assert.ok(route, "REST 路由必须注册（GUI 按钮依赖它，无需 CLI/会话指令）");
 
   // ① 正常 POST：写盘 + 返回文件与来源信息

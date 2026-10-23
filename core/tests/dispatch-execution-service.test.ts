@@ -21,10 +21,15 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function fakeReq(method: string, queryParams: string, body: any) {
   const listeners: Record<string, Function> = {};
   return {
+    headers: { [OWNER_HEADER]: "1" }, // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
     method,
     url: queryParams,
     on: (e: string, fn: Function) => { listeners[e] = fn; },
@@ -73,11 +78,12 @@ function createHarness({
   let capturedRequests: any[] = [];
   const registeredTools: any[] = [];
   const registeredRoutes = new Map<string, any>();
-  const webServer = { register: (def: any) => { registeredRoutes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
 
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "subagents") {
@@ -153,7 +159,7 @@ test("g-241 判据 1：工具与 HTTP 均注入 targetContext 且语义等价，
   assert.equal(toolAttemptDoc.meta.parent_session_id, "sess-exec", "工具入口保留调用者会话作为 parent_session_id");
 
   // 2. HTTP 入口执行
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
     attempt_brief: "HTTP 派发 action",
@@ -380,7 +386,7 @@ test("g-241 判据 4：无 prepareContinuable provider 时工具与 HTTP 均明�
   assert.equal(capturedRequests.length, 0, "绝不调用 startContinuable");
 
   // 2. HTTP 入口
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), { goal: goalId });
   const res = fakeRes();
   const p = handler(req, res);
@@ -511,7 +517,7 @@ test("g-241 判据 5：准入门禁失败协同回归——未规划/阻塞/已�
   assert.equal(capturedRequests.length, 0, "交付目标阻断，未调用子代理");
 
   // HTTP 入口同样被 400 阻断
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), { goal: draftGoal });
   const res = fakeRes();
   const p = handler(req, res);
@@ -576,7 +582,7 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   assert.ok(toolRes.note?.includes("subagent 派发失败（attempt 已本地创建）"));
 
   // 2. HTTP 入口派发失败
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
     attempt_brief: "HTTP 失败测试",
@@ -716,7 +722,7 @@ test("g-283 HTTP 入口同路径：worktree=false 不建树且 attempt 记录 wo
   const goalId = createGoal(root, { title: "HTTP不隔离", version: "v1.0", type: "bug", actor: "human:gui" });
   setCriteria(root, goalId, ["判据"], "human:gui");
 
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
     worktree: false,

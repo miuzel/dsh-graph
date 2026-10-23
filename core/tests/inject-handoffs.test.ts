@@ -35,6 +35,10 @@ import {
 import { serializeDoc } from "../model.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g150-"));
@@ -297,6 +301,7 @@ test("g-150：startAttempt 无 injectedHandoffs/attemptBrief 时保持兼容（�
 
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
+    headers: { [OWNER_HEADER]: "1" }, // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
     method,
     _listeners: {} as Record<string, (v?: any) => void>,
     on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; },
@@ -319,10 +324,11 @@ function fakeResponse() {
 function makeHostCtx(captured: { prompt?: string }, workspace?: string, graphRoot?: string) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return workspace ? { workspaceRoot: workspace } : undefined;
       if (name === "subagents") return {
         list: () => ["spawn"],
@@ -409,7 +415,6 @@ test("g-150：graph_start_attempt 带 attempt_brief 时 prompt 注入 brief 段 
   assert.equal(ev!.details.brief, "本次是安全整合而非重新实现");
 });
 
-
 test("g-228：graph_start_attempt 使用 supervisor 独立关键字段，不从 brief 猜测", async () => {
   await withRepoTmp("dsh-graph-g228-structured-", async (ws) => {
     const root = join(ws, ".dsh-graph");
@@ -450,7 +455,7 @@ test("g-150：start-execution 端点 prompt 注入 handoff 段 + 事件记 injec
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
-  const handler = routes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   assert.ok(handler, "start-execution 路由已注册");
   const req = fakeRequest("POST", { goal });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -481,7 +486,7 @@ test("g-150：start-execution 端点带 attempt_brief 时 prompt 注入 brief �
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
-  const handler = routes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeRequest("POST", { goal, attempt_brief: "安全整合任务" });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
   const res = fakeResponse();
@@ -511,7 +516,7 @@ test("g-228：start-execution 端点透传 supervisor 独立关键字段", async
     };
     const captured: { prompt?: string } = {};
     const { routes } = makeHostCtx(captured, ws, root);
-    const handler = routes.get("/api/dsh-graph/start-execution");
+    const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
     const req = fakeRequest("POST", body);
     req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
     const res = fakeResponse();
@@ -536,7 +541,7 @@ test("g-228：start-execution 端点拒绝自然语言 task_type，要求显式�
     const body = { goal, task_type: "合入" };
     const captured: { prompt?: string } = {};
     const { routes } = makeHostCtx(captured, ws, root);
-    const handler = routes.get("/api/dsh-graph/start-execution");
+    const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
     const req = fakeRequest("POST", body);
     req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
     const res = fakeResponse();
@@ -575,7 +580,7 @@ test("g-150：无历史 start-execution 端点 prompt 不含 handoff 段", async
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
-  const handler = routes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeRequest("POST", { goal });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
   const res = fakeResponse();
@@ -931,7 +936,7 @@ test("g-150 review-4：start-execution 端点拒绝非 string 类型的 attempt_
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
-  const handler = routes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeRequest("POST", { goal, attempt_brief: 42 });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
   const res = fakeResponse();

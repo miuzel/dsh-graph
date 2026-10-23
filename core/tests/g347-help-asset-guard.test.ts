@@ -57,6 +57,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { apply } from "../../dist/index.js";
 import { init, unbindGoalChild, HARNESS_MODULE_IDS } from "../ops.ts";
+import { ownerConnectionStub } from "./_http-auth-harness.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 
@@ -126,7 +127,7 @@ function mockContext(root: string) {
   const webServer = { register: () => () => {} };
   const ctx: any = {
     get: (name: string) =>
-      name === "sandboxPolicy" ? { workspaceRoot: root } : name === "webServer" ? webServer : undefined,
+      name === "sandboxPolicy" ? { workspaceRoot: root } : name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined,
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: {

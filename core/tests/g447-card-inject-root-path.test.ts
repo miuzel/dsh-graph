@@ -33,6 +33,10 @@ import {
 import { serializeDoc } from "../model.ts";
 import { resolveCanonicalRoot, _clearCanonicalRootCache } from "../root.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const sha1_16 = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 16);
 
@@ -248,10 +252,11 @@ function makePromptBoard(root: string, tag: string): { goal: string; own: string
 function hostWithRoot(ws: string, rootConfig: any, captured: { prompt?: string }) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "subagents") return {
         list: () => ["spawn"],

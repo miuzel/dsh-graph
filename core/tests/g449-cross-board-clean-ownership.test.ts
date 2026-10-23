@@ -9,6 +9,7 @@ import { init, createGoal, startAttempt, findGoalFile } from "../ops.ts";
 import { listWorktrees, cleanWorktree, prepareAttemptWorktree, readBoardOwner } from "../worktree.ts";
 import { apply } from "../../dist/index.js";
 import { readEvents } from "../events.ts";
+import { entryHandler, ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
 
 /**
  * g-449：**清理面**的跨看板归属核验（跨板同号 g-<n>/att-<NN> 误删他人工作树）。
@@ -272,6 +273,7 @@ function boardHarness(ws: string, root: string) {
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return { register: (r: any) => { routes.push(r); return () => {}; } };
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       return undefined;
@@ -311,7 +313,7 @@ test("g-449 判据 5（tool 入口）：graph_clean_worktree 跨板删除被拒�
 test("g-449 判据 5（HTTP 入口）：POST /api/dsh-graph/worktrees/clean 跨板删除返回 409 且点名归属板", async () => {
   const { ws, rootA, rootB, goalB, treePath } = dualBoard();
   const hB = boardHarness(ws, rootB);
-  const route = hB.routes.find((r: any) => r.path === "/api/dsh-graph/worktrees/clean");
+  const route = { path: "/api/dsh-graph/worktrees/clean", handler: entryHandler(hB.routes) }; // g-507：唯一门禁入口（按 path 分发）
   assert.ok(route, "HTTP 清理路由必须已注册");
   const listed: any = await hB.run("graph_list_worktrees", { goal: goalB });
   const row = listed.worktrees.find((x: any) => x.path === treePath)!;
@@ -319,6 +321,7 @@ test("g-449 判据 5（HTTP 入口）：POST /api/dsh-graph/worktrees/clean 跨�
   const req: any = Readable.from([JSON.stringify({ id: row.id, confirm: true })]);
   req.method = "POST";
   req.url = "/api/dsh-graph/worktrees/clean";
+  req.headers = { [OWNER_HEADER]: "1" }; // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
   const res: any = { code: 0, text: "", writeHead(code: number) { this.code = code; }, end(t: string) { this.text = t; } };
   await route.handler(req, res);
   assert.equal(res.code, 409, "HTTP 入口必须以 409 拒绝（而非 200 删除成功）");

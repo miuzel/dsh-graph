@@ -29,6 +29,10 @@ import {
 import { serializeDoc } from "../model.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g120-"));
@@ -150,6 +154,7 @@ test("g-120：startAttempt 带 injectedCards 时事件 details 记 injected_card
 
 function fakeRequest(method: string, body: unknown) {
   const req: any = {
+    headers: { [OWNER_HEADER]: "1" }, // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
     method,
     _listeners: {} as Record<string, (v?: any) => void>,
     on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; },
@@ -173,10 +178,11 @@ function fakeResponse() {
 function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return workspace ? { workspaceRoot: workspace } : undefined;
       if (name === "subagents") return {
         list: () => ["spawn"],
@@ -194,7 +200,7 @@ function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
   };
   apply(ctx, {});
-  return { routes, registered };
+  return { routes: routeDefs, registered };
 }
 
 function execCtx(ws: string) {
@@ -250,7 +256,7 @@ test("g-120：start-execution 端点 prompt 注入卡片成果段 + 隔离声明
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
-  const handler = routes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   assert.ok(handler, "start-execution 路由已注册");
   const req = fakeRequest("POST", { goal });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -277,7 +283,7 @@ test("g-120：start-execution 端点 worktree=false 声明未启用隔离；无�
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured: { prompt?: string } = {};
   const { routes } = makeHostCtx(captured, ws);
-  const handler = routes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeRequest("POST", { goal, worktree: false });
   req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
   const res = fakeResponse();
@@ -297,7 +303,7 @@ test("g-120：start-execution 端点 worktree=false 声明未启用隔离；无�
   writeFileSync(join(root2, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const captured2: { prompt?: string } = {};
   const { routes: routes2 } = makeHostCtx(captured2, ws2);
-  const handler2 = routes2.get("/api/dsh-graph/start-execution");
+  const handler2 = entryHandler(routes2); // g-507：唯一门禁入口（按 url 分发）
   const req2 = fakeRequest("POST", { goal: goal2 });
   req2.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws2);
   const res2 = fakeResponse();

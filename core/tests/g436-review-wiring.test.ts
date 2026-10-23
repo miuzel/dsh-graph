@@ -52,6 +52,10 @@ import {
 } from "../ops.ts";
 import { appendEvent, readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const VERIFIED = "✅已验";
 const REVIEWS_DIR = "reviews";
@@ -63,6 +67,7 @@ const REVIEWS_DIR = "reviews";
 function fakeReq(method: string, url: string, body: unknown) {
   const listeners: Record<string, Function> = {};
   return {
+    headers: { [OWNER_HEADER]: "1" },
     method,
     url,
     on: (e: string, fn: Function) => { listeners[e] = fn; },
@@ -108,10 +113,11 @@ function createHarness(opts: { policy?: string; regions?: string[]; childQueue?:
   const registeredTools: any[] = [];
   const registeredRoutes = new Map<string, any>();
   const events: Record<string, Function[]> = {};
-  const webServer = { register: (def: any) => { registeredRoutes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "subagents") {
@@ -309,7 +315,7 @@ test("g-436 判据1：HTTP 入口与工具入口共用一套实现（同一候�
   const h = createHarness();
   const fx = await prepareDispatched(h);
 
-  const handler = h.registeredRoutes.get("/api/dsh-graph/start-review");
+  const handler = entryHandler(routeDefs) /* /api/dsh-graph/start-review */;
   assert.ok(handler, "start-review 端点已注册");
   const post = async (body: any) => {
     const req = fakeReq("POST", `/api/dsh-graph/start-review?workspace=${encodeURIComponent(h.ws)}`, body);

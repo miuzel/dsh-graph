@@ -235,6 +235,19 @@ export const MAX_ATTACHMENT_JSON_BYTES = Math.ceil(MAX_ATTACHMENT_BYTES * 5 / 3)
 // 普通 JSON REST（add-card/start-collection/unreference/转换/delete 等）统一 body 上限（1MB 足够管理类 payload）。
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
+// ===== g-507：插件 HTTP 命名空间（唯一受保护入口）=====
+// 本插件全部 HTTP 入口都在这个前缀之下。webServer 只注册**一个** `kind:"prefix"` 路由到这里
+// （见 apply 内的 registerHttpRoutes），该入口每请求用宿主公开 `connection.admit(req)` + owner
+// 判定先鉴权，通过后才在插件内部按显式 exact 元数据与两条资产 prefix 分发业务 handler。
+export const API_NAMESPACE = "/api/dsh-graph";
+// 认证后路径分发的尾斜杠策略（唯一真源，测试与实现共用）：
+//   - 尾斜杠**不做重定向、不做等价改写**：`/api/dsh-graph` 是看板首屏 exact 端点，`/api/dsh-graph/`
+//     不是它（认证后 404），与宿主 exact 表「路径逐字相等」口径一致；
+//   - 两条资产 prefix 只接受 `prefix/尾段`（`resolveDesignDiagramRequest` / `resolveHelpAssetRequest`
+//     在尾段为空时返回 404 name-required），故 `prefix/` 也是 404；
+//   - query 不参与路径匹配（`?x=1` 不影响命中），认证后原样交给业务 handler 自行读取。
+export const ROUTE_TABLE_TAIL_SLASH = "literal";
+
 // ===== g-462：设计哲学交互图的**只读** HTML 路由 =====
 // 现有路由全部返回 JSON；这是第一条 text/html 路由。图的产物由 g-460 定稿在
 // `dsh-graph-host/diagrams/`（自包含 HTML，随包发布到 `dist/diagrams/`）。
@@ -4728,6 +4741,177 @@ export function apply(ctx, config) {
     };
   };
 
+  // ===== g-507：/api/dsh-graph 命名空间的唯一受保护入口 =====
+  // 注册态（webServer 轮询注册 + 插件内部路由表）。**必须先于下方 dispatcher 定义**声明：
+  // dispatcher 在请求期读 `routeState.table`，若声明在其后，handler 首调用会落进 TDZ（ReferenceError）。
+  const routeState = { registered: false, timer: null, table: null };
+
+  // 缺陷：g-505 之前 63 条业务路由逐条裸注册到宿主 webServer（61 条省略 kind ⇒ 宿主按 prefix 处理），
+  // 任何能连到该端口的一方都可无凭证读取看板、写入目标、派发/清理子代理。本段只做一件事：
+  // **把业务路由移到一个统一门禁之后**，业务 handler 本身不改（仍用原有 Node req/res、ETag、流式上传）。
+  //
+  // 真实宿主契约（0.2.1-rc.2 只读核实，见 dsh-graph-host/README.md「HTTP 鉴权」一节）：
+  //   - `ctx.get("connection")` 只返回**当前 active** 的 client-connection 服务；它晚到/消失/被重载时
+  //     同一入口自动开始拒绝/恢复，不依赖注册时刻的服务快照（无「裸路由升级窗口」）。
+  //   - `connection.admit(req)` 是**同步**方法，用宿主自己的签名凭证 + Host/Origin fence + live Peer
+  //     判定，返回 `{peer}` 或 `{rejection: 401|403}`；它读 `this`（isTrusted/browserAuth/peers），
+  //     **必须保留调用绑定**（`connection.admit(req)`，不得解构后裸调）。
+  //   - `admit` 通过只代表「某个已认证 Peer」；本插件全部端点只服务宿主 owner
+  //     （与宿主自己的 Fetch 路由 `peer.principal.kind !== "owner" ⇒ 403` 同口径），故必须再核 owner。
+  //   - 不读 cookie 名称/前缀/值形状，不依赖 private browserAuth，不自建签名算法（拒绝一切形状回退）。
+
+  /** 从 admission 结果里取 Peer（结构不成立返回 null）。**只读结构判定，不复制宿主凭证语义**。 */
+  const admissionPeer = (admission) => {
+    if (!admission || typeof admission !== "object") return null;
+    const peer = admission.peer;
+    if (!peer || typeof peer !== "object") return null;
+    return peer;
+  };
+  const peerIsOwner = (peer) => {
+    const principal = peer?.principal;
+    return !!principal && typeof principal === "object" && principal.kind === "owner";
+  };
+
+  /**
+   * g-507 统一准入：每个请求只调一次宿主公开 admit，返回拒绝状态或放行。
+   *
+   * 拒绝语义（错误响应绝不回显凭证或宿主内部异常细节，仅在 stderr 留一条不含请求头的诊断）：
+   *   - 宿主明确拒绝（admission.rejection ∈ {401,403}）⇒ **沿用宿主状态码**（401 无凭证/凭证无效，
+   *     403 Host/Origin/信任边界拒绝）；
+   *   - 无 active connection、缺公开 admit、admit 抛错、admission 结构不可判定
+   *     ⇒ **503 fail-closed**（能力不可判定时绝不放行业务）；
+   *   - admit 通过但 Peer 不是 owner ⇒ 403（有效凭证、无本插件业务权限）。
+   *
+   * @param {import("node:http").IncomingMessage} req 原始 Node 请求（只用 headers，不读 body）。
+   * @returns {{status: number, reason: string} | {peer: object}}
+   */
+  const admitRequest = (req) => {
+    const connection = ctx.get?.("connection");
+    const service = connection && typeof connection === "object" ? connection : null;
+    if (!service) {
+      return { status: 503, reason: "connection-service-unavailable", detail: "宿主 connection 服务未就绪：fail-closed" };
+    }
+    if (typeof service.admit !== "function") {
+      return { status: 503, reason: "connection-admit-unavailable", detail: "宿主未提供公开 admit 能力（无法判定凭证）：fail-closed" };
+    }
+    let admission;
+    try {
+      // 保留 this 绑定：admit 读本服务的 isTrusted/browserAuth/peers，解构调用会让 this 丢失 ⇒ 抛错 ⇒ 503。
+      admission = service.admit({ headers: req?.headers ?? {} });
+    } catch {
+      return { status: 503, reason: "connection-admit-failed", detail: "宿主 admit 抛错（能力不可判定）：fail-closed" };
+    }
+    if (!admission || typeof admission !== "object") {
+      return { status: 503, reason: "connection-admission-malformed", detail: "宿主 admission 结果不可判定：fail-closed" };
+    }
+    const rejection = admission.rejection;
+    if (rejection !== undefined) {
+      if (rejection === 401 || rejection === 403) {
+        // 信任边界拒绝已在 admit 内部完成，这里同样走「未认证」口径：不解析 body、不触达业务。
+        return { status: rejection, reason: rejection === 401 ? "unauthenticated" : "trust-boundary-rejected" };
+      }
+      return { status: 503, reason: "connection-admission-malformed", detail: "宿主 admission 返回不可判定的拒绝码：fail-closed" };
+    }
+    const peer = admissionPeer(admission);
+    if (!peer) {
+      return { status: 503, reason: "connection-admission-malformed", detail: "宿主 admission 既无拒绝码也无 Peer：fail-closed" };
+    }
+    if (!peerIsOwner(peer)) return { status: 403, reason: "not-owner" };
+    return { peer };
+  };
+
+  /** 写入一条安全拒绝响应：固定 JSON 形状，无凭证、无宿主内部异常文本。 */
+  const rejectRequest = (res, decision) => {
+    try {
+      if (!res.headersSent && !res.writableEnded) {
+        const body = JSON.stringify({ error: decision.reason, authentication: "required" });
+        const headers = {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        };
+        // 401 与宿主 /api 面一致走 WWW-Authenticate 提示；503 明确「能力不可判定」。
+        if (decision.status === 401) headers["www-authenticate"] = "DSH-Connection";
+        res.writeHead(decision.status, headers);
+        res.end(body);
+      } else {
+        res.end();
+      }
+    } catch { /* 响应已不可写：忽略，绝不因此触达业务 */ }
+  };
+
+  /**
+   * 业务路由表：把 63 条定义按**宿主同款匹配规则**分成 exact 表与 prefix 表。
+   *
+   * 显式元数据是唯一依据（`kind: "exact"` 或缺省 = exact；`kind: "prefix"` = 边界 prefix），
+   * 不靠字符串形状猜；baseline 只有两条 prefix（diagram / help/asset），其余 61 条一律 exact
+   * （原先 61 条省略 kind 被宿主当 prefix，会让 `/<端点>/xxx` 等未知子路径误中看板业务）。
+   * 重复 path 直接抛错（宿主 register 同款 fail-closed），避免后注册者静默覆盖前者。
+   * @returns {{exact: Map<string, object>, prefixes: object[]}} 路由表（每次调用新表，重载无残留）。
+   */
+  const buildRouteTable = (defs) => {
+    const exact = new Map();
+    const prefixes = new Map();
+    for (const def of defs) {
+      // 命名空间根自身（看板首屏 `/api/dsh-graph`）与全体子路径都必须在命名空间内；
+      // 越界 path 一律判错 ⇒ 不注册（fail-closed，绝不把业务路由裸挂到命名空间之外）。
+      if (!def || typeof def.path !== "string" || !(def.path === API_NAMESPACE || def.path.startsWith(API_NAMESPACE + "/"))) {
+        throw new Error(`g-507: 非法路由定义（必须在 ${API_NAMESPACE} 命名空间内）：${String(def?.path)}`);
+      }
+      if (typeof def.handler !== "function") throw new Error(`g-507: 路由 ${def.path} 缺 handler`);
+      const table = def.kind === "prefix" ? prefixes : exact;
+      if (table.has(def.path)) throw new Error(`g-507: 重复路由 ${def.kind === "prefix" ? "prefix" : "exact"} "${def.path}"`);
+      table.set(def.path, def);
+    }
+    return { exact, prefixes };
+  };
+
+  /**
+   * 唯一受保护入口的 handler：**先准入，后分发**。
+   *
+   * 「先准入」意味着认证之前只读得到 `req.method` / `req.url` 与 host 给予的 headers：
+   * 不解析 body、不调用 rootForReq（其内部 init() 会写盘）、不读资产、不派发、不触达任何业务副作用。
+   * 拒绝路径对未知子路径同样生效 —— 攻击者无法用「猜路径」区分「认证失败」与「路径不存在」。
+   *
+   * 认证通过后的分发口径（路径与 method 错配一律在认证之后判定，绝不因此跳过认证）：
+   *   - exact 表命中 ⇒ 调该路由 handler（自身再判 method ⇒ 405）；
+   *   - 否则按**段边界**最长 prefix 命中（`p === path || p.startsWith(path + "/")`，与宿主 match 同口径；
+   *     段边界保证 `/api/dsh-graph/diagramX` 不会误中 diagram prefix 路由）；
+   *   - `/api/dsh-graph` 自身已作为 exact 路由登记（看板首屏），故不参与 prefix 匹配；
+   *   - query 不参与路径匹配（原样交给业务 handler 自行读取）；尾斜杠策略见 ROUTE_TABLE_TAIL_SLASH；
+   *   - 未知子路径 ⇒ 404（认证后才返回，避免向未认证方泄漏命名空间结构）。
+   *
+   * @param {import("node:http").IncomingMessage} req
+   * @param {import("node:http").ServerResponse} res
+   */
+  const dispatchRequest = (req, res) => {
+    const decision = admitRequest(req);
+    if (decision.status !== undefined) {
+      // 每条拒绝在 stderr 留**一条**无敏感信息的诊断（不含 header/cookie/异常文本）。
+      process.stderr.write(`[dsh-graph-host] g-507 拒绝 ${decision.status} ${decision.reason}${decision.detail ? `（${decision.detail}）` : ""}\n`);
+      rejectRequest(res, decision);
+      return;
+    }
+    // 路由表由 registerHttpRoutes 在**注册时刻**构建（空表 = 未注册，此时不注册即不会走到这里）。
+    const table = routeState.table;
+    if (!table) return json(res, 503, { error: "route-table-unavailable" });
+    let pathname;
+    try {
+      pathname = new URL(req?.url ?? "", "http://dsh-graph.invalid").pathname;
+    } catch {
+      return json(res, 404, { error: "unknown endpoint" });
+    }
+    const exact = table.exact.get(pathname);
+    if (exact) return exact.handler(req, res);
+    let best = null;
+    for (const def of table.prefixes.values()) {
+      if (pathname !== def.path && !pathname.startsWith(`${def.path}/`)) continue;
+      if (!best || def.path.length > best.path.length) best = def;
+    }
+    if (best) return best.handler(req, res);
+    return json(res, 404, { error: "unknown endpoint" });
+  };
+
   // webServer 路由定义（惰性：webServer 服务出现后才注册；headless 组合下静默跳过）
   const httpRoutes = () => [
     {
@@ -6637,15 +6821,23 @@ export function apply(ctx, config) {
     }
 
     // webServer 由 web-app 行提供，可能在 apply 之后才激活：轮询注册（同参考实现）。
-    const routeState = { registered: false, timer: null };
+    // g-507：整个插件命名空间**只注册一个** prefix 入口（dispatchRequest 内含 admit + owner 门禁）；
+    // 63 条业务定义只进插件内部路由表，**不再逐条注册** ⇒ 不可能存在绕过门禁的裸业务路由。
     const registerHttpRoutes = () => {
       if (routeState.registered) return;
       const webServer = ctx.get?.("webServer");
       if (!webServer) return;
       try {
-        for (const r of httpRoutes()) disposers.push(webServer.register(r));
+        // 路由表在注册时刻构建一次（重复 path / 越界 path / 缺 handler 判错 ⇒ 不注册，见 catch）。
+        const table = buildRouteTable(httpRoutes());
+        routeState.table = table;
+        const disposer = webServer.register({ kind: "prefix", path: API_NAMESPACE, handler: dispatchRequest });
+        disposers.push(disposer);
         routeState.registered = true;
-        process.stderr.write(`[dsh-graph-host] apply: tools + /api/dsh-graph(+goal+write) registered (root=${root})\n`);
+        process.stderr.write(
+          `[dsh-graph-host] apply: tools + ${API_NAMESPACE} 单一受保护入口已注册`
+          + `（exact=${table.exact.size} prefix=${table.prefixes.size}；root=${root}）\n`,
+        );
       } catch (e) {
         console.error("[dsh-graph-host] webServer 路由注册失败:", e?.message ?? e);
       }

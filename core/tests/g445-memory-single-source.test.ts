@@ -38,6 +38,11 @@ import {
 } from "../ops.ts";
 import { appendMemoryEvent, readMemoryEvents } from "../events.ts";
 
+// g-507：捕获到的注册定义（setup 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+
 const repoRoot = join(import.meta.dirname, "../..");
 
 /** 恰好 n 个**码点**的文本（😀 为代理对 ⇒ 与 UTF-16 长度可区分，证明计数走码点）。 */
@@ -66,16 +71,16 @@ function makeHarness() {
   init(root);
   const routes = new Map<string, any>();
   const tools = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) =>
-      name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: ws } : undefined,
+      name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: ws } : undefined,
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (def: any) => { tools.set(def.name, def); return () => {}; }, get: () => ({}) },
   };
   const dispose = apply(ctx, { root });
-  return { ws, root, routes, tools, dispose };
+  return { ws, root, routes: routeDefs, tools, dispose };
 }
 
 function fakeRes() {
@@ -86,10 +91,10 @@ function fakeRes() {
 }
 
 async function post(routes: Map<string, any>, path: string, body: unknown) {
-  const handler = routes.get(path);
-  assert.ok(handler, `路由 ${path} 已注册`);
+  const handler = entryHandler(routeDefs); // g-507：唯一受保护入口（先 admit + owner，后按 url 分发）
+  assert.ok(typeof handler === "function", `命名空间入口已注册（业务端点经门禁分发）：` + String(path));
   const listeners: Record<string, Function> = {};
-  const req: any = { method: "POST", url: path, on: (e: string, fn: Function) => { listeners[e] = fn; } };
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method: "POST", url: path, on: (e: string, fn: Function) => { listeners[e] = fn; } };
   const res = fakeRes();
   const p = handler(req, res);
   listeners.data?.(JSON.stringify(body));
@@ -99,9 +104,9 @@ async function post(routes: Map<string, any>, path: string, body: unknown) {
 }
 
 async function get(routes: Map<string, any>, path: string) {
-  const handler = routes.get(path.split("?")[0]);
-  assert.ok(handler, `路由 ${path} 已注册`);
-  const req: any = { method: "GET", url: path, on: () => {} };
+  const handler = entryHandler(routeDefs);
+  assert.ok(typeof handler === "function", `命名空间入口已注册（业务端点经门禁分发）：${path}`);
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method: "GET", url: path, on: () => {} };
   const res = fakeRes();
   await handler(req, res);
   return { code: res._code, body: res._body };

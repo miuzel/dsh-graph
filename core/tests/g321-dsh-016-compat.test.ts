@@ -16,6 +16,10 @@ import { join } from "node:path";
 import vm from "node:vm";
 import { init, createGoal, subagentSpawnErrorText } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const hostRoot = join(import.meta.dirname, "../../dsh-graph-host");
 const clientRoot = join(hostRoot, "lib/client");
@@ -119,10 +123,11 @@ test("g-321 host 端 start-collection：startContinuable 抛 ACTIVATION_LIMIT_RE
     },
   };
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "subagents") return subagentsService;
       if (name === "agents") return { get: () => ({ id: "sess-g321" }) };
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
@@ -135,9 +140,9 @@ test("g-321 host 端 start-collection：startContinuable 抛 ACTIVATION_LIMIT_RE
   apply(ctx, {});
 
   const post = async (path: string, body: unknown) => {
-    const handler = routes.get(path);
-    assert.ok(handler, `路由 ${path} 已注册`);
-    const req: any = { method: "POST", _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: any) { req._listeners[ev] = cb; } };
+    const handler = handlerFor(routeDefs) /* /api/dsh-graph/add-card */;
+    assert.equal(typeof handler, "function", `命名空间门禁入口可用（业务端点经其分发）：${path}`);
+    const req: any = { headers: { [OWNER_HEADER]: "1" }, method: "POST", url: path, _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: any) { req._listeners[ev] = cb; } };
     const res: any = { _code: 0, _body: null };
     res.writeHead = (code: number) => { res._code = code; };
     res.end = (s: string) => { res._body = s ? JSON.parse(s) : null; };

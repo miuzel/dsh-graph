@@ -26,6 +26,10 @@ import { init, readProjectConfig, GraphError } from "../ops.ts";
 import { REVIEW_POLICIES } from "../review-policy.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const repoRoot = join(import.meta.dirname, "../..");
 const clientDir = join(repoRoot, "dsh-graph-host/lib/client");
@@ -305,8 +309,8 @@ test("g-342 判据1：客户端 save() 提交体——继承写 null、三值直
   // 由 client.test.ts 的 g-259 行为模拟（initialInterval 10 / 输入 25，表单与基线同源）逐条覆盖。
 });
 
-function fakeRequest(method: string, body: unknown) {
-  const req: any = { method, _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; } };
+function fakeRequest(method: string, body: unknown, path: string) {
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method, url: path, _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; } };
   return req;
 }
 function fakeResponse() {
@@ -321,9 +325,9 @@ function setupInstance() {
   init(root);
   const routes = new Map<string, any>();
   const toolNames: string[] = [];
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (def: any) => { toolNames.push(def?.name ?? ""); return () => {}; }, get: () => ({}) },
@@ -332,9 +336,9 @@ function setupInstance() {
   return { root, routes, toolNames };
 }
 const postSettings = async (routes: Map<string, any>, body: unknown) => {
-  const handler = routes.get("/api/dsh-graph/settings");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/settings */;
   assert.ok(handler, "settings 路由已注册");
-  const req = fakeRequest("POST", body);
+  const req = fakeRequest("POST", body, "/api/dsh-graph/settings");
   const res = fakeResponse();
   const p = handler(req, res);
   req._listeners.data?.(JSON.stringify(body));
