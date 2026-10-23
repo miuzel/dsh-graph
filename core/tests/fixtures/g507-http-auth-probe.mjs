@@ -2,7 +2,8 @@
 /**
  * g-507 C 层：对**隔离实例**的真实 HTTP 鉴权矩阵（不打印、不落盘任何凭证）。
  *
- * 用法：node core/tests/fixtures/g507-http-auth-probe.mjs <baseUrl> <launchTokenUrl>
+ * 用法：node core/tests/fixtures/g507-http-auth-probe.mjs <baseUrl> <workspace>
+ *       launch token **从 stdin 读一行**（不走 argv/env，避免出现在进程列表与日志里）。
  *
  * 覆盖：匿名 / 伪造凭证 对 63 条入口 + 未知子路径 ⇒ 401（或 403 于信任边界），业务零触达；
  *       合法 owner（宿主 launch token 交换出的真实 cookie）⇒ 读、可逆写、资产、ETag304、404、405。
@@ -13,12 +14,43 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const base = process.argv[2];
-const launchUrl = process.argv[3];
-const workspace = process.argv[4]; // 隔离实例的测试 workspace（REST 端点需要显式 workspace）
-if (!base || !launchUrl) {
-  console.error("usage: probe <baseUrl> <launchTokenUrl> <workspace>");
+const workspace = process.argv[3]; // 隔离实例的测试 workspace（REST 端点需要显式 workspace）
+if (!base || !workspace) {
+  console.error("usage: probe <baseUrl> <workspace>   (launch token via stdin)");
   process.exit(2);
 }
+
+/** 从 stdin 读取一行 launch token（仅内存持有，不打印、不落盘）。 */
+function readTokenFromStdin() {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => reject(new Error("stdin 读取 token 超时")), 30_000);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => {
+      buf += c;
+      const nl = buf.indexOf("\n");
+      if (nl >= 0) {
+        clearTimeout(timer);
+        process.stdin.pause();
+        resolve(buf.slice(0, nl).trim());
+      }
+    });
+    process.stdin.on("end", () => {
+      clearTimeout(timer);
+      resolve(buf.trim());
+    });
+    process.stdin.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+  });
+}
+const token = await readTokenFromStdin();
+if (!token) {
+  console.error("probe: 未从 stdin 收到 launch token");
+  process.exit(2);
+}
+const launchUrl = `${base}/?token=${encodeURIComponent(token)}`;
 
 /** 基线 63 条入口（61 exact + 2 prefix 资产），逐条列出以便矩阵覆盖。 */
 const EXACT = [
@@ -95,7 +127,6 @@ for (const [i, path] of all.entries()) {
   check(`forged ${path}`, forged.status, 401);
 }
 // ② 合法 owner：用宿主自己的 launch token 交换 cookie（同源 GET /?token=…）
-const token = new URL(launchUrl).searchParams.get("token");
 const rootRes = await request("GET", `/?token=${encodeURIComponent(token)}`);
 // 宿主的真实交换语义：带发令 token 的 GET / 铸 cookie 并 **302/303 重定向到干净 URL**（不是 200）。
 check("owner index exchange (redirect mints cookie)", [302, 303].includes(rootRes.status) ? 1 : 0, 1);

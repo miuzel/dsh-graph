@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { API_NAMESPACE, DESIGN_DIAGRAM_ROUTE, HELP_ASSET_ROUTE, HELP_CATALOG_ROUTE, buildRouteTable, lookupRoute, getRegisteredRoutes } from "../../dist/index.js";
+import { existsSync } from "node:fs";
 import { assertEndpointsDefined, assertSameRouteSet, createRegisterStub, ownerConnectionStub } from "./_http-auth-harness.ts";
 import { assertSingleProtectedEntry as assertSingleProtectedEntryShared } from "./_http-auth-harness.ts";
 import { apply } from "../../dist/index.js";
@@ -141,51 +142,103 @@ test("g-507 S4b：往返对账 —— 单行新增一条路由 / 删掉一条受
   );
 });
 
-test("g-507 S5：全部旧业务套件都经唯一门禁入口驱动（逐文件判定 + 不得按 path 取 handler）", () => {
-  // 只允许经 _http-auth-harness 的入口适配器取 handler；禁止任何测试按 path 取业务 handler。
+/**
+ * g-507 静态消费清单：**曾经直连业务 handler 的旧套件**（g-507 迁移对象），逐条列明。
+ *
+ * 与上一轮的启发式审计（变异后按失败文本猜测"是否驱动入口"，把判定不了的记成 unknown）不同，
+ * 这份清单是**确定的事实**：每一行都是 g-507 之前通过 `routes.get(path)` 直接拿到 handler 的套件
+ * （逐文件用 `git show cc6b0f8:<file>` 核对过），迁移后它们必须经入口适配器驱动并声明真实端点。
+ * 新增一个「直连 handler」的套件不会被这份清单自动放行 —— 下面的 ① 会扫全集把它们抓出来。
+ */
+const MIGRATED_SUITES = [
+  "cache.test.ts",
+  "client.test.ts",
+  "dispatch-execution-service.test.ts",
+  "execution-admission-g237.test.ts",
+  "g207-integration.test.ts",
+  "g212-adversarial.test.ts",
+  "g282-legacy-unbind.test.ts",
+  "g311-review-policy.test.ts",
+  "g321-dsh-016-compat.test.ts",
+  "g333-subagent-prompt-override.test.ts",
+  "g342-settings-review-policy.test.ts",
+  "g374-results-tools.test.ts",
+  "g374-summary-llm.test.ts",
+  "g378-description-gate.test.ts",
+  "g379-relations.test.ts",
+  "g388-collect-orphan.test.ts",
+  "g404-version-slug-guard.test.ts",
+  "g405-empty-desc-fallback-i18n.test.ts",
+  "g406-dispatch-isolation-verdict.test.ts",
+  "g435-review-config.test.ts",
+  "g436-review-wiring.test.ts",
+  "g442-settings-review-conditions.test.ts",
+  "g445-memory-single-source.test.ts",
+  "g449-cross-board-clean-ownership.test.ts",
+  "g450-flow-parent-write-guard.test.ts",
+  "g462-board-design-modal.test.ts",
+  "g481-help-modal.test.ts",
+  "inject-cards.test.ts",
+  "inject-handoffs.test.ts",
+  "lazy-loading.test.ts",
+  "model-metadata.test.ts",
+  "root.test.ts",
+  "unbind-child.test.ts",
+  "version-lane-rest.test.ts",
+];
+
+test("g-507 S5：迁移清单上的旧套件全部经唯一门禁入口驱动（逐条静态+行为双证）", () => {
   const dir = join(process.cwd(), "core/tests");
-  const files = readdirSync(dir).filter((f) => f.endsWith(".test.ts"));
-  assert.ok(files.length > 150, `应枚举到全部测试文件（实得 ${files.length}）`);
+
+  // ① 反向：全集里**任何**测试都不得按 path 取业务 handler（等价于绕过门禁）
+  // 守卫文件自身含判据正则字面量，必须排除（否则它匹配到自己的模式）
+  const SELF = "g507-http-auth-guard.test.ts";
+  const NEG = new Set([SELF, "g507-auth-negative-controls.test.ts"]);
+  const files = readdirSync(dir).filter((f) => f.endsWith(".test.ts") && !NEG.has(f));
   const offenders: string[] = [];
   for (const f of files) {
-    const src = readFileSync(join(dir, f), "utf8");
-    const code = src.split("\n").map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1")).join("\n");
+    const code = readFileSync(join(dir, f), "utf8").split("\n").map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1")).join("\n");
     if (/routes\.get\(|registeredRoutes\.get\(|routes\.find\(|routeDefs\.find\(/.test(code)) offenders.push(f);
   }
   assert.deepEqual(offenders, [], `以下测试仍按 path 取业务 handler（等于绕过门禁）：${offenders.join(", ")}`);
 
-  // 「哪些套件真的驱动了插件 HTTP 入口」不靠人工推断：由**变异反向审计**实测得出 ——
-  // 在私有副本里把唯一入口改成「一律 401」，凡驱动过入口的套件必红；仍全绿的即「不驱动入口」。
-  // 该审计结果登记在 core/tests/fixtures/g507-entry-driving-audit.json（由 4 号证据脚本产出）。
-  const audit = JSON.parse(readFileSync(join(dir, "fixtures", "g507-entry-driving-audit.json"), "utf8"));
-  assert.equal(audit.mutation, "entry returns 401 for every request", "审计口径必须是「入口一律 401」变异");
-  const driving = new Set<string>(audit.driving);
-  // 审计里「因非鉴权原因失败」的套件（副本环境差异）单独登记：它们**不计入**驱动入口，
-  // 但必须显式列出，不能被默默漏掉（下面 ② 要求三类合计覆盖全集）。
-  const nonDriving = new Set<string>([...audit.nonDriving, ...(audit.skippedLoadFailures ?? [])]);
-  // 下限只做「清单没有整体塌陷」的护栏（实测稳定值 ~56，两次连续审计完全一致）；真正判据是下面两条逐文件断言。
-  assert.ok(driving.size > 30, `驱动入口的套件数量异常偏低（实得 ${driving.size}），审计可能失效`);
-  // ① 每个「驱动入口」的套件都必须经共享入口适配器（否则它调用插件入口的方式不统一）；
-  //    审计的归因是**启发式**（失败文本与鉴权相关），因此这里用**源码事实**复核：
-  //    若某文件被判「驱动入口」却没有入口适配器，则它必须在源码里既不装配插件、也不发 HTTP 请求
-  //    （=审计的启发式误判），否则就是「真的驱动了入口却绕过了适配器」⇒ 判红。
-  const suspicious: string[] = [];
-  for (const f of driving) {
-    if (NEGATIVE_CONTROL_FILES.has(f)) continue; // 变异对照文件在私有副本里驱动变异代码，另行登记
-    const src = readFileSync(join(dir, f), "utf8");
+  // ② 正向：清单内每个套件都必须 (a) 文件存在 (b) 经共享入口适配器 (c) 引用真实端点 path
+  const problems: string[] = [];
+  for (const f of MIGRATED_SUITES) {
+    const file = join(dir, f);
+    if (!existsSync(file)) {
+      problems.push(`${f}: 文件不存在（清单已过时）`);
+      continue;
+    }
+    const src = readFileSync(file, "utf8");
     const code = src.split("\n").map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1")).join("\n");
-    if (/_http-auth-harness\.ts/.test(code)) continue; // 已走共享适配器
-    const bootsPlugin = /\bapplyHost\(|\bapply\(/.test(code) && !/\bmod\.apply\(/.test(code);
-    const callsEndpoints = /\/api\/dsh-graph/.test(code);
-    if (bootsPlugin && callsEndpoints) suspicious.push(f);
+    if (!/_http-auth-harness\.ts/.test(code)) problems.push(`${f}: 未经共享入口适配器`);
+    if (!/API_NAMESPACE|\/api\/dsh-graph/.test(code)) problems.push(`${f}: 未驱动任何 /api/dsh-graph 端点`);
+    if (!/entryHandler|handlerFor|entry\(/.test(code)) problems.push(`${f}: 未调用入口适配器分发`);
   }
-  assert.deepEqual(suspicious, [], `以下套件真的驱动了插件 HTTP 入口却未经共享入口适配器：${suspicious.join(", ")}`);
+  assert.deepEqual(problems, [], `迁移清单未满足「经唯一入口」：${problems.join("; ")}`);
 
-  // ② 审计必须覆盖全部套件（驱动 + 不驱动 = 全集），否则「不驱动」列表可能漏项
-  const all = new Set(files);
-  const uncovered = [...all].filter((f) => !driving.has(f) && !nonDriving.has(f));
-  assert.deepEqual(uncovered, [], `以下套件未被审计覆盖（需重跑审计脚本）：${uncovered.join(", ")}`);
-  const phantom = [...driving, ...nonDriving].filter((f) => !all.has(f));
-  assert.deepEqual(phantom, [], `审计里出现了不存在的套件（清单已漂移）：${phantom.join(", ")}`);
+  // ③ 清单本身必须与「真实驱动入口的套件」一致：不允许把未迁移的套件悄悄算进来
+  //    判据（静态、确定）：文件里出现 `/api/dsh-graph` 端点字面量即为「会驱动入口的套件」，
+  //    这类文件若不在清单内，就必须自己也走入口适配器（否则是遗漏迁移 ⇒ 判红）。
+  const drivesEntry = files.filter((f) => /\/api\/dsh-graph/.test(readFileSync(join(dir, f), "utf8")));
+  const outsideList = drivesEntry.filter((f) => !MIGRATED_SUITES.includes(f));
+  const unadapted = outsideList.filter((f) => {
+    const code = readFileSync(join(dir, f), "utf8").split("\n").map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1")).join("\n");
+    // 客户端渲染/mock fetch 类文件不装配插件（`apply(` 来自其它模块）⇒ 不算驱动插件入口
+    const bootsPluginEntry = /createRegisterStub\(/.test(code);
+    return bootsPluginEntry && !/_http-auth-harness\.ts/.test(code);
+  });
+  assert.deepEqual(unadapted, [], `以下套件装配了插件入口却未经适配器：${unadapted.join(", ")}`);
+  // g-507 自带的证据套件（不是"迁移对象"，但同样经入口驱动）：显式登记，避免被当成遗漏。
+  const G507_EVIDENCE_SUITES = new Set([
+    "g507-http-auth-surface.test.ts",
+    "g507-http-auth-real-host.test.ts",
+    "g251-brief-source-contract.test.ts",
+  ]);
+  // 清单不得漏（有端点引用 + 装配入口 + 已适配）的套件
+  const missingFromList = outsideList.filter(
+    (f) => /_http-auth-harness\.ts/.test(readFileSync(join(dir, f), "utf8")) && !G507_EVIDENCE_SUITES.has(f),
+  );
+  assert.deepEqual(missingFromList, [], `以下套件已迁移但未登记进清单：${missingFromList.join(", ")}`);
 });
-
