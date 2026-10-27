@@ -4,25 +4,29 @@
  * 历史目标编号（`g-NNN`）都必须换成准确的中性功能描述；**源码注释与文档保留**；**业务动态目标 ID
  * 必须保留**。故本守卫不是「全仓替换 g-」的文本 grep，而是：
  *   1. 用 AST 只取字符串/模板字面量（注释天然排除）⇒ 注释里的历史编号不会误伤；
- *   2. 只拦**静态正文**里的 `g-<数字>`；模板插值 / `"g-" + seq` 等动态真实 ID 天然不命中；
+ *   2. 只拦**静态正文**里的 `g-<数字>`；动态真实 ID（`"g-" + seq`、`` `g-${seq}` ``）不命中；
+ *      静态可求值拼接（`"g-" + "507"`）按折叠值命中；
  *   3. 对生产源码与**真实构建的 dist 运行时产物**（host index / 编译 core / 客户端 bundle）双向扫描；
- *   4. 非输出的注释型字面量必须**逐条登记白名单并给理由**，且证明每条在源码与 dist 都真实存在
- *      （白名单过期或被用来掩盖输出面回归都会判红）；
- *   5. 负向对照证明扫描器真的能抓到日志 / 路由 Error / UI 文案三类回归，且不会误拦动态 ID。
+ *   4. 非输出的注释型字面量必须登记白名单，且白名单绑**精确文件 + 完整字面值 sha256 + 精确 sink +
+ *      变量声明名/kind/作用域或函数作用域**——不接受子串匹配（复审 P1：子串白名单可被同前缀新文案冒充）；
+ *   5. 负向对照证明：新 UI 提示 / 改名冒充 / 同名异作用域 / 换文件 / 换函数注入 / 静态拼接 都会判红，
+ *      而动态真实目标 ID 不会被误拦。
  *
- * 诚实边界：本守卫只覆盖**运行时代码的字符串字面量**。dist 内文档类资产（prompts/*.md、README、
- * schema/SCHEMA.md、diagrams）与源码/测试注释按裁定保留历史编号，不在此断言范围。
+ * 诚实边界：本守卫只覆盖**运行时代码的字符串字面量**（含同一表达式内的静态 `+`/模板折叠）；
+ * 不解析变量、常量、函数返回值或跨语句赋值（不做完整 JS 常量传播）。dist 内文档类资产
+ * （prompts/*.md、README、schema、diagrams）与源码/测试注释按裁定保留历史编号，不在此断言范围。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
   STATIC_GOAL_ID_RE,
   OUTPUT_SINK_RE,
-  allowedFileMatches,
+  sha256Hex,
   scanGoalIdLiterals,
+  matchesAllowed,
   partitionGoalIdHits,
   formatGoalIdHit,
   type AllowedGoalIdLiteral,
@@ -33,23 +37,44 @@ const ROOT = process.cwd();
 
 /**
  * 白名单：只允许「非运行时输出」的注释型字面量（历史编号保留，不渲染、不写日志）。
- * 每条都必须能解释**为什么不会被用户看到**，且 `fileIncludes` 限定在它真实所在的源/产物文件。
+ * 每条绑死：精确文件 / 完整字面值 sha256 / 精确 sink / 声明结构或函数作用域。
+ * 源文件与 dist 产物分别登记（bundle 的 HOVER_CSS 在 factory 直接体内，源文件在顶层）。
  */
 const ALLOWED: AllowedGoalIdLiteral[] = [
   {
-    textIncludes: "受管小节（g-379）",
-    fileIncludes: ["ops.ts", "ops.js"],
+    files: ["core/ops.ts", "dist/core/ops.js"],
+    literalSha256: "9c12b60ee5f6e595ac6c6bf19db447b5f4273395926b11d74d2dde38fcef9287",
+    sink: "call:lines.push",
+    functionScope: "renderRelationSection",
     reason: "写入 goal.md 的 HTML 注释标记（文档注释，不渲染、不是运行时日志）",
   },
   {
-    textIncludes: "g-440 fan-out independent-verification guard",
-    fileIncludes: ["ops.ts", "ops.js"],
-    reason: "源码块定界标记常量（供测试抽取，不面向用户、不写日志）",
+    files: ["core/ops.ts", "dist/core/ops.js"],
+    literalSha256: "3d44c9279c4b488887834bb7448c4f541b6909cdcc8ba6d789458f24745e1f31",
+    sink: "var:FANOUT_GUARD_BLOCK_BEGIN",
+    declaration: { name: "FANOUT_GUARD_BLOCK_BEGIN", kind: "const", scope: "top-level" },
+    reason: "源码块定界标记常量 begin（供测试抽取，不面向用户、不写日志）",
   },
   {
-    textIncludes: "g-352：",
-    fileIncludes: ["constants.js", "dist/lib/client.js"],
-    reason: "HOVER_CSS 字符串内嵌的 CSS 注释（浏览器不渲染，非运行时输出）",
+    files: ["core/ops.ts", "dist/core/ops.js"],
+    literalSha256: "f25ef3f309d4a2334ba12fb45c1734880974932327fa5a9131caf9d86ce9ed67",
+    sink: "var:FANOUT_GUARD_BLOCK_END",
+    declaration: { name: "FANOUT_GUARD_BLOCK_END", kind: "const", scope: "top-level" },
+    reason: "源码块定界标记常量 end（供测试抽取，不面向用户、不写日志）",
+  },
+  {
+    files: ["dsh-graph-host/lib/client/constants.js"],
+    literalSha256: "7ec455d3cc825b9a775c9d09822ed7d70889a877d7e9bb42863b11a93239456c",
+    sink: "var:HOVER_CSS",
+    declaration: { name: "HOVER_CSS", kind: "const", scope: "top-level" },
+    reason: "HOVER_CSS 字符串内嵌的 CSS 注释（源文件顶层唯一声明，浏览器不渲染）",
+  },
+  {
+    files: ["dist/lib/client.js"],
+    literalSha256: "7ec455d3cc825b9a775c9d09822ed7d70889a877d7e9bb42863b11a93239456c",
+    sink: "var:HOVER_CSS",
+    declaration: { name: "HOVER_CSS", kind: "const", scope: "factory-body" },
+    reason: "HOVER_CSS 字符串内嵌的 CSS 注释（bundle 中为 factory 直接体内唯一声明，不渲染）",
   },
 ];
 
@@ -99,32 +124,40 @@ function unexpectedLines(hits: GoalIdLiteralHit[]): string[] {
 }
 
 test("g-561 S1：生产源码的静态字符串不含未登记目标编号（注释天然排除）", () => {
-  const { allowed, unexpected } = partitionGoalIdHits(scanAll(productionSourceFiles()), ALLOWED);
-  assert.deepEqual(unexpectedLines(unexpected), [], "生产源码出现未登记的静态目标编号（请改成中性功能描述或登记白名单）");
-  assert.ok(allowed.length >= ALLOWED.length, "白名单条目必须在源码中真实命中（不允许空挂）");
-  for (const { hit } of allowed) {
-    assert.doesNotMatch(hit.sink, OUTPUT_SINK_RE, `注释型白名单字面量绝不能落在日志/Error 输出面：${hit.file}:${hit.line}`);
-  }
+  const hits = scanAll(productionSourceFiles());
+  const { allowed, unexpected } = partitionGoalIdHits(hits, ALLOWED);
+  assert.deepEqual(unexpectedLines(unexpected), [], "生产源码出现未登记的静态目标编号（请改成中性功能描述或登记精确白名单）");
+  assert.equal(allowed.length, 4, `源码仅允许 4 条非输出注释型字面量（实得 ${allowed.length}）`);
 });
 
 test("g-561 S2：隔离构建的最终 dist 运行时产物零未登记目标编号（含客户端 bundle）", () => {
-  const { allowed, unexpected } = partitionGoalIdHits(scanAll(distRuntimeFiles()), ALLOWED);
+  const hits = scanAll(distRuntimeFiles());
+  const { allowed, unexpected } = partitionGoalIdHits(hits, ALLOWED);
   assert.deepEqual(unexpectedLines(unexpected), [], "dist 运行时代码出现未登记的静态目标编号（源码修了但产物没构建对齐？）");
-  assert.ok(allowed.length >= ALLOWED.length, "白名单条目必须在 dist 中真实命中（产物与源码一致）");
+  assert.equal(allowed.length, 4, `dist 仅允许 4 条非输出注释型字面量（实得 ${allowed.length}）`);
 });
 
-test("g-561 S3：白名单逐条可追溯 —— 源码与 dist 都存在，且只覆盖非输出注释型字面量", () => {
+test("g-561 S3：白名单逐条可追溯 —— 精确文件/值/sink/结构，且仅覆盖非输出注释型字面量", () => {
   const sourceHits = scanAll(productionSourceFiles());
   const distHits = scanAll(distRuntimeFiles());
+  const all = [...sourceHits, ...distHits];
   for (const rule of ALLOWED) {
-    const matches = (hits: GoalIdLiteralHit[]) =>
-      hits.filter((hit) => hit.text.includes(rule.textIncludes) && allowedFileMatches(rule, hit.file));
-    assert.ok(matches(sourceHits).length > 0, `白名单条目在源码中已不存在（过期应删除）：${rule.textIncludes}`);
-    assert.ok(matches(distHits).length > 0, `白名单条目在 dist 中不存在（构建未对齐或条目过期）：${rule.textIncludes}`);
-    for (const hit of matches(distHits)) {
-      assert.doesNotMatch(hit.sink, OUTPUT_SINK_RE, `白名单不得掩盖输出面回归：${formatGoalIdHit(hit)}`);
+    for (const file of rule.files) {
+      const hit = all.find((candidate) => candidate.file === file && matchesAllowed(candidate, rule));
+      assert.ok(hit, `白名单条目在 ${file} 未精确命中（条目过期、构建未对齐或结构不符）：${rule.reason}`);
+      assert.doesNotMatch(hit!.sink, OUTPUT_SINK_RE, `白名单不得落在日志/Error 输出面：${formatGoalIdHit(hit!)}`);
     }
   }
+  // HOVER_CSS 必须确为**注入 style 的样式表**（而不是同名变量承载的新界面提示）：
+  // 源文件顶层唯一声明 + kanban 的 `h("style", null, HOVER_CSS)` 注入点，bundle 内同样成立。
+  const constantsSrc = readFileSync(join(ROOT, "dsh-graph-host", "lib", "client", "constants.js"), "utf8");
+  const kanbanSrc = readFileSync(join(ROOT, "dsh-graph-host", "lib", "client", "kanban.js"), "utf8");
+  assert.equal(sourceHits.filter((hit) => hit.declaration?.name === "HOVER_CSS").length, 1, "源码 HOVER_CSS 必须恰好唯一声明");
+  assert.match(constantsSrc, /const HOVER_CSS = `/, "HOVER_CSS 必须仍是模板字面量样式表");
+  assert.ok(kanbanSrc.includes('h("style", null, HOVER_CSS)'), "HOVER_CSS 必须仍由 h(\"style\", …) 注入");
+  const bundle = readFileSync(join(ROOT, "dist", "lib", "client.js"), "utf8");
+  assert.ok(bundle.includes('h("style", null, HOVER_CSS)'), "dist bundle 必须仍包含 HOVER_CSS 的 style 注入点");
+  assert.equal(distHits.filter((hit) => hit.declaration?.name === "HOVER_CSS").length, 1, "dist HOVER_CSS 必须恰好唯一声明");
 });
 
 test("g-561 S4：负向对照 —— 日志 / 路由 Error / UI 文案 / 分行拼接中的静态目标编号必被扫描判红", () => {
@@ -186,6 +219,88 @@ test("g-561 S5：动态真实目标 ID（模板插值 / 字符串拼接 / 正则
       [],
       "动态真实 goal ID / 正则 / 路由文本不得被误判为静态历史编号",
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("g-561 S6：结构冒充负向对照 —— 新界面提示 / 改名 / 同名异作用域 / 换文件 / 换函数注入 必判红", () => {
+  const realSourceHits = scanAll(productionSourceFiles());
+  const hover = realSourceHits.find((hit) => hit.declaration?.name === "HOVER_CSS");
+  const goalComment = realSourceHits.find((hit) => hit.functionScope === "renderRelationSection");
+  const fanoutBegin = realSourceHits.find((hit) => hit.declaration?.name === "FANOUT_GUARD_BLOCK_BEGIN");
+  assert.ok(hover && goalComment && fanoutBegin, "真实字面量必须存在（白名单前提）");
+
+  const dir = mkdtempSync(join(tmpdir(), "g561-scan-spoof-"));
+  try {
+    const spoofs: Array<{ name: string; display: string; source: string }> = [
+      {
+        name: "新增同前缀界面提示（reviewer P1 最小变异）",
+        display: "dsh-graph-host/lib/client/constants.js",
+        source: 'export const __g561_tip = "g-352：这是界面提示文案";\n',
+      },
+      {
+        name: "同一 HOVER_CSS 字面值改名冒充",
+        display: "dsh-graph-host/lib/client/constants.js",
+        source: `const __spoof = ${JSON.stringify(hover!.text)};\n`,
+      },
+      {
+        name: "同名 HOVER_CSS 但出现在函数作用域",
+        display: "dsh-graph-host/lib/client/constants.js",
+        source: `function sneaky() {\n  const HOVER_CSS = ${JSON.stringify(hover!.text)};\n  return HOVER_CSS;\n}\n`,
+      },
+      {
+        name: "同一 HOVER_CSS 字面值换到别的文件",
+        display: "dsh-graph-host/lib/client/i18n.js",
+        source: `const HOVER_CSS = ${JSON.stringify(hover!.text)};\n`,
+      },
+      {
+        name: "受管小节注释从别的函数注入",
+        display: "core/ops.ts",
+        source: `function leak() {\n  const lines: string[] = [];\n  lines.push(${JSON.stringify(goalComment!.text)});\n  return lines;\n}\n`,
+      },
+      {
+        name: "fanout 定界标记改名冒充",
+        display: "core/ops.ts",
+        source: `const __spoof = ${JSON.stringify(fanoutBegin!.text)};\n`,
+      },
+      {
+        name: "新 UI 变量承载鉴权日志文案",
+        display: "dsh-graph-host/lib/client/constants.js",
+        source: 'const __tip = "g-507 拒绝 401 unauthenticated";\n',
+      },
+    ];
+    for (const spoof of spoofs) {
+      const file = join(dir, `${spoofs.indexOf(spoof)}.ts`);
+      writeFileSync(file, spoof.source, "utf8");
+      const hits = scanGoalIdLiterals(file, spoof.display);
+      const { allowed, unexpected } = partitionGoalIdHits(hits, ALLOWED);
+      assert.equal(allowed.length, 0, `${spoof.name}：绝不能命中白名单（子串/同名字面值冒充必须失败）`);
+      assert.ok(unexpected.length >= 1, `${spoof.name}：必须被判定为未登记的目标编号`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("g-561 S7：静态可求值拼接必判红，动态拼接不误拦（并声明折叠边界）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "g561-scan-fold-"));
+  try {
+    const file = join(dir, "fold.ts");
+    writeFileSync(file, [
+      'export const a = "g-" + "507";',
+      'export const b = `g-${"507"}`;',
+      'export const g = "g-" + "5" + "07";',
+      'const seq = 1; const PREFIX = "g-";',
+      'export const c = "g-" + seq;',
+      'export const d = `g-${seq}`;',
+      'export const e = "g-" + PREFIX;',
+      'export const f = ["g-", "507"].join(""); // 边界：不解析方法调用/跨语句常量',
+      "",
+    ].join("\n"), "utf8");
+    const hits = scanGoalIdLiterals(file, "fold.ts");
+    assert.equal(hits.length, 3, `静态拼接应恰好命中 3 条（a/b/g），实得 ${hits.length}`);
+    for (const hit of hits) assert.equal(hit.text, "g-507", "折叠后的完整值必须是 g-507");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
