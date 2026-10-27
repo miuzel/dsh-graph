@@ -33,7 +33,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import vm from "node:vm";
 import { apply, resolveCanonicalRoot } from "../../dist/index.js";
 import { normalizeSubagentMode } from "../../dist/core/ops.js";
@@ -56,6 +56,47 @@ const DEFAULTS = Object.freeze({
   subagentPrompt: "",
   promptLanguage: "follow",
 });
+
+// ---------------------------------------------------------------------------
+// g-561：迁移留痕的**平台无关**结构断言
+//
+// 原断言写成 `^...（来源 /`（只认 POSIX 绝对路径），在 Windows 盘符 `C:\...` 或 UNC
+// `\\server\share\...` 上会确定性误红。这里只把「来源路径」做成平台无关的绝对路径判定：
+//   · POSIX：`/...`；win32 盘符：`C:\...` 或 `C:/...`；UNC：`\\server\share\...`；
+//   · 仍严格绑定中性日志前缀、目标条目、字段段、来源必须是真实 `settings.yaml.imported`，
+//     且**日志模板（来源占位后）不得含目标编号**——不靠子串/后缀放行整行。
+// 说明：这是路径 API 级别的平台无关，不等于原生 Windows 全栈验证。
+// ---------------------------------------------------------------------------
+const MIGRATION_LOG_RE = new RegExp(
+  "^\\[dsh-graph-host\\] 旧设置已迁移：dsh-graph 节（来源 ([^）]+)）→ 条目 dsh-graph-host；"
+  + "字段 ([^（]+)（均为此前缺失字段，显式值未被覆盖）$",
+);
+
+function parseMigrationLogLine(line: string): { source: string; fields: string } | null {
+  const match = MIGRATION_LOG_RE.exec(line.trim());
+  return match ? { source: match[1], fields: match[2] } : null;
+}
+
+/** 来源绝对路径：POSIX `/…`、win32 盘符 `C:\` / `C:/`、UNC `\\server\share…`。 */
+function isAbsoluteSourcePath(value: string): boolean {
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  if (value.startsWith("\\\\")) return true;
+  return value.startsWith("/");
+}
+
+/** 返回该留痕行的问题列表；空数组 = 结构/来源/中性语义全部通过。 */
+function migrationLogProblems(line: string): string[] {
+  const parsed = parseMigrationLogLine(line);
+  if (!parsed) return ["结构不匹配（前缀/来源/条目/字段段）"];
+  const problems: string[] = [];
+  if (!isAbsoluteSourcePath(parsed.source)) problems.push(`来源不是绝对路径：${parsed.source}`);
+  if (!/settings\.yaml\.imported$/.test(parsed.source)) problems.push(`来源不是 settings.yaml.imported：${parsed.source}`);
+  // 来源路径本身可能合法包含 g-数字（如构建 worktree 目录名）；只审「模板」部分是否含目标编号。
+  if (/\bg-\d+\b/.test(line.replace(parsed.source, "<SOURCE>"))) problems.push("日志模板含目标编号");
+  if (!parsed.fields.trim()) problems.push("字段段为空");
+  return problems;
+}
 
 // ---------------------------------------------------------------------------
 // 测试隔离底座（自包含临时 workspace / home / profile，绝不触碰真实看板与真实 $DSH_HOME）
@@ -231,11 +272,10 @@ isolatedTest("g-454 判据2：旧 `dsh-graph` 节的缺失字段一次性迁入 
 
   const migratedLine = stderr.split("\n").find((line) => line.includes("旧设置已迁移"));
   assert.ok(migratedLine, "必须留痕说明动作（中性功能描述）");
-  assert.match(
-    migratedLine!,
-    /^\[dsh-graph-host\] 旧设置已迁移：dsh-graph 节（来源 /,
-    "迁移留痕前缀必须是中性功能描述（不得含目标编号）",
-  );
+  assert.deepEqual(migrationLogProblems(migratedLine!), [], "迁移留痕必须结构完整、来源为绝对路径且模板不含目标编号");
+  const migrated = parseMigrationLogLine(migratedLine!)!;
+  assert.equal(migrated.source, join(env.home, "settings.yaml.imported"), "留痕必须点名真实来源文件（跨平台绝对路径）");
+  assert.ok(migrated.fields.includes("subagentModel"), "留痕必须点名字段");
   assert.match(stderr, /settings\.yaml\.imported/, "留痕必须点名来源文件");
   assert.match(stderr, /subagentModel/, "留痕必须点名字段");
 
@@ -247,6 +287,48 @@ isolatedTest("g-454 判据2：旧 `dsh-graph` 节的缺失字段一次性迁入 
 
   // 端到端可观测：旧节的 promptLanguage=en 必须被**真正读到**（skill 资产走英文，而不是回落默认）。
   assert.equal(skillContent(registeredSkills, "dsh-graph-supervisor"), guideEn(), "旧节 promptLanguage 必须生效");
+});
+
+test("g-454 判据2：迁移留痕来源路径跨平台（POSIX/win32 盘符/UNC）且负向样例必拒", () => {
+  const fields = "subagentProvider, subagentModel";
+  const lineFor = (source: string) =>
+    `[dsh-graph-host] 旧设置已迁移：dsh-graph 节（来源 ${source}）→ 条目 dsh-graph-host；字段 ${fields}（均为此前缺失字段，显式值未被覆盖）`;
+  // 平台无关样例：POSIX / win32 盘符 / win32 正斜杠 / UNC 都由**实际 path API**生成（不依赖宿主 OS）。
+  const posixSource = posix.join("/tmp", "g454-home", "settings.yaml.imported");
+  const winDriveSource = win32.join("C:\\Users\\me\\AppData\\Local\\Temp", "g454-home", "settings.yaml.imported");
+  const winSlashSource = "C:/Users/me/AppData/Local/Temp/g454-home/settings.yaml.imported";
+  const uncSource = win32.join("\\\\server\\share", "g454-home", "settings.yaml.imported");
+  assert.equal(posix.sep, "/", "POSIX path API 样本以 / 分隔");
+  assert.equal(win32.sep, "\\", "win32 path API 样本以 \\ 分隔");
+  assert.match(winDriveSource, /^[A-Za-z]:\\/, "win32.join 必须产生盘符反斜杠绝对路径");
+  assert.ok(uncSource.startsWith("\\\\"), "win32.join 必须产生 UNC 反斜杠路径");
+  const positiveSources = [posixSource, winDriveSource, winSlashSource, uncSource];
+  for (const source of positiveSources) {
+    const parsed = parseMigrationLogLine(lineFor(source));
+    assert.ok(parsed, `跨平台结构必须接受来源：${source}`);
+    assert.equal(parsed!.source, source);
+    assert.ok(isAbsoluteSourcePath(parsed!.source), `必须识别为绝对来源：${source}`);
+    assert.match(parsed!.source, /settings\.yaml\.imported$/, `来源必须保留 settings.yaml.imported：${source}`);
+    assert.deepEqual(migrationLogProblems(lineFor(source)), [], `正向样例必须零问题：${source}`);
+  }
+  // 负向：空来源 / 相对来源 / 坏前缀 / 模板含目标编号 / 非 settings.yaml.imported / 缺字段段。
+  const negatives: Array<{ name: string; line: string }> = [
+    { name: "空来源", line: lineFor("") },
+    { name: "相对来源", line: lineFor("settings.yaml.imported") },
+    { name: "坏前缀", line: lineFor("/tmp/x/settings.yaml.imported").replace("[dsh-graph-host]", "[dsh-graph]") },
+    { name: "模板含目标编号", line: lineFor("/tmp/x/settings.yaml.imported").replace("旧设置已迁移", "旧设置已迁移 g-507") },
+    { name: "来源非 settings.yaml.imported", line: lineFor("/tmp/x/other.yaml") },
+    { name: "缺字段段", line: "[dsh-graph-host] 旧设置已迁移：dsh-graph 节（来源 /tmp/x/settings.yaml.imported）→ 条目 dsh-graph-host；字段 " },
+  ];
+  for (const neg of negatives) {
+    assert.ok(migrationLogProblems(neg.line).length > 0, `${neg.name} 必须被平台无关断言拒绝`);
+  }
+  // 字段段出现目标编号同样算模板泄漏（来源路径占位后才审）。
+  const fieldLeak = lineFor("/tmp/x/settings.yaml.imported").replace("subagentModel", "g-507 subagentModel");
+  assert.ok(
+    migrationLogProblems(fieldLeak).some((problem) => problem.includes("目标编号")),
+    "字段段目标编号必须判红",
+  );
 });
 
 isolatedTest("g-454 判据2：profile patch 已有显式值时绝不覆盖（含显式空串），且显式值在读取面胜出", async (env) => {
