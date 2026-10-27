@@ -69,10 +69,10 @@ const FALLBACK_RE = /退回两次 rename/;
  *  g-496 att-009 起五类实际运行期固定正文抽入公共层（收集 / 摘要 / PM / 评审 / 执行定位，
  *  各 `.zh.md` + `.en.md`）：`collect-task` / `summary-task` / `pm-task` / `review-task` /
  *  `attempt-instructions` = 71 + 10 = 81；
- *  新增插件图标 icon.svg：81 + 1 = 82）。
+ *  新增插件图标 icon.svg：81 + 1 = 82；g-505 新增 dist/core/keepalive.js：82 + 1 = 83）。
  *  刻意用**精确计数**而不是派生：派生需要在测试里再持有一份 build.sh 的资产清单（第二副本），
  *  与本包「单一真源」口径冲突；清单漂移由本常量的精确比较如实判红。 */
-const DIST_FILE_COUNT = 82;
+const DIST_FILE_COUNT = 83;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）

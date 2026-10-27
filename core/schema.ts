@@ -424,6 +424,10 @@ export const projectConfigPatchSchema: ObjectSchema = {
         // on 时仅在**派发提示词**里注入 discipline 资产中的「扇出与独立验证」契约段；
         // off 时派发提示词逐字不变（diff=0）。不新增引擎硬门禁、不新建调度器。
         agent_teams: { type: "boolean", nullable: true },
+        // g-505：主管上下文缓存保活的项目级三态（三值闭集，与 core/keepalive.ts 的
+        // KEEP_ALIVE_MODES 同源真源）。null = 未配置 = inherit（跟随全局）。
+        // 拒绝 "true"/1 之类隐式形态——三态是显式契约，不接受猜。
+        keep_alive: { type: "string", enum: ["inherit", "true", "false"], nullable: true },
       },
       additionalProperties: false,
     },

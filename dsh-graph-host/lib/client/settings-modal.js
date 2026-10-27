@@ -31,6 +31,9 @@
           // g-440：Agent Teams 开关三态归一——真布尔 true/false 保留；null/未配置/畸形一律归一为
           // null（＝off）。归一后同态不产生假脏（判据 2），且绝不会把畸形值回填成「开启」。
           agent_teams: form?.supervisor?.agent_teams === true ? true : form?.supervisor?.agent_teams === false ? false : null,
+          // g-505：保活三态归一（与 core `normalizeKeepAliveMode` 同口径）——只有三种合法形态保留，
+          // 其余（未配置/畸形/未知字符串）一律归一为 null（＝inherit 跟随全局）。
+          keep_alive: normalizeKeepAliveDraft(form?.supervisor?.keep_alive),
         },
         prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
         modules: Object.fromEntries(MODULE_SWITCH_KEYS.map((k) => [k, normalizeModuleSwitchDraft(form?.modules?.[k])])),
@@ -81,6 +84,33 @@
      *  支持真裁剪的宿主（当前本机）上**该行不存在**，绝不改变既有页面的默认可见性；zh/en 对称、
      *  en 侧零 CJK（由 core/tests/g480-modules.test.ts 的对账断言钉住）。 */
     const MODULE_TRIM_UNSUPPORTED_HINT_KEY = "settings.modulesTrimUnsupported";
+    // ===== g-505：主管上下文缓存保活（项目级三态）=====
+    // 与 core `KEEP_ALIVE_MODES` 同源同序（客户端是独立打包的浏览器 bundle，无法 import core 常量，
+    // 故此处是**副本**；两边一致性由 core/tests/g505-keepalive.test.ts 的前后端对账断言钉住）。
+    const KEEP_ALIVE_MODES = ["inherit", "true", "false"];
+    const KEEP_ALIVE_LABEL_KEYS = {
+      inherit: "settings.keepAliveInherit",
+      "true": "settings.keepAliveOn",
+      "false": "settings.keepAliveOff",
+    };
+    /** 三态归一（与 core 同口径）：只认真布尔与三种字面量（大小写不敏感）；其余一律 `null`（＝inherit）。 */
+    const normalizeKeepAliveDraft = (v) => {
+      if (v === true) return "true";
+      if (v === false) return "false";
+      if (typeof v === "string") {
+        const s = v.trim().toLowerCase();
+        if (s === "inherit" || s === "true" || s === "false") return s;
+      }
+      return null;
+    };
+    /** 生效值来源 → 展示文案键（状态类读数留在正文，不进浮层；闭集与 core `KeepAliveSource` 一一对应）。 */
+    const KEEP_ALIVE_SOURCE_KEYS = {
+      project_explicit: "settings.keepAliveSrcProject",
+      global_explicit: "settings.keepAliveSrcGlobal",
+      global_default: "settings.keepAliveSrcDefault",
+      project_invalid: "settings.keepAliveSrcProjectInvalid",
+      global_invalid: "settings.keepAliveSrcGlobalInvalid",
+    };
     // ===== g-333：override + 空文本 ≡ disable =====
     // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
     // 读回即 disable；「空 override」在存储层不可表示）。这里把同一语义前移到**草稿归一化**与
@@ -239,6 +269,16 @@
         if (to === true || to === false || from === true || from === false) leaf(["supervisor", "agent_teams"]);
       }
       leaf(["prompt_overrides", "subagent"]);
+      // g-505：保活三态同 agent_teams/modules 口径——「无基线且草稿为 null（=inherit）」= 无话可说
+      //（不把「跟随全局」实体化进 project.yaml）；只有草稿是 "true"/"false"，或基线是这两者而
+      // 草稿回 null（显式恢复跟随全局）时才提交。`inherit` 与 `null` 在 core 写侧同义（都清空该叶子）。
+      {
+        const to = getLeafPath(draft, ["supervisor", "keep_alive"]);
+        const from = getLeafPath(base, ["supervisor", "keep_alive"]);
+        if (to === "true" || to === "false" || from === "true" || from === "false") {
+          leaf(["supervisor", "keep_alive"], (v) => (v === "true" || v === "false" ? v : null));
+        }
+      }
       // g-480：模块开关同 agent_teams 口径——「无基线且草稿为 null」= 无话可说（不把「未配置」实体化
       // 进 project.yaml）；只有草稿是布尔、或基线是布尔而草稿回 null（显式清空回到默认开启）时才提交。
       for (const k of MODULE_SWITCH_KEYS) {
@@ -319,6 +359,8 @@
         "supervisor.automation.memory_promotion",
         "supervisor.automation.skill_proposal",
         "supervisor.automation.release",
+        // g-505：保活三态（主管会话行为面，与 supervisor.automation 同页签）
+        "supervisor.keep_alive",
         "prompt_overrides.subagent",
       ],
     };
@@ -1214,6 +1256,57 @@
                   // g-490：只要该键的未配置项显示具体 human/ai（= 服务端下发了它的 gate 范围来源），
                   // 就必须**同屏**渲染口径来源标注——绝不出现无来源的具体 human/ai。
                   automationUnsetScope[k] ? automationUnsetScopeNote(automationUnsetScope[k]) : null))),
+
+            // ===== g-505：主管上下文缓存保活（项目级三态 + 生效值/能力读数）=====
+            // 归属「高级设置」：它是**主管会话的行为面**开关（与上方 supervisor.automation 同类）。
+            // 三态语义（与 core 逐字一致）：
+            //   inherit（默认）= 跟随 profile 全局设置；true = 强制开启（压倒全局）；false = 强制关闭。
+            // 为避免「改了不知道有没有用」的错觉，控件下方**必须**同屏显示服务端下发的**实际生效值**、
+            // 来源与能力缺口（生效值/能力是状态读数 ⇒ 按 g-488 分界留在正文，不进 `(?)` 浮层）。
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            (() => {
+              const eff = form.supervisor?.keep_alive_effective;
+              const status = form.supervisor?.keep_alive_status;
+              const draft = normalizeKeepAliveDraft(form.supervisor?.keep_alive);
+              const srcKey = eff ? KEEP_ALIVE_SOURCE_KEYS[eff.source] : null;
+              const unavailable = status && status.capable && status.capable.host_channel === false;
+              return h("div", { style: { minWidth: 0 } },
+                h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                  h("label", { htmlFor: "dg-keep-alive", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.keepAliveLabel")),
+                  settingsHintIcon(dgT("settings.keepAliveHint"))),
+                h("select", {
+                  id: "dg-keep-alive",
+                  "aria-label": dgT("settings.keepAliveAria"),
+                  style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                  value: draft ?? "inherit",
+                  onChange: (e) => set(["supervisor", "keep_alive"], e.target.value === "inherit" ? null : e.target.value),
+                },
+                  ...KEEP_ALIVE_MODES.map((m) => h("option", { key: m, value: m, style: policyOptionStyle }, dgT(KEEP_ALIVE_LABEL_KEYS[m])))),
+                // 生效值读数：必须有（否则用户无法判断 inherit 最终落到了开还是关）。
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } },
+                      dgT("settings.keepAliveEffective").replace("{v}", eff.effective ? dgT("settings.keepAliveOn") : dgT("settings.keepAliveOff"))
+                        + (srcKey ? " · " + dgT(srcKey) : ""))
+                  : null,
+                // 能力/缺口读数：TTL 未知是**已知限制**，必须如实显示（不按模型名猜长 TTL）。
+                status?.capable
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      status.capable.ttl === "unknown"
+                        ? dgT("settings.keepAliveTtlUnknown")
+                        : dgT("settings.keepAliveCapability").replace("{v}", status.capable.channel))
+                  : null,
+                unavailable
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.keepAliveCapability").replace("{v}", dgT("settings.keepAliveUnavailable"))
+                        + (Array.isArray(status.capable.missing) && status.capable.missing.length
+                          ? ": " + status.capable.missing.join(", ")
+                          : ""))
+                  : null,
+                // 畸形取值：fail-closed 警示（服务端判为非法 ⇒ 实际按关闭处理，绝不猜开）
+                eff?.malformed
+                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT("settings.keepAliveMalformed"))
+                  : null);
+            })(),
 
             h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
             h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),
