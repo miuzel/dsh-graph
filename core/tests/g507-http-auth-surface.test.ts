@@ -455,25 +455,62 @@ test("g-507 A7：认证后未知子路径 404、method 不匹配 405、query 参
   assert.equal(segmentBoundary.status, 404, "段边界：/diagramX 不得误中 /diagram prefix");
 });
 
-test("g-507 A8：拒绝诊断只写一行 stderr，不含凭证/请求头/异常细节", async () => {
-  const { entry } = makeEntry();
-  const writes: string[] = [];
-  const orig = process.stderr.write.bind(process.stderr);
-  (process.stderr as any).write = (chunk: any) => {
-    writes.push(String(chunk));
-    return true;
-  };
-  try {
-    const res = watchResponse();
-    await entry(watchRequest("GET", `${API_NAMESPACE}/goal`, { [OWNER_HEADER]: "SECRET-E2E-VALUE" }).req, res);
-    assert.equal(res.status, 401);
-  } finally {
-    (process.stderr as any).write = orig;
-  }
-  const lines = writes.filter((w) => w.includes("g-507 拒绝"));
-  assert.equal(lines.length, 1, "每次拒绝留一条诊断");
-  for (const l of lines) {
-    assert.doesNotMatch(l, /SECRET-E2E-VALUE/, "诊断不得包含凭证值");
-    assert.doesNotMatch(l, /cookie|authorization/i, "诊断不得包含凭证头");
+test("g-507 A8：401/403/503 拒绝诊断各只写一行 stderr，保留状态码/reason 且不含目标编号与凭证", async () => {
+  // 三种拒绝面各自的真实调用：401 匿名 / 403 信任边界 / 503 connection 不可用。
+  const cases = [
+    {
+      name: "401 匿名",
+      make: () => makeEntry(),
+      method: "GET",
+      url: `${API_NAMESPACE}/goal`,
+      headers: { [OWNER_HEADER]: "SECRET-E2E-VALUE" } as Record<string, string>,
+      status: 401,
+      line: /^\[dsh-graph-host\] HTTP 鉴权拒绝 401 unauthenticated\n?$/,
+    },
+    {
+      name: "403 信任边界",
+      make: () => makeEntry(),
+      method: "GET",
+      url: `${API_NAMESPACE}/goal`,
+      headers: { "x-dsh-graph-untrusted": "1", cookie: "SECRET-E2E-COOKIE" } as Record<string, string>,
+      status: 403,
+      line: /^\[dsh-graph-host\] HTTP 鉴权拒绝 403 trust-boundary-rejected\n?$/,
+    },
+    {
+      name: "503 connection 不可用",
+      make: () => makeEntry({ withConnection: false }),
+      method: "POST",
+      url: `${API_NAMESPACE}/create-goal`,
+      headers: {} as Record<string, string>,
+      status: 503,
+      line: /^\[dsh-graph-host\] HTTP 鉴权拒绝 503 connection-service-unavailable（宿主 connection 服务未就绪：fail-closed）\n?$/,
+    },
+  ] as const;
+  for (const item of cases) {
+    // 先在捕获窗口外完成 apply（注册期日志会合法携带 workspace 路径）；本用例只审计**请求期**
+    // 的拒绝诊断 —— 不该把包含任意路径的注册日志误当拒绝日志。
+    const { entry } = item.make();
+    const writes: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (chunk: any) => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      const res = watchResponse();
+      await entry(watchRequest(item.method, item.url, item.headers).req, res);
+      assert.equal(res.status, item.status, `${item.name}：HTTP 状态码必须原样保留`);
+    } finally {
+      (process.stderr as any).write = orig;
+    }
+    const lines = writes.filter((w) => w.includes("HTTP 鉴权拒绝"));
+    assert.equal(lines.length, 1, `${item.name}：每次拒绝留一条诊断`);
+    assert.match(lines[0], item.line, `${item.name}：诊断保留中性功能标签、状态码与 reason`);
+    assert.doesNotMatch(lines[0], /\bg-\d+\b/, `${item.name}：诊断不得包含目标编号（用中性功能描述）`);
+    assert.doesNotMatch(lines[0], /SECRET-E2E-VALUE|SECRET-E2E-COOKIE/, `${item.name}：诊断不得包含凭证值`);
+    assert.doesNotMatch(lines[0], /cookie|authorization/i, `${item.name}：诊断不得包含凭证头`);
+    for (const w of writes) {
+      assert.doesNotMatch(w, /\bg-\d+\b/, `${item.name}：拒绝路径写入 stderr 的任何内容都不得含目标编号`);
+    }
   }
 });

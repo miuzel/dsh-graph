@@ -229,7 +229,13 @@ isolatedTest("g-454 判据2：旧 `dsh-graph` 节的缺失字段一次性迁入 
   }, "迁移内容 = 旧节里全部合法字段");
   assert.equal(host.calls[0].expected, 0, "写入必须带 revision（并发编辑保护）");
 
-  assert.match(stderr, /g-454 旧设置已迁移/, "必须留痕说明动作");
+  const migratedLine = stderr.split("\n").find((line) => line.includes("旧设置已迁移"));
+  assert.ok(migratedLine, "必须留痕说明动作（中性功能描述）");
+  assert.match(
+    migratedLine!,
+    /^\[dsh-graph-host\] 旧设置已迁移：dsh-graph 节（来源 /,
+    "迁移留痕前缀必须是中性功能描述（不得含目标编号）",
+  );
   assert.match(stderr, /settings\.yaml\.imported/, "留痕必须点名来源文件");
   assert.match(stderr, /subagentModel/, "留痕必须点名字段");
 
@@ -290,7 +296,13 @@ isolatedTest("g-454 判据2：写入抛错时降级不阻断（只读兜底仍�
   const { stderr, registeredSkills } = await runApply(env, { settings: host.svc, profileContext: profileContextOf(env) });
 
   assert.equal(host.calls.length, 1, "确实尝试过写入");
-  assert.match(stderr, /g-454 旧设置未落盘/, "失败必须降级告警（如实说明）");
+  const failedLine = stderr.split("\n").find((line) => line.includes("旧设置未落盘"));
+  assert.ok(failedLine, "失败必须降级告警（如实说明，中性功能描述）");
+  assert.match(
+    failedLine!,
+    /^\[dsh-graph-host\] 设置迁移：旧设置未落盘（已用只读兜底，不影响看板与工具）：/,
+    "降级告警前缀必须是中性功能描述（不得含目标编号）",
+  );
   assert.match(stderr, /不影响看板与工具/, "告警必须说明不阻断");
   assert.equal(existsSync(join(env.profileDir, MARKER)), false, "未成功落盘 ⇒ 不得写标记（下次启动可重试）");
   // 读取侧兜底：即使写不进去，旧值（promptLanguage=en）在本次运行中仍然生效。

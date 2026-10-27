@@ -104,19 +104,34 @@ test("g-507 S4：业务路由集合来自**真实注册快照**，且与命名�
   for (const r of registered!) {
     assert.equal(r.path === API_NAMESPACE || r.path.startsWith(`${API_NAMESPACE}/`), true, `${r.path} 必须在命名空间内`);
   }
-  // 命名空间校验在**定义层**同样 fail-closed：越界 path 直接抛错（不会注册）
+  // 命名空间校验在**定义层**同样 fail-closed：越界 path 直接抛错（不会注册）。
+  // g-561：三类路由定义 Error 都必须用**中性功能描述**，不得含历史目标编号。
   assert.throws(
     () => buildRouteTable([{ path: "/api/other-endpoint", handler: () => {} }]),
-    /非法路由定义|命名空间/,
-    "越界 path 必须判错（fail-closed，不得裸挂命名空间之外）",
+    (err: any) => {
+      assert.match(err.message, /非法路由定义|命名空间/, "越界 path 必须判错（fail-closed，不得裸挂命名空间之外）");
+      assert.doesNotMatch(err.message, /\bg-\d+\b/, "路由定义 Error 不得包含目标编号");
+      return true;
+    },
+  );
+  assert.throws(
+    () => buildRouteTable([{ path: `${API_NAMESPACE}/no-handler` }]),
+    (err: any) => {
+      assert.match(err.message, /缺少 handler/, "缺 handler 必须判错");
+      assert.doesNotMatch(err.message, /\bg-\d+\b/, "缺 handler Error 不得包含目标编号");
+      return true;
+    },
   );
   assert.throws(
     () => buildRouteTable([
       { path: `${API_NAMESPACE}/dup`, kind: "exact", handler: () => {} },
       { path: `${API_NAMESPACE}/dup`, kind: "exact", handler: () => {} },
     ]),
-    /重复路由/,
-    "重复 path 必须判错",
+    (err: any) => {
+      assert.match(err.message, /重复路由/, "重复 path 必须判错");
+      assert.doesNotMatch(err.message, /\bg-\d+\b/, "重复路由 Error 不得包含目标编号");
+      return true;
+    },
   );
 });
 

@@ -8268,7 +8268,7 @@ export function markIndependentReviewMissing(
     return true;
   } catch (e) {
     try {
-      process.stderr.write(`[dsh-graph] g-436 未独立评审标注失败（已忽略，不影响 accept）: ${(e as Error)?.message ?? e}\n`);
+      process.stderr.write(`[dsh-graph] 未独立评审标注失败（已忽略，不影响 accept）: ${(e as Error)?.message ?? e}\n`);
     } catch { /* 忽略 */ }
     return false;
   }
@@ -8412,7 +8412,7 @@ export function reconcileReviewConclusions(
       conclusion_reconciled_from: machine,
       conclusion_reconciled_at: nowIso(),
       conclusion_reconciled_by: actor,
-      conclusion_reconcile_note: "按报告正文重算回填（g-487 结论解析容错）；评审正文逐字节未改",
+      conclusion_reconcile_note: "按报告正文重算回填（结论解析容错）；评审正文逐字节未改",
     };
     assertReviewEventName("review.conclusion_reconciled");
     commitPrepared(root, { actor, goal: rec.goal }, {
@@ -10715,7 +10715,7 @@ export function unbindGoalChild(
               });
             } catch { /* 诊断写入失败：绝不覆盖原始错误 */ }
             // 忽略旧 attempt 的失败，不影响当前解绑
-            console.warn("[g-190] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
+            console.warn("[dsh-graph] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
           }
         }
       }

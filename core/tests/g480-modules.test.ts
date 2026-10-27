@@ -542,8 +542,12 @@ test("g-480 ②：监听器的 workspace 口径**与工具侧/提示面同源**�
   // ③ 硬约束②的作用域过滤必须双条件（全局视图 + 该 agent 视图）
   assert.ok(/at\.get\(name\)\s*!==\s*undefined/.test(block), "必须用全局视图 tools.get(name) 判定可点名");
   assert.ok(/at\.get\(name,\s*agent\)\s*!==\s*undefined/.test(block), "必须用该 agent 视图 tools.get(name, agent) 判定可解析");
-  // ④ 硬约束①的 try/catch 兜底 + 留痕（抛错不得逃逸到会话创建路径）
-  assert.ok(/catch \(e\) \{\s*\n\s*\/\/[^\n]*\n\s*process\.stderr\.write\(`\[dsh-graph-host\] g-480/.test(block), "裁剪体必须有兜底 catch 并写 stderr 留痕");
+  // ④ 硬约束①的 try/catch 兜底 + 留痕（抛错不得逃逸到会话创建路径）；
+  // g-561 起留痕文案用中性功能描述，不得再带历史目标编号（本断言锚定整行）
+  const catchWrite = block.match(/catch \(e\) \{\s*\n\s*\/\/[^\n]*\n\s*(process\.stderr\.write\(`[^`]*`\))/);
+  assert.ok(catchWrite, "裁剪体必须有兜底 catch 并写 stderr 留痕");
+  assert.match(catchWrite![1], /\[dsh-graph-host\] 模块裁剪跳过: \$\{e\?\.message \?\? e\}/, "留痕保留中性功能描述与错误摘要");
+  assert.doesNotMatch(catchWrite![1], /\bg-\d+\b/, "留痕不得包含目标编号");
   // ⑤ 未配置/全开路径**一次 restrict 都不调**（行为逐字节不变的结构保证）
   assert.ok(block.includes("if (!switches.disabledTools.length) return;"), "全开必须提前返回（零 restrict 调用）");
   assert.ok(block.includes("if (!cwd) return;"), "无 cwd ⇒ 提前返回（fail-safe：不裁剪）");
@@ -602,7 +606,8 @@ test("g-480 ②：接线永不抛错（硬约束①）—— restrict 抛错被�
   // （`dsh-agent-loop` 的 publish :1789 与 initializeAgent :1944 在同一个 try 里 ⇒ 抛出去就是会话创建回滚）
   a.ctx.tools.restrict = () => { throw new Error("simulated restrict failure"); };
   const notes = captureStderr(() => { for (const fn of h.events.get("agent/created") ?? []) fn({ agent: a }); });
-  assert.match(notes, /g-480 模块裁剪跳过[\s\S]*simulated restrict failure/, "必须 try/catch 并留痕（可诊断，不静默）");
+  assert.match(notes, /模块裁剪跳过[\s\S]*simulated restrict failure/, "必须 try/catch 并留痕（可诊断，不静默）");
+  assert.doesNotMatch(notes, /\bg-\d+\b/, "裁剪失败留痕不得包含目标编号（中性功能描述）");
   assert.equal(schemaNames(a).length, 51, "裁剪失败 ⇒ 可见面保持原状（fail-open 到「全开」= 等价降级）");
   assert.equal(h.restrictCalls.length, 0, "抛错的 restrict 不记账");
 

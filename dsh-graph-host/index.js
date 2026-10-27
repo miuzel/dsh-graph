@@ -266,11 +266,11 @@ export const buildRouteTable = (defs) => {
     // 命名空间根自身（看板首屏 `/api/dsh-graph`）与全体子路径都必须在命名空间内；
     // 越界 path 一律判错 ⇒ 不注册（fail-closed，绝不把业务路由裸挂到命名空间之外）。
     if (!def || typeof def.path !== "string" || !(def.path === API_NAMESPACE || def.path.startsWith(API_NAMESPACE + "/"))) {
-      throw new Error(`g-507: 非法路由定义（必须在 ${API_NAMESPACE} 命名空间内）：${String(def?.path)}`);
+      throw new Error(`HTTP 路由定义非法（必须在 ${API_NAMESPACE} 命名空间内）：${String(def?.path)}`);
     }
-    if (typeof def.handler !== "function") throw new Error(`g-507: 路由 ${def.path} 缺 handler`);
+    if (typeof def.handler !== "function") throw new Error(`HTTP 路由缺少 handler：${def.path}`);
     const table = def.kind === "prefix" ? prefixes : exact;
-    if (table.has(def.path)) throw new Error(`g-507: 重复路由 ${def.kind === "prefix" ? "prefix" : "exact"} "${def.path}"`);
+    if (table.has(def.path)) throw new Error(`HTTP 重复路由 ${def.kind === "prefix" ? "prefix" : "exact"} "${def.path}"`);
     table.set(def.path, def);
   }
   return { exact, prefixes };
@@ -2206,10 +2206,10 @@ export function apply(ctx, config) {
       // 带 revision：与用户在设置页的并发编辑冲突时，宿主抛 SettingsConflictError ⇒ 放弃本次写。
       await svc.update(row.ns, patch, row.revision);
     } catch (e) {
-      process.stderr.write(`[dsh-graph-host] g-454 旧设置未落盘（已用只读兜底，不影响看板与工具）：${e?.message ?? e}\n`);
+      process.stderr.write(`[dsh-graph-host] 设置迁移：旧设置未落盘（已用只读兜底，不影响看板与工具）：${e?.message ?? e}\n`);
       return;
     }
-    const trace = `g-454 旧设置已迁移：${GRAPH_LEGACY_SETTINGS_SECTION} 节（来源 ${legacy.sources.join(", ")}）→ 条目 ${row.ns}；字段 ${fields.join(", ")}（均为此前缺失字段，显式值未被覆盖）`;
+    const trace = `旧设置已迁移：${GRAPH_LEGACY_SETTINGS_SECTION} 节（来源 ${legacy.sources.join(", ")}）→ 条目 ${row.ns}；字段 ${fields.join(", ")}（均为此前缺失字段，显式值未被覆盖）`;
     process.stderr.write(`[dsh-graph-host] ${trace}\n`);
     try {
       writeFileSync(join(legacy.dir, GRAPH_LEGACY_SETTINGS_MARKER), `${new Date().toISOString()} ${trace}\n`);
@@ -2230,8 +2230,8 @@ export function apply(ctx, config) {
           // schema 依赖 schemastery；解析不到时如实说明。
           // NB-2 措辞订正：基线（g-351 之前）此分支**也有**同形 stderr 告警
           //（`g-133: @deepseek-ai/schemastery 不可解析…`，见 96c29cb:dsh-graph-host/index.js:959），
-          // 并非「无提示的默认值」；此处沿用同一如实告警口径，"g-351" 前缀仅用于区分代次。
-          process.stderr.write("[dsh-graph-host] g-351: @deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
+          // 并非「无提示的默认值」；此处沿用同一如实告警口径，按中性功能描述留痕（不再带历史目标编号前缀）。
+          process.stderr.write("[dsh-graph-host] 设置能力降级：@deepseek-ai/schemastery 不可解析，profile 全局默认降级（模型路由/提示词走 project.yaml/继承）\n");
           return;
         }
         try {
@@ -2243,7 +2243,7 @@ export function apply(ctx, config) {
           return;
         } catch (e) {
           const reason = `register: ${e?.message ?? e}`;
-          process.stderr.write(`[dsh-graph-host] g-351 settings 注册失败（降级，模型路由/提示词走默认）：${reason}\n`);
+          process.stderr.write(`[dsh-graph-host] 设置注册失败（降级，模型路由/提示词走默认）：${reason}\n`);
           return;
         }
       }
@@ -2272,7 +2272,7 @@ export function apply(ctx, config) {
         return;
       }
       // 两条能力都不可用：如实降级（读取走 project.yaml/继承），不伪装成注册异常。
-      process.stderr.write("[dsh-graph-host] g-351 settings 能力不可用（降级，模型路由/提示词走 project.yaml/继承）：settings 服务未提供 namespace 注册或表单投影 API\n");
+      process.stderr.write("[dsh-graph-host] 设置能力不可用（降级，模型路由/提示词走 project.yaml/继承）：settings 服务未提供 namespace 注册或表单投影 API\n");
     });
   };
   setupGraphSettings();
@@ -2576,7 +2576,7 @@ export function apply(ctx, config) {
             childId,
           });
         } catch (e) {
-          process.stderr.write(`[dsh-graph] g-436 评审结算失败（已忽略，不影响子代理结算）: ${e?.message ?? e}\n`);
+          process.stderr.write(`[dsh-graph] 评审结算失败（已忽略，不影响子代理结算）: ${e?.message ?? e}\n`);
         }
         return;
       }
@@ -2598,7 +2598,7 @@ export function apply(ctx, config) {
         // 归因到具体目标，写进看板事件流只会污染负责人看板。保留 stderr 便于诊断。
         try {
           const stop = typeof info?.stopReason === "string" ? info.stopReason : "?";
-          process.stderr.write(`[dsh-graph] g-374 subagent/end 未登记 child=${childId ?? "(none)"} stop=${stop} —— 跳过完成摘要（不猜归属，纯 stderr 留痕）\n`);
+          process.stderr.write(`[dsh-graph] subagent/end 未登记 child=${childId ?? "(none)"} stop=${stop} —— 跳过完成摘要（不猜归属，纯 stderr 留痕）\n`);
         } catch { /* 忽略 */ }
         return;
       }
@@ -2622,7 +2622,7 @@ export function apply(ctx, config) {
         actor: entry.actor ?? "system:subagent/end",
       });
     } catch (e) {
-      try { console.warn("[dsh-graph] g-374 完成摘要截获失败（已忽略，不影响结算）:", e?.message ?? e); } catch { /* 忽略 */ }
+      try { console.warn("[dsh-graph] 完成摘要截获失败（已忽略，不影响结算）:", e?.message ?? e); } catch { /* 忽略 */ }
     }
   };
 
@@ -2824,12 +2824,12 @@ export function apply(ctx, config) {
     const cleanliness = detectWorkspaceCleanliness(workspace, undefined, root);
     if (cleanliness.clean === null) {
       process.stderr.write(
-        `[dsh-graph-host] g-289 ℹ️ 工作树干净度 cleanliness=unknown（探测不可靠，未伪称干净）：${cleanliness.error}；` +
+        `[dsh-graph-host] ℹ️ 工作树干净度 cleanliness=unknown（探测不可靠，未伪称干净）：${cleanliness.error}；` +
         `回退按类型默认（fallback_to_type_default），不静默改变默认隔离行为\n`,
       );
     } else if (cleanliness.clean === false) {
       process.stderr.write(
-        `[dsh-graph-host] g-289 ⚠️ 检测到集成分支存在未提交改动（cleanliness=dirty），patch/chore/task 也将默认隔离：${cleanliness.dirtyReason}\n`,
+        `[dsh-graph-host] ⚠️ 检测到集成分支存在未提交改动（cleanliness=dirty），patch/chore/task 也将默认隔离：${cleanliness.dirtyReason}\n`,
       );
     }
     const isolationDecision = resolveWorktreeIsolationDecision(gType, worktree, cleanliness);
@@ -4925,7 +4925,7 @@ export function apply(ctx, config) {
     const decision = admitRequest(req);
     if (decision.status !== undefined) {
       // 每条拒绝在 stderr 留**一条**无敏感信息的诊断（不含 header/cookie/异常文本）。
-      process.stderr.write(`[dsh-graph-host] g-507 拒绝 ${decision.status} ${decision.reason}${decision.detail ? `（${decision.detail}）` : ""}\n`);
+      process.stderr.write(`[dsh-graph-host] HTTP 鉴权拒绝 ${decision.status} ${decision.reason}${decision.detail ? `（${decision.detail}）` : ""}\n`);
       rejectRequest(res, decision);
       return;
     }
@@ -6652,7 +6652,7 @@ export function apply(ctx, config) {
             }
           } catch (e) {
             // 绝不因裁剪失败影响会话创建（deny 名单已作用域过滤；此处兜底并留痕）
-            process.stderr.write(`[dsh-graph-host] g-480 模块裁剪跳过: ${e?.message ?? e}\n`);
+            process.stderr.write(`[dsh-graph-host] 模块裁剪跳过: ${e?.message ?? e}\n`);
           }
         });
         if (typeof off === "function") disposers.push(off);
@@ -6836,10 +6836,10 @@ export function apply(ctx, config) {
           },
         }));
         sectionState.registered = true;
-        process.stderr.write(`[dsh-graph-host] g-118: guide hint section 已注册（所有会话注入引导提示词，root=${root}）\n`);
-        process.stderr.write(`[dsh-graph-host] g-131: supervisor discipline section 已注册（仅主管会话注入纪律提醒，按会话 workspace 解析）\n`);
+        process.stderr.write(`[dsh-graph-host] guide hint section 已注册（所有会话注入引导提示词，root=${root}）\n`);
+        process.stderr.write(`[dsh-graph-host] supervisor discipline section 已注册（仅主管会话注入纪律提醒，按会话 workspace 解析）\n`);
       } catch (e) {
-        console.error("[dsh-graph-host] g-118 guide hint section 注册失败:", e?.message ?? e);
+        console.error("[dsh-graph-host] guide hint section 注册失败:", e?.message ?? e);
       }
     };
     registerGuideSection();
