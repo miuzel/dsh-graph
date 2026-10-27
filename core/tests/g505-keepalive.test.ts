@@ -1242,9 +1242,15 @@ test("B5 显式可信长 TTL：完整 provider+model 匹配才豁免；未知/�
     const host = await makeRealHost({ adapterDefaults: true });
     const root = makeBoard("supervisor:\n  session: sup-ttl-ok\n  keep_alive: true\n  keep_alive_ttl:\n    provider: observed\n    model: observed-model\n    ttl_ms: 900000\n");
     const agent = await makeAgent(host, "sup-ttl-ok", root);
-    const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+    const clock = fakeClock(10_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
     runtime.start();
     try {
+      const t0 = clock.now();
       await host.sendTurn(agent, "SECRET-MESSAGE-XYZ");
       const st = runtime.statusFor(root);
       assert.equal(st.capable.ttl, "explicit");
@@ -1253,9 +1259,8 @@ test("B5 显式可信长 TTL：完整 provider+model 匹配才豁免；未知/�
       assert.deepEqual(st.configured.route_ttl, { provider: "observed", model: "observed-model", ttl_ms: 900000 });
       assert.equal(runtime.snapshotProblem(agent), null, "TTL 豁免不得破坏快照可用性");
       assert.equal(JSON.stringify(st).includes("SECRET-MESSAGE-XYZ"), false, "状态投影不得泄漏会话内容/messages");
-      clock.advance(240_000);
-      await runtime.sweep();
-      assert.equal(host.adapter.calls.length, 1, "显式长 TTL 匹配时不得 ping");
+      await sched.advanceTo(t0 + 240_000);
+      assert.equal(host.adapter.calls.length, 1, "显式长 TTL 匹配时 deadline 到达也不得 ping");
       assert.equal(runtime.stateFor(root).lastOutcome, null);
     } finally { runtime.dispose(); }
   }
