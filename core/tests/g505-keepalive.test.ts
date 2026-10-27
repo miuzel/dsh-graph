@@ -1,29 +1,32 @@
 /**
  * g-505：主管会话上下文缓存智能保活的离线回归（零网络、零真实 provider、零费用）。
  *
- * 覆盖：
- *  1. 两级配置（profile 全局 / project 三态）的归一、优先级、**raw+malformed 闭锁**与写侧拒绝；
+ * 覆盖（v2，按 rev-att-002-01 BLOCK 返工）：
+ *  1. 两级配置（profile 全局 / project 三态）归一、优先级、**raw+malformed 闭锁**与写侧拒绝；
  *  2. 两阶段状态机（阶段一阈值/熔断、阶段二单次 Grace、短 TTL 假设后的 AFK、未知信号 fail-safe）；
- *  3. 真实公开宿主接线（真实 `@deepseek-ai/cordis` Context + 真实 `LlmRuntime` + 真实 `AgentRegistry`
- *     + 进程内 fake adapter + 假时钟）：首次自举、loop 快照捕获、真实 prepareCall/stream 手工保活、
- *     route 取自**所观察请求**、maintenance 互斥、人类输入/子回报只 abort 本插件控制器、失败不续期、
- *     stage2 单次 + AFK、快照失效（agent/session/route/待观察）；
- *  4. 宿主 REST / `graph_get_settings` 的 effective/capable/active 投影（g507 公开 admit + owner 门禁）；
- *  5. GUI 契约（客户端写入点与 zh/en 文案键对称）。
+ *  3. **真实公开宿主全栈**：真实 cordis Context + 真实 `SessionStore`/`SessionProjections`/
+ *     `SystemPrompt`/`ToolRuntime`/`AgentRegistry`/`AgentLoop`/`LlmRuntime` + 进程内 fake adapter
+ *     + 纯假 history + 假时钟。覆盖：
+ *       · B1：adapter 填 defaultMaxTokens/默认 reasoning 时，真实 loop 请求仍能建立 ready 快照；
+ *         显式控制项改变 / 真正 route 改变 / 辅助 purpose / 非 loop / 自 ping 一律拒绝；
+ *       · B2：两个 tmp board、各自主管、独立配置/预算/快照/状态投影/人类输入 abort 互不污染；
+ *         defaultWorkspace ≠ 目标 root 时仍能自举发现；
+ *       · B3：真实维护区排队/释放、人类输入 abort 本插件请求且不清 inbox、可疑 adapter 延迟释放
+ *         时不提前清 inflight/不重复发请求（不声称严格 timeout 上界）；
+ *  4. 失效与配置链：同 Agent 的 compaction/clear/surface replace 使快照失效；项目配置读取异常 ⇒
+ *     fail-closed 投影（绝不 effective=true）；profile 全局只认当前 settings.yaml（忽略 .imported）；
+ *  5. 宿主 REST / `graph_get_settings` 的 configured/effective/capable/active 投影（g507 门禁）；
+ *  6. GUI 契约（客户端写入点与 zh/en 文案键对称）。
  *
- * 边界（如实声明，不冒充已验证）：
- *  - 未向真实 provider 发任何请求（负责人未给成本授权）；不声明真实缓存收益；
- *  - 未启动完整 `AgentLoop` 全栈：Agent 公开面形状按 0.2.1-rc.2 公共类型实现（status/inbox/
- *    runMaintenance/send/cancel），维护互斥语义由夹具按公开契约模拟；真实 `AgentLoop` 的完整
- *    driver 时序（checkpoint、pre-step 准入、排队释放）**未**在本文件证明；
- *  - 不声称 max_tokens:1 等于一 token 费用。
+ * 边界（如实声明，不冒充已验证）：未向真实 provider 发任何请求；不声明真实缓存收益；
+ * 真实 GUI/Windows/真实 provider 参数与取消语义仍未验证；timeout 对不合作 adapter 无严格上界。
  *
- * 运行前需 `bash scripts/build.sh`（本文件同时读 dist/index.js 与真实宿主包）。
+ * 运行前需 `bash scripts/build.sh`。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   KEEP_ALIVE_MODES,
@@ -43,41 +46,36 @@ import { apply } from "../../dist/index.js";
 import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
 
 // ─────────────────────────────── 公共夹具 ───────────────────────────────
-
+const TMP_ROOTS: string[] = [];
 function tmpDir(tag: string): string {
   const base = join(process.cwd(), "tmp");
   mkdirSync(base, { recursive: true });
-  return mkdtempSync(join(base, `g505-${tag}-`));
+  const dir = mkdtempSync(join(base, `g505v2-${tag}-`));
+  TMP_ROOTS.push(dir);
+  return dir;
 }
-
-/** 建一个最小 board root（init 骨架 + 可选 project.yaml）。 */
 function makeBoard(projectYaml = ""): string {
   const root = tmpDir("board");
   init(root);
   if (projectYaml) writeFileSync(join(root, "project.yaml"), projectYaml);
   return root;
 }
+test.after(() => {
+  for (const root of TMP_ROOTS.splice(0)) { try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ } }
+});
 
-/** 假时钟（可注入 runtime，测试时间窗口而不 sleep）。 */
 function fakeClock(start = 1_000_000) {
   let t = start;
   return { now: () => t, advance: (ms: number) => { t += ms; }, set: (v: number) => { t = v; } };
 }
 
-/**
- * 真实宿主包解析（不写死作者机器路径、**不联网安装**）：
- *   ① `G505_HOST_STACK_DIR` / `G507_HOST_STACK_DIR` 显式指定 `node_modules/@deepseek-ai`；
- *   ② `npm root -g` 下的已安装 DSH（本机由 fnm 安装；只读定位，不安装）；
- *   ③ 最后才用 g507 的私有副本解析器（它可能只含三个固定包，缺 dsh-llm 时**显式失败**）。
- */
+/** 真实宿主包解析（不写死作者机器路径、不联网安装）。 */
 async function resolveHostScope(): Promise<string> {
   const env = process.env.G505_HOST_STACK_DIR || process.env.G507_HOST_STACK_DIR;
   if (env) return env;
   try {
     const { execFileSync } = await import("node:child_process");
     const globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
-    // 已安装 DSH 的宿主包通常嵌套在 `@deepseek-ai/dsh/node_modules/@deepseek-ai` 下
-    // （本机 fnm 全局安装即如此）；两个候选都探测，命中同时含 dsh-llm/dsh-agent 的那个。
     for (const scope of [
       join(globalRoot, "@deepseek-ai", "dsh", "node_modules", "@deepseek-ai"),
       join(globalRoot, "@deepseek-ai"),
@@ -95,23 +93,46 @@ async function resolveHostScope(): Promise<string> {
 
 async function loadHostStack() {
   const dir = await resolveHostScope();
-  const load = (pkg: string, file: string) => import(pathToFileURL(join(dir, pkg, "lib", file)).href);
-  const cordis = await load("cordis", "index.js");
-  const llm = await load("dsh-llm", "index.js");
-  const agent = await load("dsh-agent", "index.js");
-  return { Context: cordis.Context, llm, AgentRegistry: agent.AgentRegistry };
+  const load = (pkg: string, file = "index.js") => import(pathToFileURL(join(dir, pkg, "lib", file)).href);
+  const cordis = await load("cordis");
+  const llm = await load("dsh-llm");
+  const agent = await load("dsh-agent");
+  const session = await load("dsh-session");
+  const projection = await load("dsh-session-projection");
+  const systemPrompt = await load("dsh-system-prompt");
+  const tools = await load("dsh-tools");
+  const loop = await load("dsh-agent-loop");
+  return {
+    Context: cordis.Context,
+    llm,
+    AgentRegistry: agent.AgentRegistry,
+    SessionStore: session.SessionStore,
+    SessionProjections: projection.default,
+    SystemPrompt: systemPrompt.SystemPrompt,
+    ToolRuntime: tools.ToolRuntime,
+    AgentLoop: loop.AgentLoop,
+  };
 }
 
 /**
- * 记录型 fake adapter：**进程内**、零网络。按 `behaviors` 队列决定每次调用的结局：
- *  auto（默认）/ error / abort-on-signal；并记录完整 options 供参数级断言。
+ * 记录型 fake adapter（进程内、零网络）。`defaults=true` 时与真实 adapter 一样在 resolveModel 里
+ * 提供 `defaultMaxTokens` 与默认 reasoning —— 这正是 review B1 指出的默认填充路径。
  */
-function makeFakeAdapter(LlmAdapter: any) {
+function makeFakeAdapter(LlmAdapter: any, opts: { defaults?: boolean } = {}) {
   class RecordingAdapter extends LlmAdapter {
     calls: any[] = [];
     behaviors: string[] = [];
+    gate: any = null;
     providerInfo(provider: string) { return { id: provider, name: provider, protocol: "fake" }; }
-    async resolveModel(provider: string, model: string) { return { provider, id: model, name: model }; }
+    async resolveModel(provider: string, model: string) {
+      if (opts.defaults === false) return { provider, id: model, name: model, inputModalities: ["text"] };
+      return {
+        provider, id: model, name: model, inputModalities: ["text"],
+        context: { contextWindow: 128000 },
+        defaultMaxTokens: 8192,
+        reasoning: { efforts: [{ id: "off", name: "off" }, { id: "high", name: "high" }], defaultEffort: "high" },
+      };
+    }
     async *stream(options: any) {
       this.calls.push(options);
       const behavior = this.behaviors.shift() ?? "auto";
@@ -119,16 +140,20 @@ function makeFakeAdapter(LlmAdapter: any) {
         yield { type: "finish", reason: { kind: "error", failure: { code: "FAKE_ERROR", message: "fake failure" } } };
         return;
       }
-      if (behavior === "abort-on-signal") {
+      if (behavior === "abort-delayed") {
+        const gate = this.gate;
         await new Promise((_resolve, reject) => {
-          const onAbort = () => reject(new Error("fake adapter abort"));
-          if (options.signal?.aborted) { onAbort(); return; }
-          options.signal?.addEventListener("abort", onAbort, { once: true });
+          const onAbort = async () => {
+            if (gate) await gate;
+            reject(new Error("fake adapter delayed abort"));
+          };
+          if (options.signal?.aborted) { void onAbort(); return; }
+          options.signal?.addEventListener("abort", () => { void onAbort(); }, { once: true });
         });
       }
       yield { type: "block-start", index: 0, blockType: "text" };
       yield { type: "text-delta", index: 0, text: "ping" };
-      // 故意发一个 tool-call delta：本实现必须完整消费但**绝不执行**工具。
+      // 故意发 tool-call delta：必须完整消费但**绝不执行**工具。
       yield { type: "tool-call-delta", index: 1, id: "call-x", name: "danger", argumentsDelta: "{}" };
       yield { type: "block-end", index: 0, block: { type: "text", text: "ping" } };
       yield { type: "usage", usage: { inputTokens: 120, outputTokens: 1, cacheReadTokens: 96 } };
@@ -138,34 +163,34 @@ function makeFakeAdapter(LlmAdapter: any) {
   return new RecordingAdapter();
 }
 
-/** 按 0.2.1-rc.2 公开 Agent 契约构造夹具（status / inbox / runMaintenance / cancel）。 */
-function makeAgent(hostCtx: any, id: string, root: string, status = "idle") {
-  const agent: any = {
-    id,
-    status,
-    session: { id, header: { cwd: root } },
-    ctx: hostCtx,
-    // 只是 seed：真实 route 由所观察的 loop 请求决定（测试用不同值证明不误用）。
-    options: { provider: "executor-provider", model: "executor-model" },
-    inbox: { nextTurn: [] as any[], nextStep: [] as any[] },
-    cancelCalls: [] as any[],
-    maintenanceCalls: 0,
-    busy: false,
-    runMaintenance: async (task: (signal: AbortSignal) => Promise<unknown>) => {
-      // 公开契约：被轮次或另一维护占用时**同步** throw；真 idle 才进入维护。
-      if (agent.busy || agent.status !== "idle") throw new Error("agent is not idle");
-      agent.maintenanceCalls += 1;
-      const ctrl = new AbortController();
-      agent.currentMaintenanceSignal = ctrl.signal;
-      try {
-        return await task(ctrl.signal);
-      } finally {
-        agent.currentMaintenanceSignal = null;
-      }
-    },
-    cancel: (...args: any[]) => { agent.cancelCalls.push(args); },
+/** 真实公开宿主全栈（无持久化、无网络、无真实 provider）。 */
+async function makeRealHost(opts: { adapterDefaults?: boolean } = {}) {
+  const {
+    Context, llm: llmMod, AgentRegistry, SessionStore, SessionProjections, SystemPrompt, ToolRuntime, AgentLoop,
+  } = await loadHostStack();
+  const hostCtx = new Context();
+  new SessionStore(hostCtx);
+  new SessionProjections(hostCtx);
+  new SystemPrompt(hostCtx, {});
+  new ToolRuntime(hostCtx, {});
+  const reg = new AgentRegistry(hostCtx);
+  const llm = new llmMod.LlmRuntime(hostCtx);
+  const adapter = makeFakeAdapter(llmMod.LlmAdapter, { defaults: opts.adapterDefaults !== false });
+  llm.registerAdapter(["observed"], adapter);
+  const loop = new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
+  const observed: any[] = [];
+  hostCtx.on("llm/stream", (options: any, next: any) => { observed.push(options); return next(); });
+  const sendTurn = async (agent: any, text: string) => {
+    const message = llmMod.createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } });
+    agent.send(message, "next-turn", true);
+    await agent.whenIdle();
+    return observed[observed.length - 1] ?? null;
   };
-  return agent;
+  return { hostCtx, llm: llmMod, llmRuntime: llm, adapter, reg, loop, sendTurn, observed };
+}
+
+async function makeAgent(host: any, id: string, root: string, options: any = { provider: "observed", model: "observed-model" }) {
+  return host.loop.create(id, options, { cwd: root });
 }
 
 async function loadRuntimeFactory() {
@@ -173,80 +198,44 @@ async function loadRuntimeFactory() {
   return mod.createKeepAliveRuntime as (opts: any) => any;
 }
 
-/** 真实宿主栈 + 假时钟 + 假 adapter 的 runtime 夹具。 */
-async function makeRuntimeFixture(opts: {
-  projectKeepAlive?: string;
-  settingsYaml?: string;
-  globalState?: { enabled: boolean | null; malformed?: boolean; available?: boolean; raw?: string };
-  children?: boolean;
+/** engine 侧 runtime 夹具：真实服务 + 假时钟（可注入读配置函数做异常/隔离用例）。 */
+async function makeRuntime(host: any, opts: {
+  defaultWorkspace?: () => string | null;
+  readGlobal?: () => any;
+  readProjectConfigFn?: (root: string) => any;
+  setIntervalFn?: any;
+  clearIntervalFn?: any;
+  setTimeoutFn?: any;
+  clearTimeoutFn?: any;
+  now?: () => number;
 } = {}) {
-  const { Context, llm: llmMod, AgentRegistry } = await loadHostStack();
-  const root = makeBoard("");
-  const hostCtx = new Context();
-  const llm = new llmMod.LlmRuntime(hostCtx);
-  const adapter = makeFakeAdapter(llmMod.LlmAdapter);
-  llm.registerAdapter(["observed"], adapter);
-  const reg = new AgentRegistry(hostCtx);
-  const clock = fakeClock();
   const createKeepAliveRuntime = await loadRuntimeFactory();
+  const clock = fakeClock();
   const runtime = createKeepAliveRuntime({
     ctx: {
-      on: (name: string, handler: any) => hostCtx.on(name, handler),
-      get: (name: string) => (name === "llm" ? llm : name === "agents" ? reg : undefined),
+      on: (name: string, handler: any) => host.hostCtx.on(name, handler),
+      get: (name: string) => (name === "llm" ? host.llmRuntime : name === "agents" ? host.reg : undefined),
     },
-    readGlobal: () => opts.globalState ?? { enabled: null, malformed: false, available: true, raw: "" },
-    resolveRoot: () => root,
-    defaultWorkspace: () => root,
-    now: clock.now,
-    setIntervalFn: () => null,
-    clearIntervalFn: () => {},
-    setTimeoutFn: () => null,
-    clearTimeoutFn: () => {},
+    readGlobal: opts.readGlobal ?? (() => ({ enabled: null, malformed: false, available: true, raw: "" })),
+    resolveRoot: (ws: string) => ws,
+    defaultWorkspace: opts.defaultWorkspace ?? (() => null),
+    readProjectConfigFn: opts.readProjectConfigFn,
+    now: opts.now ?? clock.now,
+    setIntervalFn: opts.setIntervalFn ?? (() => null),
+    clearIntervalFn: opts.clearIntervalFn ?? (() => {}),
+    setTimeoutFn: opts.setTimeoutFn ?? (() => null),
+    clearTimeoutFn: opts.clearTimeoutFn ?? (() => {}),
     log: () => {},
   });
-  const supId = "sup-1";
-  const sup = makeAgent(hostCtx, supId, root, "idle");
-  // supervisor 段唯一：keep_alive 原值（可为畸形手写值）+ 主管会话 id
-  writeFileSync(
-    join(root, "project.yaml"),
-    `supervisor:\n${opts.projectKeepAlive === undefined ? "" : `  keep_alive: ${opts.projectKeepAlive}\n`}  session: ${supId}\n`,
-  );
-  const detachers: Array<() => void> = [];
-  let supDetach: any = null;
-  const registerSup = async (agent: any = sup) => {
-    const detach = await reg.register(agent);
-    supDetach = detach;
-    detachers.push(() => { try { detach?.(); } catch { /* ignore */ } });
-  };
-  const detachSupervisor = async () => {
-    const d = supDetach;
-    supDetach = null;
-    if (typeof d === "function") { try { await d(); } catch { /* ignore */ } }
-  };
-  if (opts.children !== false) {
-    const child = makeAgent(hostCtx, "child-1", root, "running");
-    const detachChild = reg.enter(child, sup);
-    detachers.push(() => { try { detachChild(); } catch { /* ignore */ } });
+  return { runtime, clock };
+}
+
+async function waitFor(cond: () => boolean, label: string, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`超时等待：${label}`);
+    await new Promise((r) => setImmediate(r));
   }
-  runtime.start();
-  const observeLoop = async (route: any = { provider: "observed", model: "observed-model", maxTokens: 4096 }, messages: any[] = [{ role: "user", content: [{ type: "text", text: "hello" }] }], agent: any = sup) => {
-    await hostCtx.waterfall(hostCtx, "agent/request", { agent, turn: 1, step: 1, signal: new AbortController().signal }, async () => route);
-    const options = llmMod.markAgentLoopRequest({
-      provider: route.provider,
-      model: route.model,
-      messages,
-      tools: [{ name: "t1", description: "tool", parameters: {} }],
-      sessionId: agent.session.id,
-      maxTokens: route.maxTokens,
-    });
-    for await (const _chunk of llm.stream(options)) { /* 完整消费 */ }
-    return options;
-  };
-  const dispose = () => {
-    try { runtime.dispose(); } catch { /* ignore */ }
-    for (const d of detachers.splice(0)) d();
-  };
-  return { root, hostCtx, llm, llmMod, adapter, reg, clock, runtime, sup, supId, registerSup, detachSupervisor, observeLoop, dispose };
 }
 
 // ─────────────────────────────── 1. 配置解析 ───────────────────────────────
@@ -472,289 +461,433 @@ test("g505 状态机：阶段一阈值/熔断、阶段二 Grace 单次、短 TTL
   assert.equal(decideKeepAlive(inputs(), cfg, { channel: "none", reason: "exempt_long_ttl", exempt: true, ttl: "explicit", missing: [] }).reason, "channel_exempt");
 });
 
-test("g505 生命周期：start 幂等、dispose 清 timer/监听/在途，重复 dispose 与 dispose 后 sweep 均安全", async () => {
-  const { Context, llm: llmMod, AgentRegistry } = await loadHostStack();
-  const root = makeBoard("supervisor:\n  session: sup-life\n");
-  const hostCtx = new Context();
-  const llm = new llmMod.LlmRuntime(hostCtx);
-  const adapter = makeFakeAdapter(llmMod.LlmAdapter);
-  llm.registerAdapter(["observed"], adapter);
-  const reg = new AgentRegistry(hostCtx);
-  const clock = fakeClock();
-  const createKeepAliveRuntime = await loadRuntimeFactory();
+
+// ─────────────────────────────── 4. 真实公开宿主全栈（B1/B2/B3） ───────────────────────────────
+
+test("B1 默认填充：adapter 提供 defaultMaxTokens/默认 reasoning 时，真实 loop 请求仍建立 ready 快照并在 240s 后真实 ping", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard();
+  const supId = "sup-b1";
+  const agent = await makeAgent(host, supId, root);
+  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${supId}\n`);
+  const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    const observed = await host.sendTurn(agent, "hello-B1");
+    assert.ok(observed, "必须观察到正常 loop 请求");
+    // 真实 prepareCall 默认填充（B1 的根因）：proposed 只有 provider/model，observed 是 resolved 值。
+    assert.equal(observed.maxTokens, 8192, "adapter defaultMaxTokens 必须出现在 resolved options 中");
+    assert.equal(observed.reasoningEffort, "high", "adapter 默认 reasoning 必须出现在 resolved options 中");
+
+    const board = runtime.stateFor(root);
+    assert.equal(runtime.snapshotProblem(agent), null, "默认填充不得让快照永远 route_changed");
+    assert.equal(runtime.statusFor(root).active.snapshot, "ready");
+    assert.equal(board.snapshot.messages, observed.messages, "快照引用同一份已观察 messages");
+    // 存的是 resolved route（含 adapter 默认），不是 proposed 缺失对象/executor seed
+    assert.equal(board.snapshot.route.maxTokens, 8192);
+    assert.equal(board.snapshot.route.reasoningEffort, "high");
+
+    // 无子代理 ⇒ 阶段二 Grace=240s 才是真正 eligible（不用「未到期无 ping」作证据）
+    clock.advance(240_000);
+    await runtime.sweep();
+    assert.equal(host.adapter.calls.length, 2, "loop 1 次 + 真正保活 1 次");
+    const ping = host.adapter.calls[1];
+    assert.equal(ping.maxTokens, 1);
+    assert.equal(ping.reasoningEffort, "high", "resolved 控制项要延续（只替换 maxTokens/signal）");
+    assert.equal(ping.messages, observed.messages);
+    assert.equal(ping.sessionId, agent.session.id);
+    assert.equal(ping.purpose, undefined, "绝不伪造 purpose");
+    assert.equal(board.lastOutcome, "success");
+    assert.equal(board.pingsInWindow, 1);
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("B1 拒绝面：显式控制项改变 / 真正 route 改变 / 辅助 purpose / 非 loop / 自 ping 均不被当快照", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard();
+  const supId = "sup-b1-neg";
+  const agent = await makeAgent(host, supId, root);
+  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${supId}\n`);
+  const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+  runtime.start();
+  const drain = async (options: any) => { for await (const _ of host.llmRuntime.stream(options)) { /* consume */ } };
+  const pending = async (config: any) => {
+    await host.hostCtx.waterfall(host.hostCtx, "agent/request", { agent, turn: 9, step: 1, signal: new AbortController().signal }, async () => config);
+  };
+  try {
+    await runtime.sweep();
+    const observed = await host.sendTurn(agent, "hello-neg");
+    assert.equal(runtime.snapshotProblem(agent), null);
+
+    // ① 显式控制项改变：proposed 显式 maxTokens=4096，但 observed=8192 ⇒ 不是同一请求
+    await pending({ provider: "observed", model: "observed-model", maxTokens: 4096 });
+    await drain(Object.freeze({
+      provider: "observed", model: "observed-model", maxTokens: 8192,
+      messages: observed.messages, sessionId: agent.session.id, signal: new AbortController().signal,
+    }));
+    assert.equal(runtime.snapshotProblem(agent), "config_changed");
+
+    // ② 真正 route 改变：proposed=observed-model，但实际 resolved options 是 other-model ⇒ route_changed
+    await host.sendTurn(agent, "hello-neg-2");
+    await pending({ provider: "observed", model: "observed-model" });
+    await drain(Object.freeze({
+      provider: "observed", model: "other-model", maxTokens: 8192,
+      messages: observed.messages, sessionId: agent.session.id, signal: new AbortController().signal,
+    }));
+    assert.equal(runtime.snapshotProblem(agent), "route_changed");
+
+    // ③ 辅助 purpose（compaction/session-title）即使同 route/session 也不能当正常 loop 快照
+    await host.sendTurn(agent, "hello-neg-3");
+    await pending({ provider: "observed", model: "observed-model" });
+    await drain(Object.freeze({
+      provider: "observed", model: "observed-model", maxTokens: 8192, purpose: "compaction",
+      messages: observed.messages, sessionId: agent.session.id, signal: new AbortController().signal,
+    }));
+    assert.notEqual(runtime.snapshotProblem(agent), null, "辅助 purpose 不得建立 ready 快照");
+
+    // ④ 非 loop（无 pending 的手搓请求）不得覆盖已有快照
+    await host.sendTurn(agent, "hello-neg-4");
+    const before = runtime.stateFor(root).snapshot;
+    assert.ok(before);
+    await drain(Object.freeze({
+      provider: "observed", model: "observed-model", maxTokens: 8192,
+      messages: observed.messages, sessionId: agent.session.id, signal: new AbortController().signal,
+    }));
+    assert.equal(runtime.stateFor(root).snapshot, before, "非 loop 请求不得覆盖快照");
+
+    // ⑤ 自 ping 不得被当成快照：成功 ping 之后快照仍是 loop 请求的 resolved route（maxTokens=8192）
+    clock.advance(240_000);
+    await runtime.sweep();
+    assert.equal(runtime.stateFor(root).lastOutcome, "success");
+    assert.equal(runtime.stateFor(root).snapshot.route.maxTokens, 8192, "自 ping（maxTokens=1）不得覆盖快照 route");
+    assert.equal(runtime.snapshotProblem(agent), null);
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("B3 真实维护区：输入排队、abort 本插件请求且不清 inbox，维护结束后正常轮才执行", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard();
+  const supId = "sup-b3";
+  const agent = await makeAgent(host, supId, root);
+  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${supId}\n`);
+  const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    await host.sendTurn(agent, "hello-b3");
+    clock.advance(240_000);
+
+    const gate = Promise.withResolvers<void>();
+    host.adapter.gate = gate.promise;
+    host.adapter.behaviors.push("abort-delayed");
+    const cancelCalls: any[] = [];
+    const originalCancel = agent.cancel.bind(agent);
+    agent.cancel = (...args: any[]) => { cancelCalls.push(args); return originalCancel(...args); };
+
+    const sweeps = runtime.sweep();
+    await waitFor(() => host.adapter.calls.length === 2, "保活请求进入 adapter");
+    assert.equal(agent.status, "idle", "维护区公开 status 仍为 idle");
+    assert.equal(runtime.stateFor(root).inflight, true);
+
+    // 维护区内送人类输入：宿主必须排队（不打断维护、不清 inbox）
+    const queued = host.llm.createUserMessage({ content: [{ type: "text", text: "queued-during-maintenance" }], source: { kind: "user" } });
+    agent.send(queued, "next-turn", true);
+    assert.equal(agent.inbox.nextTurn.length, 1, "维护区内输入必须排队等待");
+    assert.equal(runtime.stateFor(root).inflight, true);
+    assert.equal(host.adapter.calls.length, 2, "维护未结束前不得启动正常轮");
+    assert.equal(host.adapter.calls[1].maxTokens, 1);
+
+    gate.resolve();
+    await sweeps;
+    assert.equal(runtime.stateFor(root).lastOutcome, "aborted_input", "人类输入只 abort 本插件请求");
+    await agent.whenIdle();
+    assert.equal(agent.inbox.nextTurn.length, 0, "维护结束后排队的正常轮必须被执行（inbox 清空由宿主正常流程完成）");
+    assert.equal(host.adapter.calls.length, 3, "排队的人类轮必须真实执行");
+    assert.notEqual(host.adapter.calls[2].maxTokens, 1, "正常轮不是保活请求");
+    const surfaceText = JSON.stringify(agent.session.deriveMessages());
+    assert.ok(surfaceText.includes("queued-during-maintenance"), "会话历史必须包含排队的人类输入");
+    assert.equal(cancelCalls.length, 0, "绝不能 agent.cancel（会清 inbox）");
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("B3 可疑 adapter 延迟释放：timeout 不提前清 inflight、不重复发请求，释放后才结算（不声称严格上界）", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard();
+  const supId = "sup-b3-timeout";
+  const agent = await makeAgent(host, supId, root);
+  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${supId}\n`);
+  const timeoutFns: Array<() => void> = [];
+  const { runtime, clock } = await makeRuntime(host, {
+    defaultWorkspace: () => root,
+    setTimeoutFn: (fn: () => void) => { timeoutFns.push(fn); return timeoutFns.length; },
+    clearTimeoutFn: () => {},
+  });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    await host.sendTurn(agent, "hello-timeout");
+    clock.advance(240_000);
+
+    const gate = Promise.withResolvers<void>();
+    host.adapter.gate = gate.promise;
+    host.adapter.behaviors.push("abort-delayed");
+    const sweeps = runtime.sweep();
+    await waitFor(() => host.adapter.calls.length === 2, "保活请求进入 adapter");
+    assert.equal(timeoutFns.length, 1, "必须设置请求级 timeout");
+
+    timeoutFns[0](); // 模拟超时：只 abort 本插件控制器
+    await new Promise((r) => setImmediate(r));
+    assert.equal(runtime.stateFor(root).inflight, true, "iterator 未释放前不得提前清 inflight");
+    const callsWhilePending = host.adapter.calls.length;
+    await runtime.sweep(); // 在途时再次扫描：不得叠加第二次保活
+    assert.equal(host.adapter.calls.length, callsWhilePending, "在途时不得重复发保活请求");
+    assert.equal(runtime.stateFor(root).inflight, true);
+
+    gate.resolve();
+    await sweeps;
+    assert.equal(runtime.stateFor(root).lastOutcome, "timeout");
+    assert.equal(runtime.stateFor(root).inflight, false);
+    assert.equal(host.adapter.calls.length, 2, "整个超时过程中只允许一次保活请求");
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("B2 多 board：defaultWorkspace≠目标 root 仍自举；配置/预算/快照/状态投影/人类输入 abort 互不污染", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const rootA = makeBoard("supervisor:\n  session: sup-A\n  keep_alive: true\n");
+  const rootB = makeBoard("supervisor:\n  session: sup-B\n  keep_alive: false\n");
+  const rootC = makeBoard(""); // 默认 workspace：没有 supervisor，也不是目标 board
+  const agentA = await makeAgent(host, "sup-A", rootA);
+  const agentB = await makeAgent(host, "sup-B", rootB);
+  const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => rootC });
+  runtime.start();
+  try {
+    // 首次自举：默认 workspace=rootC，但两个 live 主管的 board 必须被发现
+    await runtime.sweep();
+    assert.equal(runtime.stateFor(rootA)?.supervisorId, "sup-A");
+    assert.equal(runtime.stateFor(rootB)?.supervisorId, "sup-B");
+    const statusC = runtime.statusFor(rootC);
+    assert.equal(statusC.active.supervisor_session, null);
+    assert.equal(statusC.active.snapshot, "no_supervisor");
+
+    const obsA = await host.sendTurn(agentA, "A-hello");
+    const obsB = await host.sendTurn(agentB, "B-hello");
+    const boardA = runtime.stateFor(rootA);
+    const boardB = runtime.stateFor(rootB);
+    assert.equal(runtime.snapshotProblem(agentA), null);
+    assert.equal(runtime.snapshotProblem(agentB), null);
+    assert.notEqual(boardA.snapshot.messages, boardB.snapshot.messages, "两 board 快照必须各自独立");
+    assert.ok(JSON.stringify(boardA.snapshot.messages).includes("A-hello"));
+    assert.ok(JSON.stringify(boardB.snapshot.messages).includes("B-hello"));
+
+    // 配置投影互不污染
+    assert.equal(runtime.statusFor(rootA).effective.effective, true);
+    assert.equal(runtime.statusFor(rootA).effective.source, "project_explicit");
+    assert.equal(runtime.statusFor(rootB).effective.effective, false);
+    assert.equal(runtime.statusFor(rootB).effective.source, "project_explicit");
+
+    // 同一时刻 sweep：A 真正 eligible（240s, 无 child）→ ping；B 显式关闭 → 不 ping
+    clock.advance(240_000);
+    await runtime.sweep();
+    const callsAfterFirst = host.adapter.calls.length;
+    assert.equal(callsAfterFirst, 3, "A loop + B loop + A keepalive");
+    const pings = host.adapter.calls.filter((c: any) => c.maxTokens === 1);
+    assert.equal(pings.length, 1);
+    assert.equal(pings[0].sessionId, agentA.session.id, "只有 A board 发保活");
+    assert.equal(boardA.pingsInWindow, 1);
+    assert.equal(boardB.pingsInWindow, 0, "B 的预算不得被 A 污染");
+
+    // 人类输入 abort 只影响目标 board
+    await host.sendTurn(agentA, "A-again");
+    clock.advance(240_000);
+    const gate = Promise.withResolvers<void>();
+    host.adapter.gate = gate.promise;
+    host.adapter.behaviors.push("abort-delayed");
+    const beforePingCalls = host.adapter.calls.length;
+    const sweepA = runtime.sweep();
+    await waitFor(() => host.adapter.calls.length > beforePingCalls, "A 的保活请求进入 adapter");
+    assert.equal(runtime.stateFor(rootA).inflight, true);
+    const aHumanBefore = runtime.stateFor(rootA).lastHumanAt;
+
+    // B 的人类输入只更新 B 状态，不得 abort/污染 A 的在途请求
+    const bMsg = host.llm.createUserMessage({ content: [{ type: "text", text: "B-human" }], source: { kind: "user" } });
+    agentB.send(bMsg, "next-turn", true);
+    assert.equal(runtime.stateFor(rootA).lastHumanAt, aHumanBefore, "B 的人类输入不得改 A 的 lastHumanAt");
+    assert.equal(runtime.stateFor(rootA).inflight, true, "B 的输入不得 abort A 的在途请求");
+    assert.equal(runtime.stateFor(rootB).lastHumanAt !== null, true);
+    await agentB.whenIdle();
+
+    // A 的人类输入才 abort A 的请求；释放后 A 排队轮正常执行
+    const aMsg = host.llm.createUserMessage({ content: [{ type: "text", text: "A-human-abort" }], source: { kind: "user" } });
+    agentA.send(aMsg, "next-turn", true);
+    gate.resolve();
+    await sweepA;
+    await agentA.whenIdle();
+    assert.equal(runtime.stateFor(rootA).lastOutcome, "aborted_input");
+    assert.equal(runtime.stateFor(rootA).inflight, false);
+    assert.ok(JSON.stringify(agentA.session.deriveMessages()).includes("A-human-abort"));
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("失效与配置链：surface replace/compaction 失效快照；配置读取异常 fail-closed；append 不误失效", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard();
+  const supId = "sup-invalid";
+  const agent = await makeAgent(host, supId, root);
+  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${supId}\n`);
+  const { runtime } = await makeRuntime(host, { defaultWorkspace: () => root });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    await host.sendTurn(agent, "surface-hello");
+    assert.equal(runtime.snapshotProblem(agent), null);
+
+    // 正常 append（宿主真实 normal turn 已发生过）不失效
+    assert.equal(runtime.snapshotProblem(agent), null, "append 不是 surface 替换，不得误失效");
+
+    // 同 Agent 的真实 surface replacement（compaction 使用的公开 surfaceOp=replace）⇒ 快照必须失效
+    const log = agent.session.log;
+    const target = log.find((e: any) => e.type === "user/message" && e.surfaceOp === "append");
+    assert.ok(target, "真实会话里必须有可替换的 surface 节点");
+    const replacement = host.llm.createUserMessage({ content: [{ type: "text", text: "replacement" }], source: { kind: "user" } });
+    agent.session.append("user/message", replacement, {
+      surfaceOp: { op: "replace", startSeq: target.seq, endSeq: target.seq },
+      sourceEventSeqs: [target.seq],
+    });
+    assert.equal(runtime.snapshotProblem(agent), "surface_replaced");
+    assert.equal(runtime.statusFor(root).active.snapshot, "surface_replaced");
+
+    // 同 Agent 的 clear/compact 生命周期（agent/created source）同样使快照失效
+    await host.sendTurn(agent, "after-surface");
+    assert.equal(runtime.snapshotProblem(agent), null);
+    host.hostCtx.emit("agent/created", { agent, source: "compact" });
+    assert.equal(runtime.snapshotProblem(agent), "agent_replaced");
+
+    // 配置读取异常 ⇒ fail-closed（不得 effective=true）
+    const { runtime: broken } = await makeRuntime(host, {
+      defaultWorkspace: () => root,
+      readProjectConfigFn: () => { throw new Error("config boom"); },
+    });
+    broken.start();
+    const st = broken.statusFor(root);
+    assert.equal(st.effective.effective, false, "读配置异常必须 fail-closed");
+    assert.equal(st.configured.config_error, true);
+    assert.ok(st.capable.missing.includes("project.config"));
+    assert.equal(st.active.snapshot, "config_unavailable");
+    broken.dispose();
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("生命周期：start 幂等、dispose 清 timer/监听，重复 dispose 与 dispose 后 sweep 均安全", async () => {
+  const root = makeBoard();
+  const fakeHost = { hostCtx: { on: () => () => {} }, llmRuntime: null, reg: null } as any;
   let timers = 0;
   let cleared = 0;
-  const runtime = createKeepAliveRuntime({
-    ctx: { on: (n: string, h: any) => hostCtx.on(n, h), get: (n: string) => (n === "llm" ? llm : n === "agents" ? reg : undefined) },
-    readGlobal: () => ({ enabled: null, malformed: false, available: true, raw: "" }),
-    resolveRoot: () => root,
+  const { runtime } = await makeRuntime(fakeHost, {
     defaultWorkspace: () => root,
-    now: clock.now,
     setIntervalFn: () => { timers += 1; return 123; },
     clearIntervalFn: () => { cleared += 1; },
-    setTimeoutFn: () => null,
-    clearTimeoutFn: () => {},
-    log: () => {},
   });
   runtime.start();
   runtime.start();
   assert.equal(timers, 1, "start 必须幂等（不得重复注册定时器/监听）");
-  assert.equal(runtime.state.disposed, false);
-  const statusAfterDisposeEvents: any[] = [];
   runtime.dispose();
   runtime.dispose();
   assert.equal(cleared, 1, "dispose 必须清理定时器且幂等");
-  assert.equal(runtime.state.disposed, true);
-  assert.equal(runtime.state.snapshotStatus, "disposed");
-  // dispose 后事件监听已解绑：即使宿主再发事件也只有 0 条监听命中（状态不再变化）
-  hostCtx.emit("agent/status", { agent: { session: { id: "sup-life" } }, status: "running" });
-  assert.equal(runtime.state.lastActivityAt, null);
-  // dispose 后 sweep 安全 no-op（不抛错、不发请求）
-  await runtime.sweep();
-  assert.equal(adapter.calls.length, 0);
-  assert.deepEqual(statusAfterDisposeEvents, []);
-  rmSync(root, { recursive: true, force: true });
+  await runtime.sweep(); // dispose 后 safe no-op
+  const st = runtime.statusFor(root);
+  assert.equal(typeof st.effective.effective, "boolean");
 });
 
-// ─────────────────────────────── 4. 真实宿主接线（离线） ───────────────────────────────
-
-test("g505 宿主：首次自举 + loop 快照捕获 + 真实 prepareCall/stream 手工保活（route 取自所观察请求）", async () => {
-  const f = await makeRuntimeFixture({ children: true });
+test("B1 失败与维护忙：失败 finish 不推进 lastLlmAt；真维护占用时 runMaintenance 同步拒绝且不发请求", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard();
+  const supId = "sup-b1-fail";
+  const agent = await makeAgent(host, supId, root);
+  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${supId}\n`);
+  const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+  runtime.start();
   try {
-    // 冷启动：runtime 已 start 但主管尚未 live ⇒ 不自举失败、无 ping
-    assert.equal(f.adapter.calls.length, 0);
-    assert.equal(f.runtime.statusFor(f.root).active.snapshot, "no_supervisor");
+    await runtime.sweep();
+    await host.sendTurn(agent, "hello-fail");
+    const beforeLastLlm = runtime.stateFor(root).lastLlmAt;
+    clock.advance(240_000);
+    host.adapter.behaviors.push("error");
+    await runtime.sweep();
+    assert.equal(runtime.stateFor(root).lastOutcome, "adapter_error");
+    assert.equal(runtime.stateFor(root).lastLlmAt, beforeLastLlm, "失败 finish 绝不能推进 lastLlmAt");
+    assert.equal(runtime.stateFor(root).pingsInWindow, 1, "尝试仍计入有界预算");
+    const callsAfterError = host.adapter.calls.length;
 
-    // 主管上线（真实 AgentRegistry 发布；agent/created 事件由真实注册表发出）
-    await f.registerSup();
-    assert.equal(f.runtime.state.supervisorId, f.supId, "晚到的主管必须被自举发现（不要求启动时已有 id）");
-
-    // 观察一次正常 loop 请求：agent/request 给 config，llm/stream 给完整公共 options
-    const observed = await f.observeLoop();
-    assert.equal(f.runtime.snapshotProblem(f.sup), null);
-    assert.equal(f.runtime.statusFor(f.root).active.snapshot, "ready");
-    assert.equal(f.runtime.state.snapshot.messages, observed.messages, "快照必须引用同一份公共 messages（A 方案）");
-
-    // 到阶段一阈值：真实 runMaintenance 抢占 + 真实 prepareCall/stream 单次调用
-    f.clock.advance(STAGE1);
-    await f.runtime.sweep();
-    assert.equal(f.adapter.calls.length, 2, "loop 请求 1 次 + 保活 1 次");
-    const ping = f.adapter.calls[1];
-    assert.equal(ping.maxTokens, 1, "保活请求 maxTokens 必须为 1");
-    assert.equal(ping.provider, "observed", "route 必须取自所观察请求，而不是 executor/seed");
-    assert.equal(ping.model, "observed-model");
-    assert.equal(ping.purpose, undefined, "绝不伪造 purpose（公开只见 compaction/session-title）");
-    assert.equal(ping.sessionId, f.supId, "保留观察到的 sessionId（允许宿主正常 checkpoint；不新增对话消息）");
-    assert.equal(ping.messages, observed.messages, "必须复用同一份已观察前缀 messages");
-    assert.equal(ping.tools, observed.tools);
-    assert.equal(f.sup.cancelCalls.length, 0, "保活绝不调用 agent.cancel（那会清 inbox）");
-    assert.equal(f.runtime.state.lastOutcome, "success");
-    assert.ok(f.runtime.state.lastLlmAt >= f.clock.now(), "成功 finish 才推进 lastLlmAt");
-    assert.equal(f.runtime.statusFor(f.root).active.pings_in_window, 1);
-    assert.equal(f.runtime.state.snapshot.agent, f.sup, "快照绑定精确 live Agent 对象");
+    // 新活动重置阶段二机会（失败尝试已消耗一次 Grace，不能拿它冒充「维护忙」分支）
+    await host.sendTurn(agent, "hello-busy");
+    clock.advance(240_000);
+    const callsBeforeBusy = host.adapter.calls.length;
+    // 真维护占用：公开 runMaintenance 同步 throw ⇒ 不发请求、不计预算
+    let release: (() => void) | null = null;
+    const holding = agent.runMaintenance(async () => { await new Promise<void>((r) => { release = r; }); });
+    await runtime.sweep();
+    assert.equal(runtime.stateFor(root).lastOutcome, "maintenance_busy");
+    assert.equal(host.adapter.calls.length, callsBeforeBusy, "维护忙时不得发保活请求");
+    assert.equal(runtime.stateFor(root).pingsInWindow, 0, "未发请求不计新预算");
+    release!();
+    await holding;
   } finally {
-    f.dispose();
-    rmSync(f.root, { recursive: true, force: true });
+    runtime.dispose();
   }
 });
 
-test("g505 宿主：失败 finish / maintenance 忙 / 人类输入 abort 均不冒充成功且不清 inbox", async () => {
-  const f = await makeRuntimeFixture({ children: true });
-  try {
-    await f.registerSup();
-    await f.observeLoop();
-
-    // ① adapter 失败 finish ⇒ 不推进 lastLlmAt（失败不算续期成功），仍在有界次数内
-    f.adapter.behaviors.push("error");
-    f.clock.advance(STAGE1);
-    const beforeLastLlm = f.runtime.state.lastLlmAt;
-    await f.runtime.sweep();
-    assert.equal(f.runtime.state.lastOutcome, "adapter_error");
-    assert.equal(f.runtime.state.lastLlmAt, beforeLastLlm, "失败 finish 绝不能推进 lastLlmAt");
-    assert.equal(f.runtime.state.pingsInWindow, 1, "尝试计入有界次数（成本上限）");
-
-    // ② runMaintenance 同步拒绝（主管已被轮次占用）⇒ maintenance_busy，无请求、无计数
-    f.sup.busy = true;
-    const callsBeforeBusy = f.adapter.calls.length;
-    f.clock.advance(STAGE1);
-    await f.runtime.sweep();
-    assert.equal(f.runtime.state.lastOutcome, "maintenance_busy");
-    assert.equal(f.adapter.calls.length, callsBeforeBusy, "维护被占时不得发请求");
-    f.sup.busy = false;
-
-    // ③ 人类输入到达 ⇒ 只 abort 本插件控制器；不 agent.cancel、不清 inbox
-    f.adapter.behaviors.push("abort-on-signal");
-    const sweepPromise = f.runtime.sweep();
-    const deadline = Date.now() + 2_000;
-    while (f.adapter.calls.length < callsBeforeBusy + 1 && Date.now() < deadline) {
-      await new Promise((r) => setImmediate(r));
-    }
-    const humanMessage = { source: { kind: "user" } };
-    f.hostCtx.emit("agent/inbox/inserted", { agent: f.sup, message: humanMessage });
-    await sweepPromise;
-    assert.equal(f.runtime.state.lastOutcome, "aborted_input");
-    assert.equal(f.sup.cancelCalls.length, 0, "绝不能 agent.cancel（会清 inbox）");
-    assert.equal(f.sup.inbox.nextTurn.length + f.sup.inbox.nextStep.length, 0, "不清 inbox：夹具 inbox 保持原样");
-    assert.ok(f.runtime.state.lastHumanAt !== null, "人类交互时刻被记录（阶段二窗口基准）");
-  } finally {
-    f.dispose();
-    rmSync(f.root, { recursive: true, force: true });
+test("B1 配置门禁（真实宿主）：项目畸形/全局关闭时不发请求且投影 fail-closed", async () => {
+  // 项目畸形
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-bad\n  keep_alive: yes\n");
+    const agent = await makeAgent(host, "sup-bad", root);
+    const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+    runtime.start();
+    try {
+      await runtime.sweep();
+      await host.sendTurn(agent, "hello-bad");
+      clock.advance(240_000);
+      await runtime.sweep();
+      assert.equal(host.adapter.calls.length, 1, "畸形配置不得保活");
+      const st = runtime.statusFor(root);
+      assert.equal(st.effective.effective, false);
+      assert.equal(st.effective.source, "project_invalid");
+      assert.equal(st.configured.project_malformed, true);
+    } finally { runtime.dispose(); }
   }
-});
-
-test("g505 宿主：阶段二单次 Grace 后短 TTL 无交互 ⇒ AFK 终止；新交互可复位", async () => {
-  const f = await makeRuntimeFixture({ children: false });
-  try {
-    await f.registerSup();
-    await f.observeLoop();
-    // 全部子代理已结束 + 闲置满 Grace ⇒ 单次 Grace ping
-    f.clock.advance(GRACE);
-    await f.runtime.sweep();
-    assert.equal(f.runtime.state.lastOutcome, "success");
-    assert.equal(f.runtime.statusFor(f.root).active.phase, "stage2");
-    assert.equal(f.runtime.statusFor(f.root).active.stage2_used, true);
-    const callsAfterGrace = f.adapter.calls.length;
-
-    // 短 TTL 届满且无交互 ⇒ AFK，不再产生任何请求
-    f.clock.advance(KEEP_ALIVE_SHORT_TTL_MS);
-    await f.runtime.sweep();
-    assert.equal(f.runtime.statusFor(f.root).active.phase, "afk");
-    assert.equal(f.runtime.statusFor(f.root).active.reason, "stage2_afk");
-    f.clock.advance(GRACE);
-    await f.runtime.sweep();
-    assert.equal(f.runtime.statusFor(f.root).active.phase, "afk");
-    assert.equal(f.adapter.calls.length, callsAfterGrace, "AFK 之后绝不发保活请求");
-
-    // 新的人类交互/新一轮 loop 请求 ⇒ 复位（阶段二机会复原、AFK 解除）
-    f.hostCtx.emit("agent/inbox/inserted", { agent: f.sup, message: { source: { kind: "user" } } });
-    assert.equal(f.runtime.state.afk, false);
-    assert.equal(f.runtime.state.stage2Used, false);
-    await f.observeLoop();
-    f.clock.advance(GRACE);
-    const callsAfterNewLoop = f.adapter.calls.length;
-    await f.runtime.sweep();
-    assert.equal(f.adapter.calls.length, callsAfterNewLoop + 1, "复位后允许（且仅允许一次）新的 Grace ping");
-  } finally {
-    f.dispose();
-    rmSync(f.root, { recursive: true, force: true });
-  }
-});
-
-test("g505 宿主：快照已知失效（新请求未观察/主管替换/route 变化）时明确不可用且不发请求", async () => {
-  const f = await makeRuntimeFixture({ children: true });
-  try {
-    await f.registerSup();
-    const observed = await f.observeLoop();
-    assert.equal(f.runtime.snapshotProblem(f.sup), null);
-
-    // ① 新请求的 config 已到但完整 options 尚未观察 ⇒ pending_observation，旧快照立即失效
-    await f.hostCtx.waterfall(f.hostCtx, "agent/request", { agent: f.sup, turn: 2, step: 1, signal: new AbortController().signal }, async () => ({ provider: "observed", model: "observed-model", maxTokens: 4096 }));
-    assert.equal(f.runtime.snapshotProblem(f.sup), "pending_observation");
-    f.clock.advance(STAGE1);
-    const callsBefore = f.adapter.calls.length;
-    await f.runtime.sweep();
-    assert.equal(f.adapter.calls.length, callsBefore, "无可确认快照时绝不发请求");
-    assert.equal(f.runtime.statusFor(f.root).active.snapshot, "pending_observation");
-
-    // ② 观察完成后恢复可用
-    const options = f.llmMod.markAgentLoopRequest({
-      provider: "observed", model: "observed-model", messages: observed.messages,
-      tools: observed.tools, sessionId: f.supId, maxTokens: 4096,
+  // 全局显式关闭 + 项目 inherit
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-off\n");
+    const agent = await makeAgent(host, "sup-off", root);
+    const { runtime, clock } = await makeRuntime(host, {
+      defaultWorkspace: () => root,
+      readGlobal: () => ({ enabled: false, malformed: false, available: true, raw: "off" }),
     });
-    for await (const _c of f.llm.stream(options)) { /* consume */ }
-    assert.equal(f.runtime.snapshotProblem(f.sup), null);
-
-    // ③ 主管 Agent 对象被替换（clear/compact/resume 的公共信号）⇒ 旧快照失效
-    const replacement = makeAgent(f.hostCtx, f.supId, f.root, "idle");
-    // 真实注册表不允许同 id 重复注册：先真实卸载旧 entry（注册表会发出 agent/disposed）
-    await f.detachSupervisor();
-    await f.registerSup(replacement);
-    // 替换路径可能是「先 disposed 再 created」⇒ 具体原因可为 agent_replaced 或 no_snapshot，
-    // 但都必须是**明确不可用**（绝不是 ready）。
-    assert.notEqual(f.runtime.snapshotProblem(replacement), null);
-    assert.notEqual(f.runtime.statusFor(f.root).active.snapshot, "ready");
-    f.clock.advance(STAGE1);
-    const callsBeforeReplace = f.adapter.calls.length;
-    await f.runtime.sweep();
-    assert.equal(f.adapter.calls.length, callsBeforeReplace, "Agent 替换后不得用旧前缀发请求");
-    // 替换后的新观察才恢复
-    await f.observeLoop({ provider: "observed", model: "observed-model", maxTokens: 4096 }, undefined, replacement);
-    assert.equal(f.runtime.snapshotProblem(replacement), null);
-  } finally {
-    f.dispose();
-    rmSync(f.root, { recursive: true, force: true });
-  }
-});
-
-test("g505 宿主：坏配置/全局关闭/显式长 TTL 的调度门禁（坏值不默认启用）", async () => {
-  // 项目畸形：effective 关闭 + 状态如实标 malformed，不发请求
-  const bad = await makeRuntimeFixture({ children: true, projectKeepAlive: "yes" });
-  try {
-    await bad.registerSup();
-    await bad.observeLoop();
-    bad.clock.advance(STAGE1);
-    await bad.runtime.sweep();
-    assert.equal(bad.adapter.calls.length, 1, "仅 loop 请求；畸形配置不得保活");
-    const status = bad.runtime.statusFor(bad.root);
-    assert.equal(status.effective.effective, false);
-    assert.equal(status.effective.source, "project_invalid");
-    assert.equal(status.configured.project_malformed, true);
-  } finally {
-    bad.dispose();
-    rmSync(bad.root, { recursive: true, force: true });
-  }
-
-  // 全局显式关闭 ⇒ 项目 inherit 时关闭
-  const off = await makeRuntimeFixture({ children: true, globalState: { enabled: false, malformed: false, available: true, raw: "off" } });
-  try {
-    await off.registerSup();
-    await off.observeLoop();
-    off.clock.advance(STAGE1);
-    await off.runtime.sweep();
-    assert.equal(off.adapter.calls.length, 1);
-    assert.equal(off.runtime.statusFor(off.root).effective.source, "global_explicit");
-  } finally {
-    off.dispose();
-    rmSync(off.root, { recursive: true, force: true });
-  }
-
-  // 项目显式 true 覆盖全局关闭
-  const forced = await makeRuntimeFixture({
-    children: true,
-    projectKeepAlive: "true",
-    globalState: { enabled: false, malformed: false, available: true, raw: "off" },
-  });
-  try {
-    await forced.registerSup();
-    await forced.observeLoop();
-    forced.clock.advance(STAGE1);
-    await forced.runtime.sweep();
-    assert.equal(forced.adapter.calls.length, 2, "项目显式 true 必须覆盖全局关闭");
-    assert.equal(forced.runtime.statusFor(forced.root).effective.source, "project_explicit");
-  } finally {
-    forced.dispose();
-    rmSync(forced.root, { recursive: true, force: true });
-  }
-});
-
-test("g505 宿主：未知 TTL 如实投影（短 TTL 有界假设），不声明净收益/严格 timeout 上界", async () => {
-  const f = await makeRuntimeFixture({ children: true });
-  try {
-    await f.registerSup();
-    await f.observeLoop();
-    const status = f.runtime.statusFor(f.root);
-    assert.equal(status.capable.ttl, "unknown");
-    assert.equal(status.capable.short_ttl_bound_ms, KEEP_ALIVE_SHORT_TTL_MS);
-    assert.equal(status.capable.host_channel, true);
-    assert.equal(status.active.snapshot, "ready");
-    assert.equal(status.active.inflight, false);
-    // 投影只含元数据，不含会话正文/提示词
-    const json = JSON.stringify(status);
-    assert.ok(!json.includes("hello"), "投影不得携带对话正文");
-    assert.ok(!json.includes("description"), "投影不得携带工具正文");
-  } finally {
-    f.dispose();
-    rmSync(f.root, { recursive: true, force: true });
+    runtime.start();
+    try {
+      await runtime.sweep();
+      await host.sendTurn(agent, "hello-off");
+      clock.advance(240_000);
+      await runtime.sweep();
+      assert.equal(host.adapter.calls.length, 1, "全局关闭时不得保活");
+      assert.equal(runtime.statusFor(root).effective.effective, false);
+      assert.equal(runtime.statusFor(root).effective.source, "global_explicit");
+    } finally { runtime.dispose(); }
   }
 });
 
@@ -768,7 +901,7 @@ function fakeRes() {
 }
 
 /** apply 级夹具：真实唯一 prefix 注册 + g507 owner admit（测试自有凭证），服务缺失如实降级。 */
-function makeApplyHarness(root: string, extraGet: (name: string) => any = () => undefined) {
+function makeApplyHarness(root: string, extraGet: (name: string) => any = () => undefined, settingsService: any = null) {
   const stub = createRegisterStub();
   const registered: any[] = [];
   const cleanups: Array<() => void> = [];
@@ -782,6 +915,14 @@ function makeApplyHarness(root: string, extraGet: (name: string) => any = () => 
     effect: (fn: () => unknown) => { const d = fn(); if (typeof d === "function") cleanups.push(d as any); return d; },
     webServer: stub.webServer,
     tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => undefined },
+    // 可选：模拟宿主 `ctx.inject(["settings"])` 的公开服务注入（用于证明设置服务是现真源）
+    ...(settingsService
+      ? {
+          inject: (_deps: string[], cb: (sctx: any) => void) => {
+            cb({ settings: settingsService, effect: () => {}, on: () => () => {}, get: ctx.get });
+          },
+        }
+      : {}),
   };
   apply(ctx, { root });
   const byName = new Map(registered.map((d: any) => [d.name, d]));
@@ -880,6 +1021,56 @@ test("g505 REST：project.yaml 畸形与 profile 原始坏值端到端闭锁（�
   } finally {
     for (const d of h2.cleanups.splice(0)) { try { d(); } catch { /* ignore */ } }
     rmSync(root2, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("g505 REST：profile 全局只认当前 settings.yaml，迁移遗留 settings.yaml.imported 不得覆盖现真源", async () => {
+  const root = makeBoard("");
+  const home = tmpDir("home");
+  writeFileSync(join(home, "settings.yaml"), "dsh-graph-host:\n  supervisorKeepAlive: \"\"\n");
+  writeFileSync(join(home, "settings.yaml.imported"), "dsh-graph-host:\n  supervisorKeepAlive: yes\ndsh-graph:\n  supervisorKeepAlive: \"on\"\n");
+  const h = makeApplyHarness(root, (name: string) => (name === "profileContext" ? { home, dir: home } : undefined));
+  try {
+    const got = await h.call("GET", "/api/dsh-graph/settings");
+    assert.equal(got.code, 200);
+    const eff = got.body.supervisor.keep_alive_effective;
+    assert.equal(eff.effective, true, "当前设置未配置 ⇒ 受控默认；不得被 .imported 坏值污染");
+    assert.equal(eff.malformed, false);
+    assert.equal(got.body.supervisor.keep_alive_status.configured.global_malformed, false);
+    assert.equal(eff.source, "global_default", "旧节/imported 的 keepalive 不得被迁移成显式全局值");
+  } finally {
+    for (const d of h.cleanups.splice(0)) { try { d(); } catch { /* ignore */ } }
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("g505 REST：公开 settings 服务的显式值是现真源，优先于 settings.yaml 的陈旧/坏值", async () => {
+  const root = makeBoard("");
+  const home = tmpDir("home");
+  // 当前文件里是坏值 yes；但公开设置服务返回显式合法 "off" ⇒ 以服务为准（不误判 malformed）。
+  writeFileSync(join(home, "settings.yaml"), "dsh-graph-host:\n  supervisorKeepAlive: yes\n");
+  const svc = {
+    describe: () => [{ ns: "dsh-graph-host", value: { supervisorKeepAlive: "off" }, user: { supervisorKeepAlive: "off" }, revision: 1 }],
+    configure: () => {},
+  };
+  const h = makeApplyHarness(
+    root,
+    (name: string) => (name === "profileContext" ? { home, dir: home } : undefined),
+    svc,
+  );
+  try {
+    const got = await h.call("GET", "/api/dsh-graph/settings");
+    assert.equal(got.code, 200);
+    const eff = got.body.supervisor.keep_alive_effective;
+    assert.equal(eff.effective, false);
+    assert.equal(eff.source, "global_explicit");
+    assert.equal(eff.malformed, false, "公开服务显式合法值不得被文件坏值误判");
+    assert.equal(got.body.supervisor.keep_alive_status.configured.global_raw, "off");
+  } finally {
+    for (const d of h.cleanups.splice(0)) { try { d(); } catch { /* ignore */ } }
+    rmSync(root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
 });

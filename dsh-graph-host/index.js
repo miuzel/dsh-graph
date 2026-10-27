@@ -717,13 +717,52 @@ function usageOf(usage) {
   return { inputTokens: num(usage.inputTokens), outputTokens: num(usage.outputTokens), cacheReadTokens: num(usage.cacheReadTokens) };
 }
 
+// ── 路由核对（B1）：只核对 provider/model 与**调用方真正显式给出的控制项**。
+//
+// 真实 `LlmRuntime.prepareCall` 会用 adapter 的 `defaultMaxTokens` / 默认 reasoning 等填满
+// `prepared.config`，随后 loop 用这份 resolved config 组装 options。`agent/request` 交付的
+// proposed config 通常只含 provider/model（adapter 默认尚未填充），因此**全字段比较必然误判**。
+// 这里允许 adapter 填充缺省，但显式控制项一旦给出就必须一致；provider/model 永远必须一致。
+const KEEP_ALIVE_CONTROL_KEYS = ["reasoningEffort", "temperature", "maxTokens", "stop"];
+
+function controlValueEquals(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+  }
+  return a === b;
+}
+
+/** proposed（agent/request 交付的 config）与 observed（llm/stream 的 resolved options）是否同一请求。 */
+function routeCompatible(proposed, observed) {
+  if (!proposed || !observed || typeof proposed !== "object" || typeof observed !== "object") return false;
+  if (proposed.provider !== observed.provider || proposed.model !== observed.model) return false;
+  for (const key of KEEP_ALIVE_CONTROL_KEYS) {
+    if (proposed[key] !== undefined && !controlValueEquals(proposed[key], observed[key])) return false;
+  }
+  return true;
+}
+
+/** 从**已观察到的 resolved options** 提取 route（只含实际存在的控制项；不补猜默认）。 */
+function resolvedRouteOf(options) {
+  if (!options) return null;
+  const route = { provider: options.provider, model: options.model };
+  for (const key of KEEP_ALIVE_CONTROL_KEYS) {
+    if (options[key] !== undefined) route[key] = options[key];
+  }
+  return route;
+}
+
 /**
  * 创建保活运行时（宿主 apply 内使用；测试可注入假时钟/假定时器/假服务做离线验证）。
+ *
+ * 结构：**每个 board root 一份独立小状态**（`boards` Map）——配置、预算计数、阶段二机会、快照、
+ * 在途控制器、审计序号、AFK 都按工作区隔离，避免「首次 bind 后永远忽略另一个工作区」。
+ * 核心判定仍复用 core/keepalive.ts 的单 board 纯函数，不为多租户重写。
  *
  * @param options.ctx 插件上下文（读取 `agents`/`llm` 服务，注册事件）
  * @param options.readGlobal 返回 `{ enabled, malformed, available, raw }`（profile 全局开关）
  * @param options.resolveRoot `(workspace) => boardRoot`（canonical 解析）
- * @param options.defaultWorkspace `() => workspaceRoot|null`（主管未 live 时的兜底 workspace）
+ * @param options.defaultWorkspace `() => workspaceRoot|null`（宿主默认 workspace；仅作候选之一）
  * @param options.now/setIntervalFn/... 可注入时钟与定时器（生产用全局实现）
  * @param options.log 结构化审计输出（默认 stderr 单行；绝不携带正文）
  */
@@ -733,6 +772,8 @@ export function createKeepAliveRuntime(options = {}) {
     readGlobal = () => ({ enabled: null, malformed: false, available: false, raw: "" }),
     resolveRoot = null,
     defaultWorkspace = () => null,
+    readProjectConfigFn = readProjectConfig,
+    readSupervisorSessionFn = readSupervisorSession,
     now = () => Date.now(),
     setIntervalFn = (fn, ms) => setInterval(fn, ms),
     clearIntervalFn = (h) => clearInterval(h),
@@ -745,21 +786,58 @@ export function createKeepAliveRuntime(options = {}) {
 
   const offs = [];
   const ownPingOptions = new WeakSet();
+  const boards = new Map(); // canonical root → board state
   let timer = null;
-  let sweeping = false;
   let started = false;
+  let disposed = false;
+  let generation = 0;
 
-  const state = {
-    disposed: false,
-    generation: 0,
-    root: null,
+  const getService = (name) => {
+    try { return typeof ctx?.get === "function" ? ctx.get(name) : null; } catch { return null; }
+  };
+  const emit = (entry) => {
+    try {
+      if (typeof log === "function") log(formatKeepAliveAudit(entry));
+      else process.stderr.write(`[dsh-graph-host] ${formatKeepAliveAudit(entry)}\n`);
+    } catch { /* 审计失败绝不影响主流程 */ }
+  };
+  const normalizeRoot = (root) => {
+    if (!root || typeof root !== "string") return null;
+    try {
+      if (typeof resolveRoot === "function") {
+        const resolved = resolveRoot(root);
+        if (typeof resolved === "string" && resolved) return resolved;
+      }
+    } catch { /* canonical 解析失败：退回原值（同一 workspace 仍能命中同一 key） */ }
+    return root;
+  };
+  const rootOfAgent = (agent) => {
+    try {
+      const ws = agent?.session?.header?.cwd;
+      if (!ws) return null;
+      return normalizeRoot(ws);
+    } catch {
+      return null;
+    }
+  };
+  const defaultRoot = () => {
+    try {
+      const ws = typeof defaultWorkspace === "function" ? defaultWorkspace() : null;
+      return ws ? normalizeRoot(ws) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const makeBoard = (root) => ({
+    root,
     supervisorId: null,
     supervisorAgent: null,
     session: null,
-    snapshot: null, // { options, route, sessionId, agent, session, at, fingerprint }
+    snapshot: null, // { messages/system/tools/toolHistory/sessionId/route/agent/session/at/fingerprint }
     snapshotStatus: "no_snapshot",
     pendingObservation: null, // { agent, session, config, at }
-    lastObservedConfig: null,
+    lastProposedConfig: null,
     lastLlmAt: null,
     lastActivityAt: null,
     lastHumanAt: null,
@@ -776,84 +854,65 @@ export function createKeepAliveRuntime(options = {}) {
     controller: null,
     afk: false,
     windowEpoch: 0,
+    sweeping: false,
+    configError: false,
+  });
+  const boardForRoot = (root, create = true) => {
+    const key = normalizeRoot(root);
+    if (!key) return null;
+    let board = boards.get(key);
+    if (!board && create) { board = makeBoard(key); boards.set(key, board); }
+    return board ?? null;
+  };
+  const boardOfAgent = (agent) => {
+    if (!agent) return null;
+    const sid = agent.session?.id;
+    for (const board of boards.values()) {
+      if (board.supervisorAgent === agent) return board;
+      if (sid && board.supervisorId === sid) return board;
+    }
+    const root = rootOfAgent(agent);
+    return root ? boards.get(root) ?? null : null;
+  };
+  const ensureDefaultBoard = () => {
+    const root = defaultRoot();
+    return root ? boardForRoot(root) : null;
   };
 
-  const getService = (name) => {
-    try { return typeof ctx?.get === "function" ? ctx.get(name) : null; } catch { return null; }
+  const resetWindow = (board) => {
+    board.windowEpoch += 1;
+    board.pingsInWindow = 0;
+    board.stage2Used = false;
+    board.afk = false;
   };
-  const emit = (entry) => {
-    try {
-      if (typeof log === "function") log(formatKeepAliveAudit(entry));
-      else process.stderr.write(`[dsh-graph-host] ${formatKeepAliveAudit(entry)}\n`);
-    } catch { /* 审计失败绝不影响主流程 */ }
-  };
-
-  /** 重置「本窗口」计数与阶段二机会（主管活动/子回报/人类交互时）。 */
-  const resetWindow = () => {
-    state.windowEpoch += 1;
-    state.pingsInWindow = 0;
-    state.stage2Used = false;
-    state.afk = false;
-  };
-
-  /** abort 本插件自己的控制器（绝不 agent.cancel / 不清 inbox）。 */
-  const abortInflight = (why) => {
-    const ctrl = state.controller;
+  const abortInflight = (board, why) => {
+    const ctrl = board?.controller;
     if (!ctrl || ctrl.signal.aborted) return;
     try { ctrl.abort(new Error(why || "keepalive-abort")); } catch { /* 忽略 */ }
   };
-
-  /** 清掉主管相关内存态（换主管/Agent 被替换/卸载）。 */
-  const resetSupervisorState = (why) => {
-    abortInflight(why || "supervisor-reset");
-    state.snapshot = null;
-    state.snapshotStatus = why === "agent_replaced" ? "agent_replaced" : "no_snapshot";
-    state.pendingObservation = null;
-    state.lastObservedConfig = null;
-    state.lastLlmAt = null;
-    state.lastActivityAt = null;
-    state.lastHumanAt = null;
-    state.lastPingAt = null;
-    state.lastSuccessAt = null;
-    resetWindow();
+  const invalidateSnapshot = (board, reason, opts = {}) => {
+    // 表面/身份变化后旧前缀不再可靠：在途保活也立即 abort（只动本插件控制器）。
+    abortInflight(board, reason);
+    board.snapshot = null;
+    board.snapshotStatus = reason;
+    board.pendingObservation = null;
+    if (opts.resetWindow !== false) resetWindow(board);
+  };
+  const resetBoard = (board, why) => {
+    abortInflight(board, why || "board-reset");
+    board.snapshot = null;
+    board.snapshotStatus = why === "agent_replaced" ? "agent_replaced" : "no_snapshot";
+    board.pendingObservation = null;
+    board.lastProposedConfig = null;
+    board.lastLlmAt = null;
+    board.lastActivityAt = null;
+    board.lastHumanAt = null;
+    board.lastPingAt = null;
+    board.lastSuccessAt = null;
+    board.configError = false;
+    resetWindow(board);
   };
 
-  const rootOfAgent = (agent) => {
-    try {
-      const ws = agent?.session?.header?.cwd;
-      if (!ws) return null;
-      if (typeof resolveRoot === "function") return resolveRoot(ws);
-      return null;
-    } catch {
-      return null;
-    }
-  };
-
-  const rootForSweep = () => {
-    try {
-      if (state.supervisorAgent) {
-        const r = rootOfAgent(state.supervisorAgent);
-        if (r) return r;
-      }
-      const ws = typeof defaultWorkspace === "function" ? defaultWorkspace() : null;
-      if (ws && typeof resolveRoot === "function") return resolveRoot(ws);
-      if (ws) return ws;
-      return null;
-    } catch {
-      return null;
-    }
-  };
-
-  const sameConfig = (a, b) => {
-    if (!a || !b) return false;
-    return a.provider === b.provider && a.model === b.model
-      && (a.reasoningEffort ?? null) === (b.reasoningEffort ?? null)
-      && (a.temperature ?? null) === (b.temperature ?? null)
-      && (a.maxTokens ?? null) === (b.maxTokens ?? null)
-      && JSON.stringify(a.stop ?? null) === JSON.stringify(b.stop ?? null);
-  };
-
-  /** 采样主管名下运行中子代理数（真实 live registry + 运行时所有权；未知返回 null）。 */
   const sampleRunningChildren = (supervisor) => {
     const agents = getService("agents");
     if (!agents || typeof agents.list !== "function" || typeof agents.isOwnedBy !== "function") return null;
@@ -867,15 +926,13 @@ export function createKeepAliveRuntime(options = {}) {
         try { owned = agents.isOwnedBy(a.id, supervisor) === true; } catch { return null; }
         if (!owned) continue;
         if (a.status === "running") running += 1;
-        else if (a.status !== "idle") return null; // 未知状态 ⇒ 无法判定（fail-safe）
+        else if (a.status !== "idle") return null;
       }
       return running;
     } catch {
       return null;
     }
   };
-
-  /** 采样主管是否 idle（公开 status；未知返回 null）。 */
   const sampleIdle = (agent) => {
     try {
       if (!agent) return null;
@@ -886,8 +943,6 @@ export function createKeepAliveRuntime(options = {}) {
       return null;
     }
   };
-
-  /** 主管 inbox 是否有待处理输入（能力缺失按「有」处理：不插队 ping）。 */
   const hasPendingInput = (agent) => {
     try {
       const inbox = agent?.inbox;
@@ -899,25 +954,41 @@ export function createKeepAliveRuntime(options = {}) {
     }
   };
 
-  /** 快照是否仍可用（A 方案：与当前 live Agent/session 严格同一对象 + 最近观察 route 未变）。 */
-  const snapshotProblem = (agent) => {
-    if (state.disposed) return "disposed";
-    if (state.snapshotStatus !== "ready") return state.snapshotStatus;
-    const snap = state.snapshot;
+  const snapshotProblemForBoard = (board, agent) => {
+    if (disposed) return "disposed";
+    if (!board) return "no_supervisor";
+    if (board.configError) return "config_unavailable";
+    if (board.snapshotStatus !== "ready") return board.snapshotStatus;
+    const snap = board.snapshot;
     if (!snap) return "no_snapshot";
     if (!agent) return "no_supervisor";
     if (snap.agent !== agent) return "agent_replaced";
     if (snap.session !== agent.session) return "session_replaced";
     if (snap.sessionId !== agent.session?.id) return "session_replaced";
-    if (state.lastObservedConfig && !sameConfig(state.lastObservedConfig, snap.route)) return "route_changed";
+    // 与「最近一次正常请求的 proposed route」同口径（允许 adapter 填充缺省）：
+    if (board.lastProposedConfig && !routeCompatible(board.lastProposedConfig, snap.route)) return "route_changed";
     if (snap.fingerprint !== routeFingerprint(snap.route)) return "config_changed";
     return null;
   };
 
-  /** 读取生效决策（项目 + 全局）；失败返回 null（fail-safe：不保活）。 */
-  const readResolution = (root) => {
+  /** 对外：传入 Agent / board root / 省略（默认 board）都能得到该 board 的快照可用性。 */
+  const snapshotProblem = (target) => {
+    if (typeof target === "string") {
+      const board = boards.get(normalizeRoot(target)) ?? null;
+      return snapshotProblemForBoard(board, board?.supervisorAgent ?? null);
+    }
+    if (target && typeof target === "object") {
+      const board = boardOfAgent(target);
+      if (!board) return "no_supervisor";
+      return snapshotProblemForBoard(board, target);
+    }
+    const board = ensureDefaultBoard() ?? boards.values().next().value ?? null;
+    return snapshotProblemForBoard(board, board?.supervisorAgent ?? null);
+  };
+
+  const readResolutionForBoard = (board) => {
     try {
-      const cfg = readProjectConfig(root);
+      const cfg = readProjectConfigFn(board.root);
       const globalState = readGlobal() ?? {};
       const resolution = keepAliveResolutionOf(
         cfg?.supervisor,
@@ -925,217 +996,121 @@ export function createKeepAliveRuntime(options = {}) {
         globalState.malformed === true,
         globalState.available !== false,
       );
+      board.configError = false;
       return { cfg, globalState, resolution };
     } catch {
+      board.configError = true;
       return null;
     }
   };
 
-  /** 能力判定 + 通道判定（快照不可用时 missing 里明确列出）。 */
-  const capabilityOf = (agent) => {
+  const capabilityOf = (board, agent) => {
     const llm = getService("llm");
     const agents = getService("agents");
     const llmOk = !!(llm && typeof llm.prepareCall === "function" && typeof llm.stream === "function");
     const agentsOk = !!(agents && typeof agents.get === "function" && typeof agents.list === "function" && typeof agents.isOwnedBy === "function");
     const statusOk = !!agent && (agent.status === "idle" || agent.status === "running");
     const maintenanceOk = !!agent && typeof agent.runMaintenance === "function";
-    const snapProblem = snapshotProblem(agent);
+    const snapProblem = snapshotProblemForBoard(board, agent);
     const caps = { llm: llmOk, agents: agentsOk, status: statusOk, maintenance: maintenanceOk, snapshot: snapProblem === null };
-    return { llmOk, agentsOk, statusOk, maintenanceOk, snapProblem, channel: resolveKeepAliveChannel(caps, null), llm };
+    let channel = resolveKeepAliveChannel(caps, null);
+    if (board.configError) {
+      channel = { ...channel, channel: "none", reason: "missing_capability", exempt: false, missing: [...channel.missing, "project.config"] };
+    }
+    return { llmOk, agentsOk, statusOk, maintenanceOk, snapProblem, channel, llm };
   };
 
-  /**
-   * 一次调度扫描：采样 → core 判定 → 必要时 runMaintenance 抢占并真实调用。
-   * 绝不抛错；in-flight guard 保证不叠加。
-   */
-  const sweep = async () => {
-    if (state.disposed || sweeping) return;
-    sweeping = true;
+  /** 发现候选 board roots：默认 workspace + 每个「自己就是该 root 主管」的 live Agent。 */
+  const candidateRoots = () => {
+    const roots = new Set();
+    const dflt = defaultRoot();
+    if (dflt) roots.add(dflt);
+    const agents = getService("agents");
+    if (agents && typeof agents.list === "function") {
+      try {
+        for (const agent of agents.list() ?? []) {
+          const root = rootOfAgent(agent);
+          if (!root) continue;
+          let supId = null;
+          try { supId = readSupervisorSessionFn(root); } catch { supId = null; }
+          if (supId && agent?.session?.id === supId) roots.add(root);
+        }
+      } catch { /* registry 异常：至少保留默认 root */ }
+    }
+    for (const board of boards.values()) roots.add(board.root);
+    return [...roots];
+  };
+
+  const sweepBoard = async (root) => {
+    const board = boardForRoot(root);
+    if (!board || board.sweeping) return;
+    board.sweeping = true;
     try {
-      const root = rootForSweep();
-      if (!root) {
-        state.lastReason = "state_unknown";
-        return;
-      }
-      state.root = root;
-      const resolved = readResolution(root);
+      const resolved = readResolutionForBoard(board);
       if (!resolved) {
-        state.lastReason = "state_unknown";
+        board.lastReason = "state_unknown";
         return;
       }
-      const supId = readSupervisorSession(root);
-      if (supId !== state.supervisorId) {
-        // 换主管：清空旧快照/计数并 abort 在途（绝不沿用旧会话前缀）
-        state.supervisorId = supId;
-        state.supervisorAgent = null;
-        state.session = null;
-        resetSupervisorState(supId ? "supervisor_changed" : "no_supervisor");
+      const supId = readSupervisorSessionFn(board.root);
+      if (supId !== board.supervisorId) {
+        board.supervisorId = supId;
+        board.supervisorAgent = null;
+        board.session = null;
+        resetBoard(board, supId ? "supervisor_changed" : "no_supervisor");
+        board.snapshotStatus = supId ? "no_snapshot" : "no_supervisor";
       }
       const agents = getService("agents");
       const agent = supId && agents?.get ? agents.get(supId) : null;
-      if (agent && agent !== state.supervisorAgent) {
-        // Agent 对象被替换（clear/compact/resume/重连）：旧快照前缀不再可复用。
-        if (state.supervisorAgent) resetSupervisorState("agent_replaced");
-        state.supervisorAgent = agent;
-        state.session = agent.session ?? null;
+      if (agent && agent !== board.supervisorAgent) {
+        if (board.supervisorAgent) resetBoard(board, "agent_replaced");
+        board.supervisorAgent = agent;
+        board.session = agent.session ?? null;
       }
       if (!agent) {
-        state.supervisorAgent = null;
-        state.session = null;
-        state.snapshotStatus = "no_supervisor";
-        state.lastReason = "state_unknown";
+        board.supervisorAgent = null;
+        board.session = null;
+        board.snapshotStatus = "no_supervisor";
+        board.lastReason = "state_unknown";
         return;
       }
-      const caps = capabilityOf(agent);
-      const runningChildren = sampleRunningChildren(agent);
-      const idle = sampleIdle(agent);
+      const caps = capabilityOf(board, agent);
       const decision = decideKeepAlive(
         {
           now: now(),
-          lastLlmAt: state.lastLlmAt,
-          runningChildren,
-          idle,
-          pingsInWindow: state.pingsInWindow,
-          stage2Used: state.stage2Used,
-          lastPingAt: state.lastPingAt,
-          lastActivityAt: state.lastActivityAt,
-          inflight: state.inflight,
+          lastLlmAt: board.lastLlmAt,
+          runningChildren: sampleRunningChildren(agent),
+          idle: sampleIdle(agent),
+          pingsInWindow: board.pingsInWindow,
+          stage2Used: board.stage2Used,
+          lastPingAt: board.lastPingAt,
+          lastActivityAt: board.lastActivityAt,
+          inflight: board.inflight,
           pendingInput: hasPendingInput(agent),
         },
         defaultKeepAliveConfig(resolved.resolution.enabled),
         caps.channel,
       );
-      state.lastDecision = decision;
-      state.lastReason = decision.reason;
-      state.afk = decision.afk === true;
+      board.lastDecision = decision;
+      board.lastReason = decision.reason;
+      board.afk = decision.afk === true;
       if (!decision.ping) return;
-      await attemptPing({ root, agent, decision, channel: caps.channel, llm: caps.llm });
+      await attemptPing({ board, agent, decision, channel: caps.channel, llm: caps.llm });
     } catch (e) {
-      state.lastReason = "state_unknown";
+      board.lastReason = "state_unknown";
       try { process.stderr.write(`[dsh-graph-host] g-505 保活扫描跳过: ${String(e?.message ?? e).slice(0, 120)}\n`); } catch { /* 忽略 */ }
     } finally {
-      sweeping = false;
+      board.sweeping = false;
     }
   };
 
-  /**
-   * 一次真实保活尝试：
-   * 1) `agent.runMaintenance(task)` 同步抢占**真 idle**（忙 ⇒ 同步 throw，不排队、不抢轮次）；
-   * 2) 回调内重验身份/代际/配置/快照/待处理输入；
-   * 3) 用公开 `prepareCall` + `prepared.stream` 构造**一次**手工请求（无 purpose、无 loop marker、
-   *    不发消息、不执行工具），替换 signal、仅把 maxTokens 改为 1；
-   * 4) 完整消费 finish，按结局如实记账（失败不推进 lastLlmAt）。
-   */
-  const attemptPing = async ({ root, agent, decision, channel, llm }) => {
-    if (!llm || typeof llm.prepareCall !== "function") return;
-    const startedAt = now();
-    const generation = state.generation;
-    const epoch = state.windowEpoch;
-    let outcome = "not_attempted";
-    let error = null;
-    let usage = null;
-    let attemptStarted = false;
-    let maintenanceEntered = false;
-    state.inflight = true;
-    try {
-      if (typeof agent.runMaintenance !== "function") {
-        outcome = "not_attempted";
-        error = "maintenance-missing";
-        return;
-      }
-      try {
-        await agent.runMaintenance(async (maintenanceSignal) => {
-          maintenanceEntered = true;
-          // 回调内重验（不信任抢占前的采样）
-          if (state.disposed || state.generation !== generation) { outcome = "aborted_dispose"; return; }
-          if (state.supervisorAgent !== agent) { outcome = "not_attempted"; error = "agent-replaced"; return; }
-          if (snapshotProblem(agent) !== null) { outcome = "not_attempted"; error = "snapshot-invalid"; return; }
-          const supIdNow = readSupervisorSession(root);
-          if (supIdNow !== state.supervisorId) { outcome = "not_attempted"; error = "supervisor-changed"; return; }
-          if (hasPendingInput(agent)) { outcome = "pending_input"; return; }
-          const resolvedNow = readResolution(root);
-          if (!resolvedNow || !resolvedNow.resolution.enabled) { outcome = "not_attempted"; error = "config-disabled"; return; }
-
-          const ctrl = new AbortController();
-          state.controller = ctrl;
-          let timedOut = false;
-          const onMaintenanceAbort = () => { try { ctrl.abort(maintenanceSignal?.reason ?? new Error("maintenance-abort")); } catch { /* 忽略 */ } };
-          if (maintenanceSignal) {
-            if (maintenanceSignal.aborted) onMaintenanceAbort();
-            else maintenanceSignal.addEventListener?.("abort", onMaintenanceAbort, { once: true });
-          }
-          let timerHandle = null;
-          try {
-            timerHandle = setTimeoutFn(() => {
-              timedOut = true;
-              try { ctrl.abort(new Error("keepalive-timeout")); } catch { /* 忽略 */ }
-            }, pingTimeoutMs);
-            timerHandle?.unref?.();
-          } catch { timerHandle = null; }
-
-          attemptStarted = true;
-          try {
-            const result = await streamPing(snapshotForPing(), ctrl.signal);
-            outcome = result.outcome;
-            error = result.error;
-            usage = result.usage ?? null;
-            // 请求级 timeout 只负责 abort；不 race 提前释放维护（不合作 adapter 的严格上界不承诺）。
-            if (timedOut && (outcome === "aborted_input" || outcome === "aborted_adapter")) outcome = "timeout";
-          } catch (e) {
-            if (ctrl.signal.aborted) {
-              const reason = String(ctrl.signal.reason?.message ?? "");
-              outcome = timedOut ? "timeout" : reason.includes("input") ? "aborted_input" : "aborted_dispose";
-            } else {
-              outcome = "adapter_error";
-            }
-            error = String(e?.message ?? e).slice(0, 120);
-          } finally {
-            if (timerHandle !== null) { try { clearTimeoutFn(timerHandle); } catch { /* 忽略 */ } }
-            try { maintenanceSignal?.removeEventListener?.("abort", onMaintenanceAbort); } catch { /* 忽略 */ }
-            if (state.controller === ctrl) state.controller = null;
-          }
-        });
-      } catch (e) {
-        if (!maintenanceEntered) {
-          // runMaintenance 同步拒绝 = 主管已被轮次/另一维护占用；没有发请求、没有成本。
-          outcome = "maintenance_busy";
-          error = "maintenance-claim-rejected";
-        } else if (outcome === "not_attempted" || outcome === "pending_input") {
-          // 维护回调里主动放弃（未发请求）或任务失败：保持未发请求口径
-          if (outcome === "not_attempted") error = error ?? String(e?.message ?? e).slice(0, 120);
-        } else if (outcome === "success") {
-          // 任务已成功但拒绝收尾：按失败处理，不推进 lastLlmAt。
-          outcome = "adapter_error";
-          error = String(e?.message ?? e).slice(0, 120);
-        }
-      }
-    } finally {
-      state.inflight = false;
-      if (state.disposed && outcome === "aborted_input") outcome = "aborted_dispose";
-      const elapsed = now() - startedAt;
-      // 尝试计数（有界成本）：只有真的开始请求才计入；维护忙/主动放弃不计。
-      if (attemptStarted) {
-        state.lastPingAt = startedAt;
-        if (state.windowEpoch === epoch) state.pingsInWindow = decision.pingsInWindow;
-        if (decision.phase === "stage2" && state.windowEpoch === epoch) state.stage2Used = true;
-        if (outcome === "success") {
-          // 只有成功 finish 才算缓存已被刷新（失败/取消绝不推进）
-          state.lastLlmAt = now();
-          state.lastSuccessAt = now();
-        }
-      }
-      state.seq += 1;
-      const entry = makeKeepAliveAuditEntry(state.seq, decision, channel?.channel ?? "none", elapsed, outcome, error, now(), usage);
-      state.lastAttempt = entry;
-      state.lastOutcome = outcome;
-      state.lastReason = decision.reason;
-      emit(entry);
-    }
+  const sweep = async () => {
+    if (disposed) return;
+    const roots = candidateRoots();
+    for (const root of roots) await sweepBoard(root);
   };
 
-  /** 取当前可用于 ping 的快照（调用前已由 snapshotProblem 校验）。 */
-  const snapshotForPing = () => {
-    const snap = state.snapshot;
+  const snapshotForPing = (board) => {
+    const snap = board.snapshot;
     return {
       provider: snap.route.provider,
       model: snap.route.model,
@@ -1148,14 +1123,9 @@ export function createKeepAliveRuntime(options = {}) {
     };
   };
 
-  /**
-   * 公开通道的一次手工调用（无痕：不新增对话消息；保留 sessionId 以允许宿主正常 checkpoint）。
-   * 完整消费 chunk（丢弃文本/思考、**不执行** tool-call），以 finish 决定成功/失败。
-   */
   const streamPing = async (snap, signal) => {
     const llm = getService("llm");
     if (!llm || typeof llm.prepareCall !== "function") return { outcome: "not_attempted", error: "llm-missing" };
-    // 只复用观察到的 route/controls；maxTokens 改为 1（成本上限意图，不承诺恰好 1 token）。
     const callConfig = callConfigOf(snap.route);
     if (!callConfig || typeof callConfig.provider !== "string" || typeof callConfig.model !== "string") {
       return { outcome: "not_attempted", error: "route-missing" };
@@ -1191,14 +1161,11 @@ export function createKeepAliveRuntime(options = {}) {
       for await (const chunk of stream) {
         if (chunk?.type === "usage") usage = usageOf(chunk.usage);
         else if (chunk?.type === "finish") finish = chunk.reason ?? null;
-        // 其余 chunk（text/reasoning/tool-call）一律丢弃：绝不执行工具、绝不记录正文。
+        // 其余 chunk 一律丢弃：不执行工具、不记录正文。
       }
     } catch (e) {
       const aborted = signal?.aborted === true;
-      return {
-        outcome: aborted ? "aborted_input" : "adapter_error",
-        error: String(e?.message ?? e).slice(0, 120),
-      };
+      return { outcome: aborted ? "aborted_input" : "adapter_error", error: String(e?.message ?? e).slice(0, 120) };
     } finally {
       ownPingOptions.delete(options);
     }
@@ -1207,13 +1174,112 @@ export function createKeepAliveRuntime(options = {}) {
       return { outcome: "success", error: null, usage };
     }
     if (kind === "aborted") {
-      // 本插件控制器被 abort（输入/子回报/卸载/超时）⇒ 如实归为取消；非本插件原因才归 adapter。
       return { outcome: signal?.aborted === true ? "aborted_input" : "aborted_adapter", error: "finish:aborted", usage };
     }
     return { outcome: "adapter_error", error: kind ? `finish:${kind}` : "finish:missing", usage };
   };
 
-  // ── 事件接线（全部为宿主公开事件；无 ctx.on 的旧宿主 ⇒ 不注册、静默降级）──
+  const attemptPing = async ({ board, agent, decision, channel, llm }) => {
+    if (!llm || typeof llm.prepareCall !== "function") return;
+    const startedAt = now();
+    const boardEpoch = board.windowEpoch;
+    const gen = generation;
+    let outcome = "not_attempted";
+    let error = null;
+    let usage = null;
+    let attemptStarted = false;
+    let maintenanceEntered = false;
+    board.inflight = true;
+    try {
+      if (typeof agent.runMaintenance !== "function") {
+        error = "maintenance-missing";
+        return;
+      }
+      try {
+        await agent.runMaintenance(async (maintenanceSignal) => {
+          maintenanceEntered = true;
+          if (disposed || generation !== gen) { outcome = "aborted_dispose"; return; }
+          if (board.supervisorAgent !== agent) { outcome = "not_attempted"; error = "agent-replaced"; return; }
+          if (snapshotProblemForBoard(board, agent) !== null) { outcome = "not_attempted"; error = "snapshot-invalid"; return; }
+          let supIdNow = null;
+          try { supIdNow = readSupervisorSessionFn(board.root); } catch { supIdNow = null; }
+          if (supIdNow !== board.supervisorId) { outcome = "not_attempted"; error = "supervisor-changed"; return; }
+          if (hasPendingInput(agent)) { outcome = "pending_input"; return; }
+          const resolvedNow = readResolutionForBoard(board);
+          if (!resolvedNow || !resolvedNow.resolution.enabled) { outcome = "not_attempted"; error = "config-disabled"; return; }
+
+          const ctrl = new AbortController();
+          board.controller = ctrl;
+          let timedOut = false;
+          const onMaintenanceAbort = () => { try { ctrl.abort(maintenanceSignal?.reason ?? new Error("maintenance-abort")); } catch { /* 忽略 */ } };
+          if (maintenanceSignal) {
+            if (maintenanceSignal.aborted) onMaintenanceAbort();
+            else maintenanceSignal.addEventListener?.("abort", onMaintenanceAbort, { once: true });
+          }
+          let timerHandle = null;
+          try {
+            timerHandle = setTimeoutFn(() => {
+              timedOut = true;
+              try { ctrl.abort(new Error("keepalive-timeout")); } catch { /* 忽略 */ }
+            }, pingTimeoutMs);
+            timerHandle?.unref?.();
+          } catch { timerHandle = null; }
+
+          attemptStarted = true;
+          try {
+            const result = await streamPing(snapshotForPing(board), ctrl.signal);
+            outcome = result.outcome;
+            error = result.error;
+            usage = result.usage ?? null;
+            if (timedOut && (outcome === "aborted_input" || outcome === "aborted_adapter")) outcome = "timeout";
+          } catch (e) {
+            if (ctrl.signal.aborted) {
+              const reason = String(ctrl.signal.reason?.message ?? "");
+              outcome = timedOut ? "timeout" : reason.includes("input") ? "aborted_input" : "aborted_dispose";
+            } else {
+              outcome = "adapter_error";
+            }
+            error = String(e?.message ?? e).slice(0, 120);
+          } finally {
+            if (timerHandle !== null) { try { clearTimeoutFn(timerHandle); } catch { /* 忽略 */ } }
+            try { maintenanceSignal?.removeEventListener?.("abort", onMaintenanceAbort); } catch { /* 忽略 */ }
+            if (board.controller === ctrl) board.controller = null;
+          }
+        });
+      } catch (e) {
+        if (!maintenanceEntered) {
+          outcome = "maintenance_busy";
+          error = "maintenance-claim-rejected";
+        } else if (outcome === "not_attempted" || outcome === "pending_input") {
+          if (outcome === "not_attempted") error = error ?? String(e?.message ?? e).slice(0, 120);
+        } else if (outcome === "success") {
+          outcome = "adapter_error";
+          error = String(e?.message ?? e).slice(0, 120);
+        }
+      }
+    } finally {
+      board.inflight = false;
+      if (disposed && outcome === "aborted_input") outcome = "aborted_dispose";
+      const elapsed = now() - startedAt;
+      if (attemptStarted) {
+        board.lastPingAt = startedAt;
+        if (board.windowEpoch === boardEpoch) board.pingsInWindow = decision.pingsInWindow;
+        if (decision.phase === "stage2" && board.windowEpoch === boardEpoch) board.stage2Used = true;
+        if (outcome === "success") {
+          board.lastLlmAt = now();
+          board.lastSuccessAt = now();
+        }
+      }
+      board.seq += 1;
+      const entry = makeKeepAliveAuditEntry(board.seq, decision, channel?.channel ?? "none", elapsed, outcome, error, now(), usage);
+      board.lastAttempt = entry;
+      board.lastOutcome = outcome;
+      board.lastReason = decision.reason;
+      emit(entry);
+    }
+  };
+
+  // ── 事件接线（全部为宿主公开事件；每 board 独立状态）──
   const onEvent = (name, handler) => {
     if (typeof ctx?.on !== "function") return;
     try {
@@ -1222,176 +1288,205 @@ export function createKeepAliveRuntime(options = {}) {
     } catch { /* 事件面不被宿主支持 ⇒ 静默（特性探测） */ }
   };
 
-  // agent/request：正常 loop 轮次的配置来源（唯一公开的「本轮 config」信号）。
-  // 只记录、不改写；返回 next() 原值。主管会话的请求会让旧快照立即失效，
-  // 直到随后观察到同一 route 的 llm/stream（A 方案：最近一次正常请求的完整公共 options）。
+  const observeLiveAgentForBoard = (agent) => {
+    const root = rootOfAgent(agent);
+    if (!root) return null;
+    let supId = null;
+    try { supId = readSupervisorSessionFn(root); } catch { supId = null; }
+    if (!supId || agent?.session?.id !== supId) return null;
+    const agents = getService("agents");
+    if (agents && typeof agents.get === "function" && agents.get(supId) !== agent) return null;
+    return { root, supId, board: boardForRoot(root) };
+  };
+
   onEvent("agent/request", async (payload, next) => {
     const config = await next();
     try {
       const agent = payload?.agent;
-      const sid = agent?.session?.id;
-      if (!sid) return config;
-      const root = rootOfAgent(agent);
-      if (!root) return config;
-      // 只跟踪当前 board root 的主管（跨 workspace 同时活跃主管不在本目标范围，避免状态互踩）。
-      if (state.root && root !== state.root) return config;
-      if (readSupervisorSession(root) !== sid) return config;
-      // 严格过滤「当前 live 的那个主管 Agent」：注册表里的同 id 对象若不是本次请求的 agent，
-      // 说明它已被替换/尚未发布（不能拿旧对象建立快照）。
-      const agentsNow = getService("agents");
-      if (agentsNow && typeof agentsNow.get === "function" && agentsNow.get(sid) !== agent) return config;
-      state.root = root;
-      state.supervisorId = sid;
-      state.supervisorAgent = agent;
-      state.session = agent.session ?? null;
-      state.lastActivityAt = now();
-      state.lastObservedConfig = config ?? null;
-      // 新一轮请求开始 ⇒ 旧快照不再代表「最近一次正常请求」
-      state.snapshotStatus = "pending_observation";
-      state.pendingObservation = { agent, session: agent.session ?? null, config: config ?? null, at: now() };
-      resetWindow();
+      const live = observeLiveAgentForBoard(agent);
+      if (!live) return config;
+      const { board } = live;
+      if (board.supervisorAgent && board.supervisorAgent !== agent) resetBoard(board, "agent_replaced");
+      board.supervisorId = live.supId;
+      board.supervisorAgent = agent;
+      board.session = agent.session ?? null;
+      board.lastActivityAt = now();
+      board.lastProposedConfig = config ?? null;
+      board.snapshotStatus = "pending_observation";
+      board.pendingObservation = { agent, session: agent.session ?? null, config: config ?? null, at: now() };
+      resetWindow(board);
     } catch { /* 观察失败：不影响请求本身 */ }
     return config;
   });
 
-  // llm/stream：完整公共 options 的观察点；只读、先于 next() 记录（不改写请求）。
   onEvent("llm/stream", (options, next) => {
     try {
-      const pending = state.pendingObservation;
-      if (pending && typeof options === "object" && options !== null && !ownPingOptions.has(options)) {
-        const sameSession = pending.session?.id && options.sessionId === pending.session.id;
-        const agentsNow = getService("agents");
-        const liveExact = !agentsNow || typeof agentsNow.get !== "function" ? false : agentsNow.get(pending.session.id) === pending.agent;
-        if (!liveExact) {
-          state.snapshotStatus = "agent_replaced";
-          state.pendingObservation = null;
-        } else if (sameSession && sameConfig(pending.config, options)) {
-          const snap = pickLoopSnapshot(options);
-          if (snap) {
-            state.snapshot = {
-              ...snap,
-              route: pending.config ?? options,
-              sessionId: options.sessionId,
-              agent: pending.agent,
-              session: pending.session,
-              at: now(),
-              fingerprint: routeFingerprint(pending.config ?? options),
-            };
-            state.snapshotStatus = "ready";
-            state.pendingObservation = null;
-            state.lastLlmAt = now();
-            state.lastActivityAt = now();
+      if (options && typeof options === "object" && !ownPingOptions.has(options) && options.purpose === undefined) {
+        // 找到同 session 的 pending 观察（每 board 一份；并发主管间互不串）
+        for (const board of boards.values()) {
+          const pending = board.pendingObservation;
+          if (!pending || pending.session?.id === undefined || pending.session.id !== options.sessionId) continue;
+          const agentsNow = getService("agents");
+          const liveExact = !agentsNow || typeof agentsNow.get !== "function" ? false : agentsNow.get(pending.session.id) === pending.agent;
+          if (!liveExact) {
+            invalidateSnapshot(board, "agent_replaced", { resetWindow: false });
+            continue;
           }
-        } else if (sameSession) {
-          state.snapshotStatus = "route_changed";
+          // loop-built 请求是 deep-frozen（0.2.1-rc.2 公开契约：arrives deep-frozen）；
+          // 手搓辅助请求/本插件 ping 都不是冻结对象 ⇒ 不作为快照来源。
+          if (!Object.isFrozen(options)) continue;
+          if (!routeCompatible(pending.config, options)) {
+            const routeMismatch = !pending.config
+              || pending.config.provider !== options.provider
+              || pending.config.model !== options.model;
+            invalidateSnapshot(board, routeMismatch ? "route_changed" : "config_changed");
+            continue;
+          }
+          const route = resolvedRouteOf(options);
+          board.snapshot = {
+            provider: route.provider,
+            model: route.model,
+            messages: options.messages,
+            ...(options.system === undefined ? {} : { system: options.system }),
+            ...(options.tools === undefined ? {} : { tools: options.tools }),
+            ...(options.toolHistory === undefined ? {} : { toolHistory: options.toolHistory }),
+            sessionId: options.sessionId,
+            route,
+            agent: pending.agent,
+            session: pending.session,
+            at: now(),
+            fingerprint: routeFingerprint(route),
+          };
+          board.snapshotStatus = "ready";
+          board.pendingObservation = null;
+          board.lastLlmAt = now();
+          board.lastActivityAt = now();
+          break;
         }
       }
     } catch { /* 观察失败不影响请求 */ }
     return next();
   });
 
-  // agent/created：主管被创建/恢复/clear/compact ⇒ Agent 或 session 对象替换 ⇒ 旧快照失效。
   onEvent("agent/created", (payload) => {
     try {
       const agent = payload?.agent;
-      const sid = agent?.session?.id;
-      if (!sid) return;
-      const root = rootOfAgent(agent);
-      if (!root) return;
-      if (readSupervisorSession(root) !== sid) return;
-      const replaced = state.supervisorAgent && state.supervisorAgent !== agent;
-      state.root = root;
-      state.supervisorId = sid;
-      state.supervisorAgent = agent;
-      state.session = agent.session ?? null;
-      if (replaced) resetSupervisorState("agent_replaced");
-      else { state.snapshot = null; state.snapshotStatus = payload?.source === "startup" ? "no_snapshot" : "agent_replaced"; }
-      resetWindow();
+      const live = observeLiveAgentForBoard(agent);
+      if (!live) return;
+      const { board } = live;
+      const replaced = board.supervisorAgent && board.supervisorAgent !== agent;
+      board.supervisorId = live.supId;
+      board.supervisorAgent = agent;
+      board.session = agent.session ?? null;
+      if (replaced) resetBoard(board, "agent_replaced");
+      else if (board.snapshotStatus === "ready") {
+        // 同 Agent 的 clear/compact（agent/created source）：表面可能已被替换 ⇒ 失效并在途 abort。
+        invalidateSnapshot(board, payload?.source === "startup" ? "no_snapshot" : "agent_replaced");
+      } else if (payload?.source && payload.source !== "startup") {
+        invalidateSnapshot(board, "agent_replaced");
+      }
+      resetWindow(board);
     } catch { /* 忽略 */ }
   });
 
-  // agent/disposed：主管离开 live registry ⇒ 清空内存态并 abort 在途。
   onEvent("agent/disposed", (payload) => {
     try {
       const agent = payload?.agent;
       if (!agent) return;
-      if (state.supervisorAgent !== agent && state.supervisorId !== agent.session?.id) return;
-      state.supervisorAgent = null;
-      state.session = null;
-      resetSupervisorState("no_supervisor");
-      state.snapshotStatus = "no_supervisor";
-    } catch { /* 忽略 */ }
-  });
-
-  // agent/status：主管转 running = 一次真实活动（缓存被刷新、窗口重置）。
-  onEvent("agent/status", (payload) => {
-    try {
-      const agent = payload?.agent;
-      if (!agent || state.supervisorAgent !== agent) return;
-      if (payload?.status === "running") {
-        state.lastActivityAt = now();
-        resetWindow();
-        // 维护/请求在途时，人类或子回报唤醒必须尽快让出（只 abort 本插件控制器）
-        abortInflight("keepalive-activity");
+      for (const board of boards.values()) {
+        if (board.supervisorAgent !== agent && board.supervisorId !== agent.session?.id) continue;
+        board.supervisorAgent = null;
+        board.session = null;
+        resetBoard(board, "no_supervisor");
+        board.snapshotStatus = "no_supervisor";
       }
     } catch { /* 忽略 */ }
   });
 
-  // agent/inbox/inserted：人类输入与子回报都在这里最早可见（不读消息正文）。
+  onEvent("agent/status", (payload) => {
+    try {
+      const agent = payload?.agent;
+      const board = boardOfAgent(agent);
+      if (!board || board.supervisorAgent !== agent) return;
+      if (payload?.status === "running") {
+        board.lastActivityAt = now();
+        resetWindow(board);
+        abortInflight(board, "keepalive-activity");
+      }
+    } catch { /* 忽略 */ }
+  });
+
   onEvent("agent/inbox/inserted", (payload) => {
     try {
       const agent = payload?.agent;
-      if (!agent || state.supervisorAgent !== agent) return;
-      state.lastActivityAt = now();
+      const board = boardOfAgent(agent);
+      if (!board || board.supervisorAgent !== agent) return;
+      board.lastActivityAt = now();
       const source = payload?.message?.source;
-      if (source && typeof source === "object" && source.kind === "user") state.lastHumanAt = now();
-      resetWindow();
-      abortInflight("keepalive-input");
+      if (source && typeof source === "object" && source.kind === "user") board.lastHumanAt = now();
+      resetWindow(board);
+      abortInflight(board, "keepalive-input");
+    } catch { /* 忽略 */ }
+  });
+
+  // 同 Agent 的 compaction/clear/surface 替换：会话可见表面被替换 ⇒ 旧前缀快照失效。
+  onEvent("session/event", (session, event) => {
+    try {
+      // cordis 事件按位置参数派发：'session/event'(session, event)（不是单个 payload 对象）。
+      if (!session?.id) return;
+      const board = [...boards.values()].find((b) => b.supervisorId === session.id || b.session === session);
+      if (!board) return;
+      const surfaceOp = event?.surfaceOp;
+      const isReplacement = !!surfaceOp && typeof surfaceOp === "object" && surfaceOp.op === "replace";
+      const isCompactionOrClear = typeof event?.type === "string" && /(compact|clear)/i.test(event.type);
+      if (isReplacement || isCompactionOrClear) invalidateSnapshot(board, "surface_replaced");
     } catch { /* 忽略 */ }
   });
 
   const start = () => {
-    if (started || state.disposed) return;
+    if (started || disposed) return;
     started = true;
-    if (!state.supervisorAgent) {
-      // 首次自举：不要求启动时就有 supervisorId；每次 sweep 从 project.yaml 重新解析。
-      const root = rootForSweep();
-      if (root) state.root = root;
-    }
+    ensureDefaultBoard();
     try {
       timer = setIntervalFn(() => { void sweep(); }, sweepMs);
       timer?.unref?.();
     } catch { timer = null; /* 无定时器能力 ⇒ 只能手工 sweep（如实降级） */ }
-    // 冷启动/晚到服务：先扫一次（不等第一个周期）。
     void sweep();
   };
 
   const dispose = () => {
-    if (state.disposed) return;
-    state.generation += 1;
-    state.disposed = true;
-    state.snapshotStatus = "disposed";
-    abortInflight("keepalive-dispose");
+    if (disposed) return;
+    generation += 1;
+    disposed = true;
+    for (const board of boards.values()) {
+      abortInflight(board, "keepalive-dispose");
+      board.snapshot = null;
+      board.pendingObservation = null;
+      board.snapshotStatus = "disposed";
+      board.lastDecision = null;
+      board.lastReason = "disabled_by_config";
+      board.inflight = false;
+      board.controller = null;
+    }
     if (timer !== null) { try { clearIntervalFn(timer); } catch { /* 忽略 */ } timer = null; }
     for (const off of offs.splice(0)) { try { off?.(); } catch { /* 忽略 */ } }
-    state.snapshot = null;
-    state.pendingObservation = null;
-    state.lastDecision = null;
-    state.lastReason = "disabled_by_config";
-    state.inflight = false;
-    state.controller = null;
   };
 
-  /** 只读状态投影（REST/`graph_get_settings`/GUI 消费；不抛错、不含正文）。 */
   const statusFor = (rootArg) => {
-    let root = rootArg ?? state.root ?? null;
-    if (!root) { try { root = rootForSweep(); } catch { root = null; } }
+    const requested = rootArg ? normalizeRoot(rootArg) : defaultRoot();
+    let board = requested ? boards.get(requested) ?? null : null;
+    if (!board && requested) board = boardForRoot(requested);
+    if (!board) board = boards.values().next().value ?? null;
     let cfg = null;
     let globalState = { enabled: null, malformed: false, available: false, raw: "" };
     let resolution = keepAliveResolutionOf(null, null, false, false);
-    if (root) {
+    let configError = false;
+    if (disposed) {
+      configError = true;
+      resolution = { enabled: false, project_mode: "inherit", global_enabled: null, source: "project_invalid", malformed: true };
+    } else if (board) {
       try {
-        cfg = readProjectConfig(root);
+        cfg = readProjectConfigFn(board.root);
         globalState = readGlobal() ?? globalState;
         resolution = keepAliveResolutionOf(
           cfg?.supervisor,
@@ -1399,53 +1494,74 @@ export function createKeepAliveRuntime(options = {}) {
           globalState.malformed === true,
           globalState.available !== false,
         );
-      } catch { /* 读失败 ⇒ 保持默认投影（enabled=false 由 resolution 默认给出？见下） */ }
+      } catch {
+        // 读配置异常 ⇒ fail-closed：绝不投影 effective=true / 虚假可用。
+        configError = true;
+        resolution = { enabled: false, project_mode: "inherit", global_enabled: null, source: "project_invalid", malformed: true };
+      }
     }
-    if (!root) {
-      // 无 workspace：明确按不可用投影（绝不显示虚假开启/成功）
-      resolution = { enabled: false, project_mode: "inherit", global_enabled: null, source: "global_default", malformed: false };
+    if (!requested) {
+      resolution = { enabled: false, project_mode: "inherit", global_enabled: null, source: "project_invalid", malformed: true };
+      configError = true;
     }
-    const agent = state.supervisorAgent;
-    const snapProblem = root || agent ? snapshotProblem(agent) : "no_supervisor";
-    const channel = resolveKeepAliveChannel(
+    const agent = board?.supervisorAgent ?? null;
+    const snapProblem = board ? snapshotProblemForBoard(board, agent) : "no_supervisor";
+    const llm = getService("llm");
+    const agents = getService("agents");
+    let channel = resolveKeepAliveChannel(
       {
-        llm: !!(getService("llm") && typeof getService("llm").prepareCall === "function"),
-        agents: !!(getService("agents") && typeof getService("agents").isOwnedBy === "function"),
+        llm: !!(llm && typeof llm.prepareCall === "function"),
+        agents: !!(agents && typeof agents.isOwnedBy === "function"),
         status: !!agent && (agent.status === "idle" || agent.status === "running"),
         maintenance: !!agent && typeof agent.runMaintenance === "function",
         snapshot: snapProblem === null,
       },
       null,
     );
-    const decision = state.lastDecision;
+    if (configError) {
+      channel = { ...channel, channel: "none", reason: "missing_capability", exempt: false, missing: [...channel.missing, disposed ? "plugin.disposed" : "project.config"] };
+    }
+    const decision = board?.lastDecision;
     return keepAliveStatusProjection({
       resolution,
       projectMalformed: cfg?.supervisor?.keep_alive_malformed === true,
       globalRaw: globalState.raw ?? "",
       globalMalformed: globalState.malformed === true,
       globalAvailable: globalState.available !== false,
+      configError,
       channel,
       active: {
-        phase: state.afk ? "afk" : (decision?.phase ?? "disabled"),
-        reason: state.lastReason,
-        afk: state.afk,
-        pings_in_window: state.pingsInWindow,
-        stage2_used: state.stage2Used,
-        inflight: state.inflight,
-        supervisor_session: state.supervisorId,
+        phase: board?.afk ? "afk" : (decision?.phase ?? "disabled"),
+        reason: board?.lastReason ?? "disabled_by_config",
+        afk: board?.afk === true,
+        pings_in_window: board?.pingsInWindow ?? 0,
+        stage2_used: board?.stage2Used === true,
+        inflight: board?.inflight === true,
+        supervisor_session: board?.supervisorId ?? null,
         children_running: agent ? sampleRunningChildren(agent) : null,
         idle: agent ? sampleIdle(agent) : null,
         snapshot: snapProblem === null ? "ready" : snapProblem,
-        last_llm_at: state.lastLlmAt,
-        last_ping_at: state.lastPingAt,
-        last_activity_at: state.lastActivityAt,
-        last_attempt: state.lastAttempt,
-        seq: state.seq,
+        last_llm_at: board?.lastLlmAt ?? null,
+        last_ping_at: board?.lastPingAt ?? null,
+        last_activity_at: board?.lastActivityAt ?? null,
+        last_attempt: board?.lastAttempt ?? null,
+        seq: board?.seq ?? 0,
       },
     });
   };
 
-  return { start, dispose, sweep, statusFor, state, snapshotProblem };
+  return {
+    start,
+    dispose,
+    sweep,
+    statusFor,
+    snapshotProblem,
+    stateFor: (root) => boards.get(normalizeRoot(root)) ?? null,
+    stateOf: (agent) => boardOfAgent(agent),
+    states: () => [...boards.values()],
+    rootOfAgent,
+    get state() { return ensureDefaultBoard() ?? boards.values().next().value ?? null; },
+  };
 }
 
 const text = (s) => [{ type: "text", text: s }];
@@ -1550,8 +1666,9 @@ function coerceLegacyGraphSettings(section) {
       continue;
     }
     if (key === "promptLanguage" && !["follow", "zh", "en"].includes(value)) continue;
-    // g-505：旧节的三态全局开关只迁移**合法值**（畸形值不猜测、不复活）。
-    if (key === "supervisorKeepAlive" && !["on", "off"].includes(value)) continue;
+    // g-505：`supervisorKeepAlive` 是本版新字段，不属于旧节迁移范围 —— 当前全局值只认
+    // 公开 settings 条目的显式值/当前 settings.yaml，绝不让迁移遗留（含 `.imported`）复活它。
+    if (key === "supervisorKeepAlive") continue;
     out[key] = value;
   }
   return Object.keys(out).length ? out : null;
@@ -3162,22 +3279,23 @@ export function apply(ctx, config) {
     try { profile = typeof ctx.get === "function" ? ctx.get("profileContext") : null; } catch { profile = null; }
     const home = typeof profile?.home === "string" && profile.home ? profile.home : null;
     if (!home) return { present: false, raw: undefined };
-    let best = null;
-    for (const fileName of ["settings.yaml", "settings.yaml.imported"]) {
-      const file = join(home, fileName);
-      let st = null;
-      try { st = statSync(file); } catch { continue; }
-      if (!st?.isFile()) continue;
-      if (!best || st.mtimeMs > best.mtimeMs) best = { file, mtimeMs: st.mtimeMs };
-    }
-    if (!best) return { present: false, raw: undefined };
+    // 只读**当前** settings.yaml：`settings.yaml.imported` 是宿主迁移遗留的只读快照，
+    // 不是当前配置链的真源，绝不能用它覆盖现设置（review B 额外项）。
+    const file = join(home, "settings.yaml");
+    let stat = null;
+    try { stat = statSync(file); } catch { return { present: false, raw: undefined }; }
+    if (!stat?.isFile()) return { present: false, raw: undefined };
+    const best = { file, mtimeMs: stat.mtimeMs };
     if (rawGlobalKeepAliveCache.file === best.file && rawGlobalKeepAliveCache.at === best.mtimeMs) {
       return rawGlobalKeepAliveCache.value;
     }
     let result = { present: false, raw: undefined };
     try {
       const doc = parseYaml(readFileSync(best.file, "utf8"));
-      const section = doc && typeof doc === "object" ? (doc[GRAPH_SETTINGS_ENTRY_ID] ?? doc[GRAPH_SETTINGS_NS]) : null;
+      // 当前宿主条目 id 存在时只认它；只有文件里没有该条目（旧线）才回看历史 namespace，
+      // 避免把旧节残留当成现真源（review 额外项）。
+      const hasEntry = !!doc && typeof doc === "object" && Object.hasOwn(doc, GRAPH_SETTINGS_ENTRY_ID);
+      const section = hasEntry ? doc[GRAPH_SETTINGS_ENTRY_ID] : (doc && typeof doc === "object" ? doc[GRAPH_SETTINGS_NS] : null);
       if (section && typeof section === "object" && Object.hasOwn(section, "supervisorKeepAlive")) {
         result = { present: true, raw: section.supervisorKeepAlive };
       }
@@ -3199,14 +3317,17 @@ export function apply(ctx, config) {
     try { cooked = readGraphSettings().supervisorKeepAlive ?? ""; } catch { cooked = ""; }
     const fromSettings = resolveKeepAliveGlobalRaw(cooked);
     const rawFile = readRawGlobalKeepAliveFromProfile();
-    // 原始文件里的畸形值优先（settings 服务可能已把非法值回落成默认，不能因此丢掉坏值事实）。
+    // 公开 settings 服务返回**显式合法值**时它是实际配置链的最新真源（内存值可能领先落盘）；
+    // 只有它「未配置/畸形」时才看当前 settings.yaml 的 raw 值（检出宿主 schema 回落前的坏值）。
+    // 不读 `.imported`（迁移遗留快照），也不让旧节迁移影响本字段（见 coerceLegacyGraphSettings）。
+    if (fromSettings.enabled !== null && !fromSettings.malformed) {
+      return { enabled: fromSettings.enabled, malformed: false, available: true, raw: fromSettings.raw };
+    }
     if (rawFile.present) {
       const fromRaw = resolveKeepAliveGlobalRaw(rawFile.raw);
       if (fromRaw.malformed) {
         return { enabled: null, malformed: true, available: true, raw: fromRaw.raw };
       }
-      // settings 服务返回**显式合法值**时以它为准（内存值最新，落盘可能滞后）；
-      // 仅当它「未配置/畸形」时才用原始文件补位（覆盖宿主回落默认导致的「看不到显式值」）。
       if (fromSettings.enabled === null || fromSettings.malformed) {
         return { enabled: fromRaw.enabled, malformed: false, available: true, raw: fromRaw.raw };
       }

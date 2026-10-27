@@ -609,7 +609,9 @@ export type KeepAliveSnapshotUnavailable =
   | "agent_replaced" // supervisor Agent 对象被替换（clear/compact/resume）
   | "session_replaced" // session 对象被替换
   | "route_changed" // 观察到的 route 与当前已知选择不一致
-  | "config_changed" // 模型/工具/提示词指纹变化
+  | "config_changed" // 显式控制项/指纹变化
+  | "surface_replaced" // 会话模型可见表面被替换（compaction/clear 等）
+  | "config_unavailable" // 项目配置读不到（fail-closed，绝不显示 enabled）
   | "generation_changed" // 插件卸载/重载代际变化
   | "disposed"; // 已卸载
 
@@ -626,6 +628,8 @@ export interface KeepAliveStatusProjection {
     global_raw: string;
     global_malformed: boolean;
     global_available: boolean;
+    /** 项目配置读取失败（fail-closed：此时 effective 必须为 false，capable.missing 含 project.config）。 */
+    config_error: boolean;
   };
   effective: KeepAliveEffectiveProjection;
   capable: {
@@ -664,6 +668,7 @@ export function keepAliveStatusProjection(args: {
   globalRaw: string;
   globalMalformed: boolean;
   globalAvailable: boolean;
+  configError?: boolean;
   channel: KeepAliveChannelDecision;
   active: KeepAliveStatusProjection["active"];
 }): KeepAliveStatusProjection {
@@ -675,6 +680,7 @@ export function keepAliveStatusProjection(args: {
       global_raw: args.globalRaw,
       global_malformed: args.globalMalformed,
       global_available: args.globalAvailable,
+      config_error: args.configError === true,
     },
     effective: {
       mode: resolution.project_mode,
