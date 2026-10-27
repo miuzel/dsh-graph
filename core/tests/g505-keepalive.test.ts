@@ -25,9 +25,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { join, dirname, basename, relative, resolve, isAbsolute } from "node:path";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import {
@@ -66,6 +66,70 @@ function makeBoard(projectYaml = ""): string {
 test.after(() => {
   for (const root of TMP_ROOTS.splice(0)) { try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ } }
 });
+
+/**
+ * 测试隔离纪律：所有临时目录必须在**本专属 worktree** 的 canonical `process.cwd()/tmp` 下，
+ * 不依赖调用方恰好设置 TMPDIR。目录/清理都做显式归属校验，拒绝空值、越界、软链绕行。
+ */
+function workspaceTmpRoot(): string {
+  const lexical = resolve(process.cwd(), "tmp");
+  try {
+    const st = lstatSync(lexical);
+    if (st.isSymbolicLink()) throw new Error(`workspace tmp 不得是软链：${lexical}`);
+    if (!st.isDirectory()) throw new Error(`workspace tmp 已存在但不是目录：${lexical}`);
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") throw e;
+    mkdirSync(lexical, { recursive: true });
+    const st = lstatSync(lexical);
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`workspace tmp 目录不可用：${lexical}`);
+  }
+  const real = realpathSync(lexical);
+  if (real !== lexical) throw new Error(`workspace tmp realpath 与 lexical 不一致（疑似软链）：${lexical} -> ${real}`);
+  return real;
+}
+
+/** 在 workspace tmp 下创建本测试独占的私有 repo 目录（唯一、可校验归属）。 */
+function makeOwnedTmpDir(prefix: string): string {
+  const tmp = workspaceTmpRoot();
+  const dir = mkdtempSync(join(tmp, prefix));
+  const rel = relative(tmp, dir);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`mkdtemp 越界：${dir}`);
+  if (realpathSync(dirname(dir)) !== tmp) throw new Error(`私有夹具父目录不是 workspace tmp：${dir}`);
+  const st = lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`私有夹具不是目录：${dir}`);
+  return dir;
+}
+
+/** 只删除本测试 mkdtemp 直返且已校验位于 workspace tmp 内的目录。 */
+function removeOwnedTmpDir(dir: string): void {
+  if (!dir || !isAbsolute(dir)) throw new Error(`拒绝清理非绝对/空路径：${dir}`);
+  const tmp = workspaceTmpRoot();
+  const target = resolve(dir);
+  const rel = relative(tmp, target);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`拒绝清理 workspace tmp 之外的路径：${target}`);
+  if (!basename(target).startsWith("g505v3-git-")) throw new Error(`拒绝清理非本测试前缀的路径：${target}`);
+  if (realpathSync(dirname(target)) !== tmp) throw new Error(`拒绝清理父目录不是 workspace tmp 的路径：${target}`);
+  const st = lstatSync(target);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`拒绝清理非目录/软链：${target}`);
+  rmSync(target, { recursive: true, force: true });
+}
+
+/** 主工作树隔离快照：worktree list/status + main dist mtime/hash（用于证明夹具不触及主仓）。 */
+function mainTreeSnapshot() {
+  const list = execFileSync("git", ["-C", process.cwd(), "worktree", "list", "--porcelain"], { encoding: "utf8" });
+  const mainLine = list.split("\n").find((line) => line.startsWith("worktree "));
+  assert.ok(mainLine, "git worktree list 缺少主工作树");
+  const main = mainLine.slice("worktree ".length).trim();
+  const status = execFileSync("git", ["-C", main, "status", "--porcelain"], { encoding: "utf8" });
+  const index = join(main, "dist", "index.js");
+  const client = join(main, "dist", "lib", "client.js");
+  return {
+    list,
+    status,
+    distMtime: statSync(index).mtimeMs,
+    distHash: createHash("sha256").update(readFileSync(index)).update(readFileSync(client)).digest("hex"),
+  };
+}
 
 function fakeClock(start = 1_000_000) {
   let t = start;
@@ -1496,11 +1560,16 @@ test("B-ROOT 两 workspace + 真正 linked worktree：归属路径正确，配�
       assert.equal(runtime.stateFor(B.graphRoot).pingsInWindow, 0);
     } finally { runtime.dispose(); }
   }
-  // 真正 linked worktree：session.cwd 在 linked tree，归属主工作树 graph root
+  // 真正 linked worktree：session.cwd 在 linked tree，归属主工作树 graph root。
+  // 夹具严格落在本专属 worktree canonical tmp；并对主仓 worktree list/status/dist 做前后快照。
   {
-    const base = mkdtempSync(join(tmpdir(), "g505v3-git-"));
+    const beforeMain = mainTreeSnapshot();
+    const base = makeOwnedTmpDir("g505v3-git-");
+    assert.equal(dirname(base), workspaceTmpRoot(), "私有 repo 夹具必须在 canonical workspace tmp 下");
     const main = join(base, "main");
     const linked = join(base, "linked");
+    const previousTmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = workspaceTmpRoot(); // 额外保险；不是隔离实现本身的依赖
     try {
       mkdirSync(main, { recursive: true });
       execFileSync("git", ["-C", main, "init"], { stdio: "pipe" });
@@ -1533,8 +1602,13 @@ test("B-ROOT 两 workspace + 真正 linked worktree：归属路径正确，配�
         assert.equal(host.adapter.calls.length, 2);
       } finally { runtime.dispose(); }
     } finally {
-      rmSync(base, { recursive: true, force: true });
+      if (previousTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpdir;
+      removeOwnedTmpDir(base);
+      assert.equal(existsSync(base), false, "linked fixture 清理后不得残留私有仓目录");
     }
+    const afterMain = mainTreeSnapshot();
+    assert.deepEqual(afterMain, beforeMain, "私有 repo/linked worktree 夹具不得改变主仓 worktree list/status/dist");
   }
   _clearCanonicalRootCache();
 });
