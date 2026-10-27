@@ -20,9 +20,50 @@
 import ts from "typescript";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { posix } from "node:path";
 
 /** 静态目标编号：g- 后跟至少一位数字（大小写不敏感；`g-` 后必须有数字）。 */
 export const STATIC_GOAL_ID_RE = /\bg-\d+\b/i;
+
+/**
+ * **唯一路径规范化边界**：把「仓库根 + 任意文件路径」归一为仓库相对 POSIX 逻辑路径
+ * （白名单规则统一用 `/`）。跨平台确定性来源：
+ *   · 系统分隔符（`path.sep`，Windows 为 `\`）与历史上手工传入的 win32 反斜杠统一换成 `/`；
+ *   · `path.win32.relative('C:\\repo','C:\\repo\\core\\ops.ts')` 得到 `core\ops.ts` ⇒ 本函数得
+ *     `core/ops.ts`，于是 Win32 原生与 Linux 上命中同一套精确规则；
+ *   · 不同盘符 / 跨根（`..`）/ 仓库根本身 / 绝对结果一律返回 null（**绝不**靠子串或 basename 归属）；
+ *   · 规则匹配仍是 `files.includes(命中路径)` 全等，不做前缀/子串/大小写模糊。
+ * 说明：这是**路径 API 模拟**的确定性，不等于原生 Windows 全栈验证；除盘符大小写外按逻辑路径逐字比较。
+ *
+ * @param root 仓库根（绝对路径，POSIX 或 win32 形态均可）
+ * @param file 目标文件（绝对路径，POSIX 或 win32 形态均可）
+ * @returns 仓库相对 POSIX 路径；无法证明在仓库内时返回 null
+ */
+export function toRepoRelativePosix(root: string, file: string): string | null {
+  const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+  const rootNorm = normalize(root);
+  const fileNorm = normalize(file);
+  if (!rootNorm || !fileNorm) return null;
+
+  const driveOf = (value: string): string | null => {
+    const match = /^([A-Za-z]):\//.exec(value);
+    return match ? match[1].toLowerCase() : null;
+  };
+  const rootDrive = driveOf(rootNorm);
+  const fileDrive = driveOf(fileNorm);
+  if (rootDrive !== null || fileDrive !== null) {
+    // 任一侧带盘符时必须两侧同盘（不同盘绝不归属同一仓库）。
+    if (rootDrive === null || fileDrive === null || rootDrive !== fileDrive) return null;
+  }
+  const isAbsolute = (value: string) => value.startsWith("/") || /^[A-Za-z]:\//.test(value);
+  if (isAbsolute(rootNorm) !== isAbsolute(fileNorm)) return null;
+
+  const rel = posix.relative(rootNorm, fileNorm);
+  if (!rel || rel === ".") return null;
+  if (isAbsolute(rel) || /^[A-Za-z]:\//.test(rel)) return null;
+  if (rel.split("/").some((segment) => segment === "..")) return null;
+  return rel.startsWith("./") ? rel.slice(2) : rel;
+}
 
 /** 变量声明作用域：源文件顶层 / 客户端 bundle 的外层 factory 直接函数体 / 其它函数体。 */
 export type DeclarationScope = "top-level" | "factory-body" | "function-body";

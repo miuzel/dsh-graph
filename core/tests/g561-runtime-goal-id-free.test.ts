@@ -20,7 +20,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, win32 } from "node:path";
 import {
   STATIC_GOAL_ID_RE,
   OUTPUT_SINK_RE,
@@ -29,6 +29,7 @@ import {
   matchesAllowed,
   partitionGoalIdHits,
   formatGoalIdHit,
+  toRepoRelativePosix,
   type AllowedGoalIdLiteral,
   type GoalIdLiteralHit,
 } from "./_runtime-goal-id-scan.ts";
@@ -84,7 +85,11 @@ function filesIn(relDir: string, suffix: string): string[] {
 }
 
 function displayPath(file: string): string {
-  return relative(ROOT, file);
+  // 唯一规范化边界：所有扫描命中都用「仓库相对 POSIX 逻辑路径」，与白名单的 `/` 规则同口径。
+  // 绝不在规则侧做反斜杠/子串兜底 —— 无法证明在仓库内（跨盘/跨根/..）时直接拒绝归属。
+  const normalized = toRepoRelativePosix(ROOT, file);
+  assert.ok(normalized, `无法把 ${file} 归一到仓库相对 POSIX 路径（拒绝模糊归属）`);
+  return normalized;
 }
 
 function scanAll(files: string[]): GoalIdLiteralHit[] {
@@ -303,5 +308,47 @@ test("g-561 S7：静态可求值拼接必判红，动态拼接不误拦（并声
     for (const hit of hits) assert.equal(hit.text, "g-507", "折叠后的完整值必须是 g-507");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("g-561 S8：跨平台 displayPath 归一化 —— win32 反斜杠命中 POSIX 精确规则，错误路径不归属", () => {
+  // ① 实际 win32 路径 API 锚点：Windows 原生 relative 返回反斜杠（这正是此前跨平台假红的来源）。
+  assert.equal(win32.relative("C:\\repo", "C:\\repo\\core\\ops.ts"), "core\\ops.ts", "win32.relative 原生返回反斜杠");
+  // ② 唯一规范化边界：同一输入变成仓库相对 POSIX 逻辑路径（白名单规则一律用 `/`）。
+  assert.equal(toRepoRelativePosix("C:\\repo", "C:\\repo\\core\\ops.ts"), "core/ops.ts");
+  assert.equal(toRepoRelativePosix("C:\\repo", "C:/repo/core/ops.ts"), "core/ops.ts", "混合分隔符同样归一");
+  assert.equal(toRepoRelativePosix("C:\\repo\\", "C:\\repo\\core\\ops.ts"), "core/ops.ts", "尾部分隔符不影响");
+  // ③ 用 win 派生 displayPath 扫描真实 ops.ts ⇒ 必须命中「受管小节」的精确规则（file/hash/sink/scope 全等）。
+  const goalRule = ALLOWED.find((rule) => rule.functionScope === "renderRelationSection");
+  assert.ok(goalRule, "受管小节白名单规则必须存在");
+  const winDisplay = toRepoRelativePosix("C:\\repo", "C:\\repo\\core\\ops.ts");
+  assert.equal(winDisplay, "core/ops.ts");
+  const winHits = scanGoalIdLiterals(join(ROOT, "core", "ops.ts"), winDisplay!);
+  assert.ok(winHits.some((hit) => matchesAllowed(hit, goalRule!)), "win32 反斜杠归一后必须命中预期精确规则");
+  // ④ 错误文件/目录/同 basename 不得归属：规则匹配是 files.includes 全等，不是前缀/子串/basename。
+  const wrongDir = toRepoRelativePosix("C:\\repo", "C:\\repo\\other\\core\\ops.ts");
+  assert.equal(wrongDir, "other/core/ops.ts");
+  const sameBasename = toRepoRelativePosix("C:\\repo", "C:\\repo\\vendor\\ops.ts");
+  assert.equal(sameBasename, "vendor/ops.ts");
+  const directory = toRepoRelativePosix("C:\\repo", "C:\\repo\\core");
+  assert.equal(directory, "core");
+  for (const candidate of [wrongDir, sameBasename, directory]) {
+    assert.ok(candidate, "候选路径本身可归一");
+    assert.equal(ALLOWED.some((rule) => rule.files.includes(candidate!)), false, `错误路径不得命中任何精确规则：${candidate}`);
+    assert.equal(winHits.some((hit) => matchesAllowed(hit, { ...goalRule!, files: [candidate!] })), false,
+      `同 basename/错误目录不得冒充精确文件：${candidate}`);
+  }
+  // ⑤ 跨根 / 跨盘 / 仓库根本身 一律拒绝归属（返回 null，绝不靠子串兜底）。
+  assert.equal(toRepoRelativePosix("C:\\repo", "C:\\repo2\\core\\ops.ts"), null, "跨根（..）不得归属");
+  assert.equal(toRepoRelativePosix("C:\\repo", "D:\\core\\ops.ts"), null, "跨盘不得归属");
+  assert.equal(toRepoRelativePosix("C:\\repo", "C:\\repo"), null, "仓库根本身不是文件");
+  // ⑥ 当前 Linux/POSIX 环境不回归：源与 dist 的真实路径归一结果与既有规则逐字一致。
+  assert.equal(toRepoRelativePosix(ROOT, join(ROOT, "core", "ops.ts")), "core/ops.ts");
+  assert.equal(toRepoRelativePosix(ROOT, join(ROOT, "dist", "core", "ops.js")), "dist/core/ops.js");
+  assert.equal(toRepoRelativePosix(ROOT, join(ROOT, "dsh-graph-host", "lib", "client", "constants.js")),
+    "dsh-graph-host/lib/client/constants.js");
+  // ⑦ 规则表本身只允许 POSIX 逻辑路径（防止未来有人把反斜杠写进白名单形成模糊匹配）。
+  for (const rule of ALLOWED) {
+    for (const file of rule.files) assert.doesNotMatch(file, /\\/, `白名单文件必须是 POSIX 逻辑路径：${file}`);
   }
 });
