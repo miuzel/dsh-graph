@@ -160,7 +160,7 @@ import {
   type ReviewPolicy,
 } from "./review-policy.ts";
 // g-505：主管上下文缓存保活的配置解析（两级三态）与只读投影（纯函数模块 keepalive.ts）。
-import { normalizeKeepAliveMode, isKeepAliveModeMalformed, type KeepAliveMode } from "./keepalive.ts";
+import { KEEP_ALIVE_EXEMPT_TTL_MS, normalizeKeepAliveMode, isKeepAliveModeMalformed, type KeepAliveMode } from "./keepalive.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
 export {
@@ -1755,6 +1755,17 @@ export interface ProjectConfig {
      */
     keep_alive?: KeepAliveMode | null;
     /**
+     * g-505 B5：**显式可信长 TTL**（可选，默认 null = 未知 ⇒ 短缓存有界策略）。
+     * 只接受同时给出完整 provider+model+ttl_ms 的条目；ttl_ms 必须 ≥
+     * `KEEP_ALIVE_EXEMPT_TTL_MS` 且 ≤ 24h。只有与**当前观察到的正常 loop route** 精确匹配时才豁免；
+     * 绝不按 provider/model 名字猜。
+     */
+    keep_alive_ttl?: { provider: string; model: string; ttl_ms: number } | null;
+    /** 读侧元信息：keep_alive_ttl 存在但形态非法（按未知 TTL 处理，不豁免）。 */
+    keep_alive_ttl_malformed?: boolean;
+    /** 读侧元信息：非法条目的 JSON 安全投影（仅展示）。 */
+    keep_alive_ttl_raw?: unknown;
+    /**
      * g-505 **仅读侧元信息**（写侧 schema 明确拒绝）：`supervisor.keep_alive` 原始值存在但
      * 无法判定为三态之一。宿主与调度器据此 **fail-closed 按关闭处理**，绝不把坏值归一
      * `inherit` 后默认启用。
@@ -2091,7 +2102,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     return {
       executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
-      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false },
       prompt_overrides: { subagent: { state: "default", value: null } },
       // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
       modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
@@ -2249,6 +2260,42 @@ export function readProjectConfig(root: string): ProjectConfig {
   };
   const keepAliveConfig = keepAliveRead();
 
+  /**
+   * g-505 B5：`supervisor.keep_alive_ttl` 的读侧装配（可选显式可信长 TTL）。
+   * 只认完整 `{provider, model, ttl_ms}` 映射；provider/model 非空字符串（≤128），
+   * ttl_ms 为 [KEEP_ALIVE_EXEMPT_TTL_MS, 24h] 的整数。缺失/null ⇒ null（未知）。
+   * 形态非法 ⇒ `keep_alive_ttl_malformed=true` + safe raw，但**不**关闭保活（回落未知 TTL 策略）。
+   */
+  const keepAliveTtlRead = (): Pick<ProjectConfig["supervisor"], "keep_alive_ttl" | "keep_alive_ttl_malformed" | "keep_alive_ttl_raw"> => {
+    if (documentMalformed) return { keep_alive_ttl: null, keep_alive_ttl_malformed: true, keep_alive_ttl_raw: null };
+    let raw: unknown;
+    let present = false;
+    if (isPlainObject(parsedDoc) && "supervisor" in parsedDoc) {
+      const sv = (parsedDoc as any).supervisor;
+      if (isPlainObject(sv) && "keep_alive_ttl" in sv) { raw = sv.keep_alive_ttl; present = true; }
+    }
+    if (!present || raw === null || raw === undefined) return { keep_alive_ttl: null, keep_alive_ttl_malformed: false };
+    const malformed = (safeRaw: unknown = raw) => {
+      let safe: unknown = null;
+      try { safe = JSON.parse(JSON.stringify(safeRaw)); } catch { safe = null; }
+      return { keep_alive_ttl: null, keep_alive_ttl_malformed: true, keep_alive_ttl_raw: safe };
+    };
+    if (!isPlainObject(raw)) return malformed();
+    const keys = Object.keys(raw);
+    if (keys.some((k) => !["provider", "model", "ttl_ms"].includes(k))) return malformed();
+    const provider = raw.provider;
+    const model = raw.model;
+    const ttl = raw.ttl_ms;
+    if (typeof provider !== "string" || provider.trim() === "" || provider.length > 128) return malformed();
+    if (typeof model !== "string" || model.trim() === "" || model.length > 128) return malformed();
+    if (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < KEEP_ALIVE_EXEMPT_TTL_MS || ttl > 86_400_000) return malformed();
+    return {
+      keep_alive_ttl: { provider: provider.trim(), model: model.trim(), ttl_ms: ttl },
+      keep_alive_ttl_malformed: false,
+    };
+  };
+  const keepAliveTtlConfig = keepAliveTtlRead();
+
   // 读侧元信息：逐字段标注「存在但不可用」的原因（指向 project.yaml），绝不把内部哨兵当配置条目暴露。
   const invalidFields: Record<string, string> = {};
   if (documentMalformed) {
@@ -2299,7 +2346,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
     },
-    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]), ...keepAliveConfig },
+    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]), ...keepAliveConfig, ...keepAliveTtlConfig },
     // g-480：五个模块开关（真布尔或 null=未配置）；旧键 `memory.tools_enabled` 只作为 **memory 模块
     // 的读侧默认**保留一次，并在 `modules.memory` 落盘时被删除（见 writeProjectConfig）⇒ 同一时刻
     // 只有一个生效真源，且旧值不会被静默丢弃（判据 5）。
@@ -2702,6 +2749,28 @@ function deleteScalarChild(lines: string[], parentPath: string[], childKey: stri
   return true;
 }
 
+/** 删除 `parentPath.key` 的整个行级块（key 行 + 其缩进子块）。仅支持单层父块。 */
+function deleteMappingChild(lines: string[], parentPath: string[], key: string): boolean {
+  if (parentPath.length !== 1) return false;
+  const head = findKeyLine(lines, parentPath[0], 0, 0, lines.length);
+  if (head < 0) return false;
+  const after = lines[head].slice(lineIndent(lines[head]) + parentPath[0].length + 1);
+  if (splitValueComment(after).value.trim() !== "") return false;
+  const indent = lineIndent(lines[head]);
+  const childIdx = findKeyLine(lines, key, indent + 2, head + 1, blockChildrenEnd(lines, head, indent));
+  if (childIdx < 0) return false;
+  const childIndent = lineIndent(lines[childIdx]);
+  let end = childIdx + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (line.trim() === "") { end += 1; continue; }
+    if (lineIndent(line) <= childIndent) break;
+    end += 1;
+  }
+  lines.splice(childIdx, end - childIdx);
+  return true;
+}
+
 export function writeProjectConfig(root: string, patch: any, actor: string): void {
   // g-207：schema 严格校验（拒绝未知字段、类型不匹配、隐式 coercion）
   const schemaResult = validateSchema(patch, settingsPostSchema);
@@ -2758,6 +2827,17 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
       deleteScalarChild(lines, ["supervisor"], "keep_alive");
     } else {
       setScalar(["supervisor", "keep_alive"], mode);
+    }
+  }
+  // g-505 B5：显式可信长 TTL 条目（完整 provider+model+ttl_ms）。null/缺省 ⇒ 删除整块（未知）。
+  if (patch.supervisor && "keep_alive_ttl" in patch.supervisor) {
+    const ttl = patch.supervisor.keep_alive_ttl;
+    if (!ttl) {
+      deleteMappingChild(lines, ["supervisor"], "keep_alive_ttl");
+    } else {
+      setScalar(["supervisor", "keep_alive_ttl", "provider"], ttl.provider);
+      setScalar(["supervisor", "keep_alive_ttl", "model"], ttl.model);
+      setScalar(["supervisor", "keep_alive_ttl", "ttl_ms"], String(ttl.ttl_ms));
     }
   }
   if (patch.prompt_overrides) {

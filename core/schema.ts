@@ -428,6 +428,19 @@ export const projectConfigPatchSchema: ObjectSchema = {
         // KEEP_ALIVE_MODES 同源真源）。null = 未配置 = inherit（跟随全局）。
         // 拒绝 "true"/1 之类隐式形态——三态是显式契约，不接受猜。
         keep_alive: { type: "string", enum: ["inherit", "true", "false"], nullable: true },
+        // g-505 B5：显式可信长 TTL（完整 provider+model+ttl_ms；默认 null=未知）。
+        // ttl_ms 下限 = 豁免阈值（600000ms），上限 24h；不按名字推断，必须显式配置。
+        keep_alive_ttl: {
+          type: "object",
+          properties: {
+            provider: { type: "string", minLength: 1, maxLength: 128 },
+            model: { type: "string", minLength: 1, maxLength: 128 },
+            ttl_ms: { type: "integer", minimum: 600000, maximum: 86400000 },
+          },
+          required: ["provider", "model", "ttl_ms"],
+          additionalProperties: false,
+          nullable: true,
+        },
       },
       additionalProperties: false,
     },

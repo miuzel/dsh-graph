@@ -1295,6 +1295,17 @@
                         ? dgT("settings.keepAliveTtlUnknown")
                         : dgT("settings.keepAliveCapability").replace("{v}", status.capable.channel))
                   : null,
+                // B5：显式可信长 TTL 的来源/匹配状态必须与 REST 同源显示（默认未知，不按名字猜）。
+                status?.configured?.route_ttl
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.keepAliveTtlExplicit")
+                        .replace("{route}", `${status.configured.route_ttl.provider}/${status.configured.route_ttl.model}`)
+                        .replace("{v}", String(status.configured.route_ttl.ttl_ms))
+                        + " · " + dgT(status.configured.route_ttl_matched ? "settings.keepAliveTtlMatched" : "settings.keepAliveTtlUnmatched"))
+                  : null,
+                status?.configured?.route_ttl_malformed
+                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT("settings.keepAliveTtlMalformed"))
+                  : null,
                 unavailable
                   ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
                       dgT("settings.keepAliveCapability").replace("{v}", dgT("settings.keepAliveUnavailable"))

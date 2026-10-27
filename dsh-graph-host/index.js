@@ -661,7 +661,9 @@ export async function startSubagentCompat(subagents, spec) {
 //   · `lastHumanAt`：`agent/inbox/inserted` 中 `source.kind === "user"` 的消息（人类交互）。
 //
 // 有界与仲裁：
-//   · 定时器周期 = 阶段一阈值的一半（粗粒度轮询）；单次 sweep 绝不并发（in-flight guard）。
+//   · 每个 board 有**独立真实 deadline timer**（阶段一 210s/阶段二 240s 精确唤醒）；配置变化检测
+//     上界 60s；单次调度/尝试绝不并发（per-board in-flight guard）。失败按 30s→60s→120s 有界退避，
+//     维护忙按 15s 有界重排 —— 绝不固定 105s 轮询、绝不 busy-spin。
 //   · 阶段一连续尝试达上限即熔断；主管活动/子回报唤醒 ⇒ 计数归零、阶段二机会复原。
 //   · 阶段二只允许 1 次尝试；其后一个短 TTL 窗口内无交互 ⇒ AFK 终态（不再产生任何成本）。
 //   · 人类输入/子回报到达 ⇒ **只 abort 本插件自己的控制器**（绝不 `agent.cancel`、不清 inbox）。
@@ -669,8 +671,18 @@ export async function startSubagentCompat(subagents, spec) {
 //   · 任何异常都被吞掉并留结构化 stderr，**绝不影响**工具、看板与既有生命周期事件。
 //
 // 出处：HOST-CONTRACT.md（0.2.1-rc.2 公共类型/实现交叉核对）与 shared-d3ae87c6 共享卡。
-/** 默认轮询周期（与阶段一阈值同源，避免硬编码第二份数字）。 */
-export const KEEP_ALIVE_SWEEP_MS = Math.max(30_000, Math.floor(KEEP_ALIVE_STAGE1_DEFAULTS.intervalMs / 2));
+/**
+ * 调度参数（B4/B6）：**不再做固定 105s 轮询**。每个 board 按真实 deadline 单独 setTimeout；
+ * `CONFIG_RECHECK_MS` 只作为「无更快 deadline 时重读 project.yaml/全局配置」的有界检查，
+ * 不参与 ping 到期精度（deadline 更早时按 deadline 精确唤醒；更晚时最多晚一个检查周期才看到
+ * 配置变化，但**不会**推迟已到期的 ping）。
+ */
+export const KEEP_ALIVE_CONFIG_RECHECK_MS = 60_000;
+/** 失败后的有界指数退避（首次 30s，逐次 ×2，封顶 120s）；不计作成功刷新。 */
+export const KEEP_ALIVE_RETRY_BACKOFF_MS = 30_000;
+export const KEEP_ALIVE_RETRY_BACKOFF_MAX_MS = 120_000;
+/** runMaintenance 同步拒绝（真维护忙）后的有界重排；未发请求、不计预算。 */
+export const KEEP_ALIVE_MAINTENANCE_RETRY_MS = 15_000;
 
 /** 观察到的 loop 请求里，构成「可复用的完整公共请求」的字段（只读引用，深冻结对象可直接保留）。 */
 function pickLoopSnapshot(options) {
@@ -763,7 +775,7 @@ function resolvedRouteOf(options) {
  * @param options.readGlobal 返回 `{ enabled, malformed, available, raw }`（profile 全局开关）
  * @param options.resolveRoot `(workspace) => boardRoot`（canonical 解析）
  * @param options.defaultWorkspace `() => workspaceRoot|null`（宿主默认 workspace；仅作候选之一）
- * @param options.now/setIntervalFn/... 可注入时钟与定时器（生产用全局实现）
+ * @param options.now/setTimeoutFn/clearTimeoutFn/... 可注入时钟与定时器（生产用全局实现）
  * @param options.log 结构化审计输出（默认 stderr 单行；绝不携带正文）
  */
 export function createKeepAliveRuntime(options = {}) {
@@ -775,19 +787,19 @@ export function createKeepAliveRuntime(options = {}) {
     readProjectConfigFn = readProjectConfig,
     readSupervisorSessionFn = readSupervisorSession,
     now = () => Date.now(),
-    setIntervalFn = (fn, ms) => setInterval(fn, ms),
-    clearIntervalFn = (h) => clearInterval(h),
     setTimeoutFn = (fn, ms) => setTimeout(fn, ms),
     clearTimeoutFn = (h) => clearTimeout(h),
-    sweepMs = KEEP_ALIVE_SWEEP_MS,
+    configRecheckMs = KEEP_ALIVE_CONFIG_RECHECK_MS,
+    retryBaseMs = KEEP_ALIVE_RETRY_BACKOFF_MS,
+    retryMaxMs = KEEP_ALIVE_RETRY_BACKOFF_MAX_MS,
+    maintenanceRetryMs = KEEP_ALIVE_MAINTENANCE_RETRY_MS,
     pingTimeoutMs = KEEP_ALIVE_PING_TIMEOUT_MS,
     log = null,
   } = options;
 
   const offs = [];
   const ownPingOptions = new WeakSet();
-  const boards = new Map(); // canonical root → board state
-  let timer = null;
+  const boards = new Map(); // canonical root → board state（每 board 独立 deadline/timer）
   let started = false;
   let disposed = false;
   let generation = 0;
@@ -843,8 +855,13 @@ export function createKeepAliveRuntime(options = {}) {
     lastHumanAt: null,
     pingsInWindow: 0,
     stage2Used: false,
-    lastPingAt: null, // 最近一次**尝试**时刻（成功与否都算；AFK 窗口从此刻起算）
+    lastPingAt: null, // 最近一次**成功**保活时刻（失败绝不推进）
+    lastAttemptAt: null, // 最近一次**实际发出**尝试的时刻（成功/失败/取消都记，独立节流）
     lastSuccessAt: null,
+    consecutiveFailures: 0,
+    retryNotBefore: null, // 失败指数退避 / 维护忙重排的绝对时刻
+    timer: null, // 本 board 的单次 deadline timer
+    timerDueAt: null,
     lastAttempt: null,
     lastOutcome: null,
     lastReason: "disabled_by_config",
@@ -879,11 +896,19 @@ export function createKeepAliveRuntime(options = {}) {
     return root ? boardForRoot(root) : null;
   };
 
+  const clearBoardTimer = (board) => {
+    if (!board || board.timer === null) return;
+    try { clearTimeoutFn(board.timer); } catch { /* 忽略 */ }
+    board.timer = null;
+    board.timerDueAt = null;
+  };
   const resetWindow = (board) => {
     board.windowEpoch += 1;
     board.pingsInWindow = 0;
     board.stage2Used = false;
     board.afk = false;
+    board.consecutiveFailures = 0;
+    board.retryNotBefore = null;
   };
   const abortInflight = (board, why) => {
     const ctrl = board?.controller;
@@ -899,6 +924,7 @@ export function createKeepAliveRuntime(options = {}) {
     if (opts.resetWindow !== false) resetWindow(board);
   };
   const resetBoard = (board, why) => {
+    clearBoardTimer(board);
     abortInflight(board, why || "board-reset");
     board.snapshot = null;
     board.snapshotStatus = why === "agent_replaced" ? "agent_replaced" : "no_snapshot";
@@ -908,7 +934,10 @@ export function createKeepAliveRuntime(options = {}) {
     board.lastActivityAt = null;
     board.lastHumanAt = null;
     board.lastPingAt = null;
+    board.lastAttemptAt = null;
     board.lastSuccessAt = null;
+    board.consecutiveFailures = 0;
+    board.retryNotBefore = null;
     board.configError = false;
     resetWindow(board);
   };
@@ -1004,7 +1033,11 @@ export function createKeepAliveRuntime(options = {}) {
     }
   };
 
-  const capabilityOf = (board, agent) => {
+  /** 显式可信长 TTL 只对**完整 provider+model 精确匹配**的当前观察 route 生效。 */
+  const routeMatchesTtl = (entry, route) => !!(entry && route
+    && entry.provider === route.provider && entry.model === route.model);
+
+  const capabilityOf = (board, agent, cfg = null) => {
     const llm = getService("llm");
     const agents = getService("agents");
     const llmOk = !!(llm && typeof llm.prepareCall === "function" && typeof llm.stream === "function");
@@ -1013,11 +1046,14 @@ export function createKeepAliveRuntime(options = {}) {
     const maintenanceOk = !!agent && typeof agent.runMaintenance === "function";
     const snapProblem = snapshotProblemForBoard(board, agent);
     const caps = { llm: llmOk, agents: agentsOk, status: statusOk, maintenance: maintenanceOk, snapshot: snapProblem === null };
-    let channel = resolveKeepAliveChannel(caps, null);
+    // B5：只有显式配置且与**已观察 route** 完整匹配时才把 TTL 交给纯函数裁决；默认 null=unknown。
+    const ttlEntry = cfg?.supervisor?.keep_alive_ttl ?? null;
+    const matched = routeMatchesTtl(ttlEntry, board?.snapshot?.route) ? ttlEntry : null;
+    let channel = resolveKeepAliveChannel(caps, matched ? { cacheTtlMs: matched.ttl_ms } : null);
     if (board.configError) {
       channel = { ...channel, channel: "none", reason: "missing_capability", exempt: false, missing: [...channel.missing, "project.config"] };
     }
-    return { llmOk, agentsOk, statusOk, maintenanceOk, snapProblem, channel, llm };
+    return { llmOk, agentsOk, statusOk, maintenanceOk, snapProblem, channel, llm, ttlEntry, ttlMatched: !!matched };
   };
 
   /** 发现候选 board roots：默认 workspace + 每个「自己就是该 root 主管」的 live Agent。 */
@@ -1041,6 +1077,39 @@ export function createKeepAliveRuntime(options = {}) {
     return [...roots];
   };
 
+  /** 只采样 + 判定（无副作用写 board 之外的状态），供 sweep 与 deadline 调度共用。 */
+  const decisionOfBoard = (board) => {
+    const resolved = readResolutionForBoard(board);
+    if (!resolved) return { resolved: null, agent: null, caps: null, decision: null };
+    let agent = null;
+    try {
+      const supId = readSupervisorSessionFn(board.root);
+      const agents = getService("agents");
+      agent = supId && agents?.get ? agents.get(supId) : null;
+    } catch { agent = null; }
+    if (!agent) return { resolved, agent: null, caps: null, decision: null };
+    const caps = capabilityOf(board, agent, resolved.cfg);
+    const decision = decideKeepAlive(
+      {
+        now: now(),
+        lastLlmAt: board.lastLlmAt,
+        runningChildren: sampleRunningChildren(agent),
+        idle: sampleIdle(agent),
+        pingsInWindow: board.pingsInWindow,
+        stage2Used: board.stage2Used,
+        lastPingAt: board.lastPingAt,
+        lastAttemptAt: board.lastAttemptAt,
+        retryNotBefore: board.retryNotBefore,
+        lastActivityAt: board.lastActivityAt,
+        inflight: board.inflight,
+        pendingInput: hasPendingInput(agent),
+      },
+      defaultKeepAliveConfig(resolved.resolution.enabled),
+      caps.channel,
+    );
+    return { resolved, agent, caps, decision };
+  };
+
   const sweepBoard = async (root) => {
     const board = boardForRoot(root);
     if (!board || board.sweeping) return;
@@ -1049,6 +1118,7 @@ export function createKeepAliveRuntime(options = {}) {
       const resolved = readResolutionForBoard(board);
       if (!resolved) {
         board.lastReason = "state_unknown";
+        board.lastDecision = null;
         return;
       }
       const supId = readSupervisorSessionFn(board.root);
@@ -1071,9 +1141,10 @@ export function createKeepAliveRuntime(options = {}) {
         board.session = null;
         board.snapshotStatus = "no_supervisor";
         board.lastReason = "state_unknown";
+        board.lastDecision = null;
         return;
       }
-      const caps = capabilityOf(board, agent);
+      const caps = capabilityOf(board, agent, resolved.cfg);
       const decision = decideKeepAlive(
         {
           now: now(),
@@ -1083,6 +1154,8 @@ export function createKeepAliveRuntime(options = {}) {
           pingsInWindow: board.pingsInWindow,
           stage2Used: board.stage2Used,
           lastPingAt: board.lastPingAt,
+          lastAttemptAt: board.lastAttemptAt,
+          retryNotBefore: board.retryNotBefore,
           lastActivityAt: board.lastActivityAt,
           inflight: board.inflight,
           pendingInput: hasPendingInput(agent),
@@ -1097,16 +1170,55 @@ export function createKeepAliveRuntime(options = {}) {
       await attemptPing({ board, agent, decision, channel: caps.channel, llm: caps.llm });
     } catch (e) {
       board.lastReason = "state_unknown";
-      try { process.stderr.write(`[dsh-graph-host] g-505 保活扫描跳过: ${String(e?.message ?? e).slice(0, 120)}\n`); } catch { /* 忽略 */ }
+      try { process.stderr.write(`[dsh-graph-host] g-505 保活调度跳过: ${String(e?.message ?? e).slice(0, 120)}\n`); } catch { /* 忽略 */ }
     } finally {
       board.sweeping = false;
     }
+  };
+
+  const clearAllBoardTimers = () => { for (const board of boards.values()) clearBoardTimer(board); };
+
+  /**
+   * 单 board 的真实 deadline 调度（B4）：ping 到期精确唤醒；无更快事件时最多每
+   * `configRecheckMs` 重读一次配置作为配置变化检测上界。绝不共享固定 105s 轮询相位。
+   */
+  const scheduleBoard = (board) => {
+    if (!started || disposed || !board) return;
+    clearBoardTimer(board);
+    const computed = decisionOfBoard(board);
+    if (computed?.decision) {
+      board.lastDecision = computed.decision;
+      board.lastReason = computed.decision.reason;
+      board.afk = computed.decision.afk === true;
+    }
+    let delay = null;
+    const decision = computed?.decision ?? null;
+    if (decision?.ping) delay = 0;
+    else if (decision && decision.nextEligibleInMs !== null && decision.nextEligibleInMs !== undefined) {
+      delay = Math.max(0, decision.nextEligibleInMs);
+    }
+    // 无更快 deadline ⇒ 配置重读上界；有 deadline 也封顶到该检查周期（ping 到期仍是精确的，
+    // 因为只会在 deadline 更早时按 deadline 唤醒）。
+    delay = delay === null ? configRecheckMs : Math.min(delay, configRecheckMs);
+    board.timerDueAt = now() + delay;
+    let handle = null;
+    try {
+      handle = setTimeoutFn(async () => {
+        board.timer = null;
+        board.timerDueAt = null;
+        await sweepBoard(board.root);
+        scheduleBoard(board);
+      }, delay);
+      handle?.unref?.();
+    } catch { handle = null; }
+    board.timer = handle;
   };
 
   const sweep = async () => {
     if (disposed) return;
     const roots = candidateRoots();
     for (const root of roots) await sweepBoard(root);
+    for (const board of boards.values()) scheduleBoard(board);
   };
 
   const snapshotForPing = (board) => {
@@ -1207,6 +1319,10 @@ export function createKeepAliveRuntime(options = {}) {
           if (hasPendingInput(agent)) { outcome = "pending_input"; return; }
           const resolvedNow = readResolutionForBoard(board);
           if (!resolvedNow || !resolvedNow.resolution.enabled) { outcome = "not_attempted"; error = "config-disabled"; return; }
+          // 配置可能在 deadline 与真正抢占之间变化：重查显式长 TTL/能力，绝不打穿豁免。
+          const capsNow = capabilityOf(board, agent, resolvedNow.cfg);
+          if (capsNow.channel.exempt) { outcome = "not_attempted"; error = "ttl-exempt"; return; }
+          if (capsNow.channel.channel !== "host_prepare_stream") { outcome = "not_attempted"; error = "capability-missing"; return; }
 
           const ctrl = new AbortController();
           board.controller = ctrl;
@@ -1262,13 +1378,25 @@ export function createKeepAliveRuntime(options = {}) {
       if (disposed && outcome === "aborted_input") outcome = "aborted_dispose";
       const elapsed = now() - startedAt;
       if (attemptStarted) {
-        board.lastPingAt = startedAt;
+        board.lastAttemptAt = startedAt;
         if (board.windowEpoch === boardEpoch) board.pingsInWindow = decision.pingsInWindow;
         if (decision.phase === "stage2" && board.windowEpoch === boardEpoch) board.stage2Used = true;
         if (outcome === "success") {
+          // 只有真正成功才刷新缓存时间；失败/取消只保留独立 lastAttemptAt。
           board.lastLlmAt = now();
           board.lastSuccessAt = now();
+          board.lastPingAt = now();
+          board.consecutiveFailures = 0;
+          board.retryNotBefore = null;
+        } else if (outcome === "adapter_error" || outcome === "timeout" || outcome === "aborted_adapter") {
+          board.consecutiveFailures += 1;
+          const backoff = Math.min(retryMaxMs, retryBaseMs * 2 ** Math.max(0, board.consecutiveFailures - 1));
+          board.retryNotBefore = now() + backoff;
         }
+      }
+      if (outcome === "maintenance_busy" || outcome === "not_attempted") {
+        // 没发成请求（维护忙/配置竞态/快照失效）：不消耗 4 次预算；有界重排，避免 busy-spin。
+        board.retryNotBefore = now() + maintenanceRetryMs;
       }
       board.seq += 1;
       const entry = makeKeepAliveAuditEntry(board.seq, decision, channel?.channel ?? "none", elapsed, outcome, error, now(), usage);
@@ -1315,6 +1443,7 @@ export function createKeepAliveRuntime(options = {}) {
       board.snapshotStatus = "pending_observation";
       board.pendingObservation = { agent, session: agent.session ?? null, config: config ?? null, at: now() };
       resetWindow(board);
+      scheduleBoard(board);
     } catch { /* 观察失败：不影响请求本身 */ }
     return config;
   });
@@ -1365,6 +1494,7 @@ export function createKeepAliveRuntime(options = {}) {
         }
       }
     } catch { /* 观察失败不影响请求 */ }
+    for (const board of boards.values()) scheduleBoard(board);
     return next();
   });
 
@@ -1386,6 +1516,7 @@ export function createKeepAliveRuntime(options = {}) {
         invalidateSnapshot(board, "agent_replaced");
       }
       resetWindow(board);
+      scheduleBoard(board);
     } catch { /* 忽略 */ }
   });
 
@@ -1399,6 +1530,7 @@ export function createKeepAliveRuntime(options = {}) {
         board.session = null;
         resetBoard(board, "no_supervisor");
         board.snapshotStatus = "no_supervisor";
+        scheduleBoard(board);
       }
     } catch { /* 忽略 */ }
   });
@@ -1413,6 +1545,8 @@ export function createKeepAliveRuntime(options = {}) {
         resetWindow(board);
         abortInflight(board, "keepalive-activity");
       }
+      // running/idle 都重排：维护结束后的 idle 事件让保活尽快继续（无需固定轮询）。
+      scheduleBoard(board);
     } catch { /* 忽略 */ }
   });
 
@@ -1426,6 +1560,7 @@ export function createKeepAliveRuntime(options = {}) {
       if (source && typeof source === "object" && source.kind === "user") board.lastHumanAt = now();
       resetWindow(board);
       abortInflight(board, "keepalive-input");
+      scheduleBoard(board);
     } catch { /* 忽略 */ }
   });
 
@@ -1439,7 +1574,10 @@ export function createKeepAliveRuntime(options = {}) {
       const surfaceOp = event?.surfaceOp;
       const isReplacement = !!surfaceOp && typeof surfaceOp === "object" && surfaceOp.op === "replace";
       const isCompactionOrClear = typeof event?.type === "string" && /(compact|clear)/i.test(event.type);
-      if (isReplacement || isCompactionOrClear) invalidateSnapshot(board, "surface_replaced");
+      if (isReplacement || isCompactionOrClear) {
+        invalidateSnapshot(board, "surface_replaced");
+        scheduleBoard(board);
+      }
     } catch { /* 忽略 */ }
   });
 
@@ -1447,11 +1585,9 @@ export function createKeepAliveRuntime(options = {}) {
     if (started || disposed) return;
     started = true;
     ensureDefaultBoard();
-    try {
-      timer = setIntervalFn(() => { void sweep(); }, sweepMs);
-      timer?.unref?.();
-    } catch { timer = null; /* 无定时器能力 ⇒ 只能手工 sweep（如实降级） */ }
-    void sweep();
+    // 先发现已有 live 主管 board（含默认 workspace），再逐 board 安排单次 deadline。
+    for (const root of candidateRoots()) boardForRoot(root);
+    for (const board of boards.values()) scheduleBoard(board);
   };
 
   const dispose = () => {
@@ -1467,8 +1603,8 @@ export function createKeepAliveRuntime(options = {}) {
       board.lastReason = "disabled_by_config";
       board.inflight = false;
       board.controller = null;
+      clearBoardTimer(board);
     }
-    if (timer !== null) { try { clearIntervalFn(timer); } catch { /* 忽略 */ } timer = null; }
     for (const off of offs.splice(0)) { try { off?.(); } catch { /* 忽略 */ } }
   };
 
@@ -1508,6 +1644,8 @@ export function createKeepAliveRuntime(options = {}) {
     const snapProblem = board ? snapshotProblemForBoard(board, agent) : "no_supervisor";
     const llm = getService("llm");
     const agents = getService("agents");
+    const ttlEntry = cfg?.supervisor?.keep_alive_ttl ?? null;
+    const ttlMatched = routeMatchesTtl(ttlEntry, board?.snapshot?.route) ? ttlEntry : null;
     let channel = resolveKeepAliveChannel(
       {
         llm: !!(llm && typeof llm.prepareCall === "function"),
@@ -1516,7 +1654,7 @@ export function createKeepAliveRuntime(options = {}) {
         maintenance: !!agent && typeof agent.runMaintenance === "function",
         snapshot: snapProblem === null,
       },
-      null,
+      ttlMatched ? { cacheTtlMs: ttlMatched.ttl_ms } : null,
     );
     if (configError) {
       channel = { ...channel, channel: "none", reason: "missing_capability", exempt: false, missing: [...channel.missing, disposed ? "plugin.disposed" : "project.config"] };
@@ -1529,6 +1667,9 @@ export function createKeepAliveRuntime(options = {}) {
       globalMalformed: globalState.malformed === true,
       globalAvailable: globalState.available !== false,
       configError,
+      routeTtl: configError ? null : ttlEntry,
+      routeTtlMalformed: cfg?.supervisor?.keep_alive_ttl_malformed === true,
+      routeTtlMatched: !!ttlMatched,
       channel,
       active: {
         phase: board?.afk ? "afk" : (decision?.phase ?? "disabled"),
@@ -1543,6 +1684,8 @@ export function createKeepAliveRuntime(options = {}) {
         snapshot: snapProblem === null ? "ready" : snapProblem,
         last_llm_at: board?.lastLlmAt ?? null,
         last_ping_at: board?.lastPingAt ?? null,
+        last_attempt_at: board?.lastAttemptAt ?? null,
+        last_success_at: board?.lastSuccessAt ?? null,
         last_activity_at: board?.lastActivityAt ?? null,
         last_attempt: board?.lastAttempt ?? null,
         seq: board?.seq ?? 0,
@@ -7697,8 +7840,9 @@ export function apply(ctx, config) {
     }
 
     // ==== g-505：主管会话上下文缓存保活（两阶段状态机）====
-    // 判定真源在 core/keepalive.ts；这里只创建运行时并 start（事件监听 + 粗粒度定时扫描）。
-    // 首次自举不依赖「启动时已有 supervisorId」：每次 sweep 从 project.yaml 重新解析主管会话，
+    // 判定真源在 core/keepalive.ts；这里只创建运行时并 start（事件监听 + 每 board 真实 deadline
+    // 单次定时；配置变化检测上界 60s，不再有固定 105s 全局轮询）。
+    // 首次自举不依赖「启动时已有 supervisorId」：start/事件从 project.yaml 重新解析主管会话，
     // 因此冷启动、晚到服务、换主管、HMR 重载都由同一路径处理。
     try {
       keepAliveRuntime = createKeepAliveRuntime({

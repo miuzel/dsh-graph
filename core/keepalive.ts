@@ -388,8 +388,12 @@ export interface KeepAliveInputs {
   pingsInWindow: number;
   /** 阶段二唯一一次机会是否已用。 */
   stage2Used: boolean;
-  /** 最近一次**成功**保活时刻（`null` = 从未）。 */
+  /** 最近一次**成功**保活时刻（`null` = 从未）。失败不得推进它。 */
   lastPingAt: number | null;
+  /** 最近一次**实际发出**保活尝试的时刻（成功/失败/取消都记；用于独立节流）。 */
+  lastAttemptAt?: number | null;
+  /** 独立重试节流：此前的失败/维护忙退避截止时刻（`null` = 无退避）。 */
+  retryNotBefore?: number | null;
   /** 主管最近一次活动（正常 loop 请求 / 人类输入 / 子回报唤醒）时刻；`null` = 未知。 */
   lastActivityAt: number | null;
   /** 维护/请求是否在途（在途绝不叠加第二次）。 */
@@ -413,6 +417,7 @@ export type KeepAliveReason =
   | "busy"
   | "pending_input"
   | "inflight"
+  | "retry_backoff"
   | "active_children_wait"
   | "stage1_ping"
   | "stage1_fused"
@@ -473,6 +478,12 @@ export function decideKeepAlive(
   }
 
   const sinceLlm = inputs.now - inputs.lastLlmAt;
+  const retryNotBefore = typeof inputs.retryNotBefore === "number" && Number.isFinite(inputs.retryNotBefore)
+    ? inputs.retryNotBefore
+    : null;
+  const lastAttempt = typeof inputs.lastAttemptAt === "number" && Number.isFinite(inputs.lastAttemptAt)
+    ? inputs.lastAttemptAt
+    : inputs.lastPingAt;
 
   // ── 阶段一：有活跃子代理 ─────────────────────────────────────────────
   if (inputs.runningChildren > 0) {
@@ -486,6 +497,14 @@ export function decideKeepAlive(
         phase: "stage1",
         reason: "active_children_wait",
         nextEligibleInMs: config.stage1IntervalMs - sinceLlm,
+      };
+    }
+    if (retryNotBefore !== null && inputs.now < retryNotBefore) {
+      return {
+        ...base,
+        phase: "stage1",
+        reason: "retry_backoff",
+        nextEligibleInMs: retryNotBefore - inputs.now,
       };
     }
     return {
@@ -502,20 +521,20 @@ export function decideKeepAlive(
   if (inputs.stage2Used) {
     // 唯一机会已用：若此后**没有任何主管活动/人类交互**，等满一个短 TTL 窗口即判 AFK，
     // 彻底停止后续保活（成本上界 = 1 次 0.1x 试探）。
-    const lastPing = inputs.lastPingAt;
+    // AFK 锚点取**最近一次实际尝试**（失败/取消也算已花掉这次机会）；绝不把失败当成功。
     const lastActivity = inputs.lastActivityAt;
-    const pingBeforeActivity = lastPing !== null && (lastActivity === null || lastActivity <= lastPing);
-    if (pingBeforeActivity && inputs.now - (lastPing as number) >= KEEP_ALIVE_SHORT_TTL_MS) {
+    const pingBeforeActivity = lastAttempt !== null && (lastActivity === null || lastActivity <= lastAttempt);
+    if (pingBeforeActivity && inputs.now - (lastAttempt as number) >= KEEP_ALIVE_SHORT_TTL_MS) {
       return { ...base, phase: "afk", reason: "stage2_afk", nextEligibleInMs: null, afk: true };
     }
     // 有交互 ⇒ 正常对话已刷新缓存，阶段二机会由调用方重置（这里只等待）。
-    const baseTime = lastActivity !== null && lastActivity > (lastPing ?? 0) ? lastActivity : (lastPing ?? inputs.lastLlmAt);
-    const waited = inputs.now - baseTime;
+    // 阶段二机会已用：不再产生任何 ping；到期唤醒只为把状态投影推进到 AFK。
+    const untilAfk = lastAttempt !== null ? KEEP_ALIVE_SHORT_TTL_MS - (inputs.now - lastAttempt) : null;
     return {
       ...base,
       phase: "stage2",
       reason: "stage2_exhausted",
-      nextEligibleInMs: Math.max(0, config.stage2GraceMs - waited),
+      nextEligibleInMs: untilAfk !== null && untilAfk > 0 ? untilAfk : null,
     };
   }
 
@@ -525,6 +544,14 @@ export function decideKeepAlive(
       phase: "stage2",
       reason: "stage2_wait",
       nextEligibleInMs: config.stage2GraceMs - sinceLlm,
+    };
+  }
+  if (retryNotBefore !== null && inputs.now < retryNotBefore) {
+    return {
+      ...base,
+      phase: "stage2",
+      reason: "retry_backoff",
+      nextEligibleInMs: retryNotBefore - inputs.now,
     };
   }
   return {
@@ -630,6 +657,12 @@ export interface KeepAliveStatusProjection {
     global_available: boolean;
     /** 项目配置读取失败（fail-closed：此时 effective 必须为 false，capable.missing 含 project.config）。 */
     config_error: boolean;
+    /** 显式可信长 TTL 条目（仅 project 作用域；默认 null = 未知）。 */
+    route_ttl: { provider: string; model: string; ttl_ms: number } | null;
+    /** 条目存在但形态非法（不豁免，按未知 TTL 处理）。 */
+    route_ttl_malformed: boolean;
+    /** 条目 provider/model 是否与当前观察到的 route 精确匹配。 */
+    route_ttl_matched: boolean;
   };
   effective: KeepAliveEffectiveProjection;
   capable: {
@@ -655,6 +688,8 @@ export interface KeepAliveStatusProjection {
     snapshot: "ready" | KeepAliveSnapshotUnavailable;
     last_llm_at: number | null;
     last_ping_at: number | null;
+    last_attempt_at: number | null;
+    last_success_at: number | null;
     last_activity_at: number | null;
     last_attempt: KeepAliveAuditEntry | null;
     seq: number;
@@ -669,6 +704,9 @@ export function keepAliveStatusProjection(args: {
   globalMalformed: boolean;
   globalAvailable: boolean;
   configError?: boolean;
+  routeTtl?: { provider: string; model: string; ttl_ms: number } | null;
+  routeTtlMalformed?: boolean;
+  routeTtlMatched?: boolean;
   channel: KeepAliveChannelDecision;
   active: KeepAliveStatusProjection["active"];
 }): KeepAliveStatusProjection {
@@ -681,6 +719,9 @@ export function keepAliveStatusProjection(args: {
       global_malformed: args.globalMalformed,
       global_available: args.globalAvailable,
       config_error: args.configError === true,
+      route_ttl: args.routeTtl ?? null,
+      route_ttl_malformed: args.routeTtlMalformed === true,
+      route_ttl_matched: args.routeTtlMatched === true,
     },
     effective: {
       mode: resolution.project_mode,

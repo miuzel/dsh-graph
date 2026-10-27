@@ -121,8 +121,10 @@ async function loadHostStack() {
 function makeFakeAdapter(LlmAdapter: any, opts: { defaults?: boolean } = {}) {
   class RecordingAdapter extends LlmAdapter {
     calls: any[] = [];
+    times: Array<number | null> = [];
     behaviors: string[] = [];
     gate: any = null;
+    nowFn: (() => number) | null = null;
     providerInfo(provider: string) { return { id: provider, name: provider, protocol: "fake" }; }
     async resolveModel(provider: string, model: string) {
       if (opts.defaults === false) return { provider, id: model, name: model, inputModalities: ["text"] };
@@ -135,6 +137,7 @@ function makeFakeAdapter(LlmAdapter: any, opts: { defaults?: boolean } = {}) {
     }
     async *stream(options: any) {
       this.calls.push(options);
+      this.times.push(this.nowFn ? this.nowFn() : null);
       const behavior = this.behaviors.shift() ?? "auto";
       if (behavior === "error") {
         yield { type: "finish", reason: { kind: "error", failure: { code: "FAKE_ERROR", message: "fake failure" } } };
@@ -200,17 +203,16 @@ async function loadRuntimeFactory() {
 
 /** engine 侧 runtime 夹具：真实服务 + 假时钟（可注入读配置函数做异常/隔离用例）。 */
 async function makeRuntime(host: any, opts: {
+  clock?: ReturnType<typeof fakeClock>;
   defaultWorkspace?: () => string | null;
   readGlobal?: () => any;
   readProjectConfigFn?: (root: string) => any;
-  setIntervalFn?: any;
-  clearIntervalFn?: any;
   setTimeoutFn?: any;
   clearTimeoutFn?: any;
   now?: () => number;
 } = {}) {
   const createKeepAliveRuntime = await loadRuntimeFactory();
-  const clock = fakeClock();
+  const clock = opts.clock ?? fakeClock();
   const runtime = createKeepAliveRuntime({
     ctx: {
       on: (name: string, handler: any) => host.hostCtx.on(name, handler),
@@ -221,13 +223,41 @@ async function makeRuntime(host: any, opts: {
     defaultWorkspace: opts.defaultWorkspace ?? (() => null),
     readProjectConfigFn: opts.readProjectConfigFn,
     now: opts.now ?? clock.now,
-    setIntervalFn: opts.setIntervalFn ?? (() => null),
-    clearIntervalFn: opts.clearIntervalFn ?? (() => {}),
     setTimeoutFn: opts.setTimeoutFn ?? (() => null),
     clearTimeoutFn: opts.clearTimeoutFn ?? (() => {}),
     log: () => {},
   });
   return { runtime, clock };
+}
+
+/** 确定性假 timer：记录绝对到期时刻，按任意相位推进并 await 回调（覆盖真实 scheduler 接线）。 */
+function makeFakeScheduler(clock: ReturnType<typeof fakeClock>) {
+  let seq = 0;
+  const timers = new Map<number, { at: number; fn: () => any }>();
+  const setTimeoutFn = (fn: () => any, ms: number) => {
+    const id = ++seq;
+    timers.set(id, { at: clock.now() + Math.max(0, ms), fn });
+    return id;
+  };
+  const clearTimeoutFn = (id: number) => { timers.delete(id); };
+  const pending = () => [...timers.values()].map((t) => t.at - clock.now()).sort((a, b) => a - b);
+  const nextAt = () => (timers.size ? Math.min(...[...timers.values()].map((t) => t.at)) : null);
+  const advanceTo = async (target: number) => {
+    for (let guard = 0; guard < 500; guard += 1) {
+      const due = [...timers.entries()]
+        .filter(([, t]) => t.at <= target)
+        .sort((a, b) => a[1].at - b[1].at || a[0] - b[0]);
+      if (!due.length) break;
+      const [id, t] = due[0];
+      timers.delete(id);
+      clock.set(t.at);
+      await t.fn();
+    }
+    clock.set(target);
+    await new Promise((r) => setImmediate(r));
+  };
+  const advance = (ms: number) => advanceTo(clock.now() + ms);
+  return { setTimeoutFn, clearTimeoutFn, pending, nextAt, advance, advanceTo, timers };
 }
 
 async function waitFor(cond: () => boolean, label: string, timeoutMs = 3_000) {
@@ -623,10 +653,10 @@ test("B3 可疑 adapter 延迟释放：timeout 不提前清 inflight、不重复
   const supId = "sup-b3-timeout";
   const agent = await makeAgent(host, supId, root);
   writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${supId}\n`);
-  const timeoutFns: Array<() => void> = [];
+  const timeoutFns: Array<{ fn: () => void; ms: number }> = [];
   const { runtime, clock } = await makeRuntime(host, {
     defaultWorkspace: () => root,
-    setTimeoutFn: (fn: () => void) => { timeoutFns.push(fn); return timeoutFns.length; },
+    setTimeoutFn: (fn: () => void, ms: number) => { timeoutFns.push({ fn, ms }); return timeoutFns.length; },
     clearTimeoutFn: () => {},
   });
   runtime.start();
@@ -640,9 +670,10 @@ test("B3 可疑 adapter 延迟释放：timeout 不提前清 inflight、不重复
     host.adapter.behaviors.push("abort-delayed");
     const sweeps = runtime.sweep();
     await waitFor(() => host.adapter.calls.length === 2, "保活请求进入 adapter");
-    assert.equal(timeoutFns.length, 1, "必须设置请求级 timeout");
+    const pingTimeout = timeoutFns.find((t) => t.ms === 45_000);
+    assert.ok(pingTimeout, "必须设置请求级 timeout（45s）");
 
-    timeoutFns[0](); // 模拟超时：只 abort 本插件控制器
+    pingTimeout!.fn(); // 模拟超时：只 abort 本插件控制器
     await new Promise((r) => setImmediate(r));
     assert.equal(runtime.stateFor(root).inflight, true, "iterator 未释放前不得提前清 inflight");
     const callsWhilePending = host.adapter.calls.length;
@@ -655,6 +686,14 @@ test("B3 可疑 adapter 延迟释放：timeout 不提前清 inflight、不重复
     assert.equal(runtime.stateFor(root).lastOutcome, "timeout");
     assert.equal(runtime.stateFor(root).inflight, false);
     assert.equal(host.adapter.calls.length, 2, "整个超时过程中只允许一次保活请求");
+    assert.equal(runtime.stateFor(root).stage2Used, true, "阶段二失败仍已消耗唯一一次机会");
+    assert.equal(runtime.stateFor(root).lastPingAt, null, "失败不得写成功时间");
+    assert.equal(runtime.stateFor(root).lastSuccessAt, null);
+    clock.advance(300_000);
+    await runtime.sweep();
+    assert.equal(host.adapter.calls.length, 2, "阶段二失败后不得重试");
+    assert.equal(runtime.statusFor(root).active.phase, "afk", "阶段二失败后按短 TTL 窗口进入 AFK");
+    assert.notEqual(runtime.stateFor(root).lastOutcome, "success");
   } finally {
     runtime.dispose();
   }
@@ -790,22 +829,24 @@ test("失效与配置链：surface replace/compaction 失效快照；配置读�
   }
 });
 
-test("生命周期：start 幂等、dispose 清 timer/监听，重复 dispose 与 dispose 后 sweep 均安全", async () => {
+test("生命周期：start 幂等、每 board 单 timer、dispose/HMR 清 timer，重复 dispose 与 dispose 后 sweep 均安全", async () => {
   const root = makeBoard();
   const fakeHost = { hostCtx: { on: () => () => {} }, llmRuntime: null, reg: null } as any;
-  let timers = 0;
-  let cleared = 0;
+  const clock = fakeClock();
+  const timers = new Map<number, number>();
+  let seq = 0;
   const { runtime } = await makeRuntime(fakeHost, {
+    clock,
     defaultWorkspace: () => root,
-    setIntervalFn: () => { timers += 1; return 123; },
-    clearIntervalFn: () => { cleared += 1; },
+    setTimeoutFn: (_fn: any, ms: number) => { const id = ++seq; timers.set(id, clock.now() + ms); return id; },
+    clearTimeoutFn: (id: number) => { timers.delete(id); },
   });
   runtime.start();
   runtime.start();
-  assert.equal(timers, 1, "start 必须幂等（不得重复注册定时器/监听）");
+  assert.equal(timers.size, 1, "start 幂等且每 board 恰一个 deadline timer");
   runtime.dispose();
   runtime.dispose();
-  assert.equal(cleared, 1, "dispose 必须清理定时器且幂等");
+  assert.equal(timers.size, 0, "dispose 必须清掉全部 board timer 且幂等");
   await runtime.sweep(); // dispose 后 safe no-op
   const st = runtime.statusFor(root);
   assert.equal(typeof st.effective.effective, "boolean");
@@ -888,6 +929,382 @@ test("B1 配置门禁（真实宿主）：项目畸形/全局关闭时不发请�
       assert.equal(runtime.statusFor(root).effective.effective, false);
       assert.equal(runtime.statusFor(root).effective.source, "global_explicit");
     } finally { runtime.dispose(); }
+  }
+});
+
+// ─────────────────────────────── 4b. B4/B6 真实 deadline 调度（假 clock + 真 timer 接线） ───────────────────────────────
+
+test("B4 任意相位：单 board 在 240s 真实 deadline 精确 ping（60s 配置检查不改变到期时刻）并按时进入 AFK", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard("supervisor:\n  session: sup-b4a\n  keep_alive: true\n");
+  const agent = await makeAgent(host, "sup-b4a", root);
+  const clock = fakeClock(1_234_567); // 故意不落在任何整数 tick
+  const sched = makeFakeScheduler(clock);
+  host.adapter.nowFn = clock.now;
+  const { runtime } = await makeRuntime(host, {
+    clock,
+    defaultWorkspace: () => root,
+    setTimeoutFn: sched.setTimeoutFn,
+    clearTimeoutFn: sched.clearTimeoutFn,
+  });
+  runtime.start();
+  try {
+    const t0 = clock.now();
+    await host.sendTurn(agent, "b4-phase");
+    assert.equal(host.adapter.calls.length, 1);
+
+    await sched.advanceTo(t0 + 209_999);
+    assert.equal(host.adapter.calls.length, 1, "209999ms 不得 ping（阶段二 240s）");
+    await sched.advanceTo(t0 + 239_999);
+    assert.equal(host.adapter.calls.length, 1, "239999ms 不得 ping");
+    await sched.advanceTo(t0 + 240_000);
+    assert.equal(host.adapter.calls.length, 2, "240000ms 必须真实 ping");
+    assert.equal(host.adapter.times[1], t0 + 240_000, "timer 到期即 ping，不得被 105/60s 轮询相位推迟");
+
+    await sched.advanceTo(t0 + 540_000);
+    assert.equal(host.adapter.calls.length, 2, "阶段二单次后不得再 ping");
+    assert.equal(runtime.statusFor(root).active.phase, "afk");
+    assert.equal(runtime.statusFor(root).active.reason, "stage2_afk");
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("B4 多 board 不同相位/并发到期：各自 deadline 精确，互不串扰", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const rootA = makeBoard("supervisor:\n  session: sup-b4-A\n  keep_alive: true\n");
+  const rootB = makeBoard("supervisor:\n  session: sup-b4-B\n  keep_alive: true\n");
+  const agentA = await makeAgent(host, "sup-b4-A", rootA);
+  const agentB = await makeAgent(host, "sup-b4-B", rootB);
+  const clock = fakeClock(2_000_000);
+  const sched = makeFakeScheduler(clock);
+  host.adapter.nowFn = clock.now;
+  const { runtime } = await makeRuntime(host, {
+    clock,
+    defaultWorkspace: () => rootA,
+    setTimeoutFn: sched.setTimeoutFn,
+    clearTimeoutFn: sched.clearTimeoutFn,
+  });
+  runtime.start();
+  try {
+    const t0 = clock.now();
+    await host.sendTurn(agentA, "A-b4");
+    await sched.advance(50_000);
+    await host.sendTurn(agentB, "B-b4");
+    const tB = t0 + 50_000;
+    assert.equal(host.adapter.calls.length, 2);
+
+    await sched.advanceTo(t0 + 240_000);
+    assert.equal(host.adapter.calls.length, 3, "A 到期只应 A ping");
+    assert.equal(host.adapter.calls[2].sessionId, agentA.session.id);
+    assert.equal(host.adapter.times[2], t0 + 240_000);
+
+    await sched.advanceTo(tB + 239_999);
+    assert.equal(host.adapter.calls.length, 3, "B 未到期不得 ping");
+    await sched.advanceTo(tB + 240_000);
+    assert.equal(host.adapter.calls.length, 4, "B 在自身 240s 到期时 ping");
+    assert.equal(host.adapter.calls[3].sessionId, agentB.session.id);
+    assert.equal(host.adapter.times[3], tB + 240_000);
+
+    // 并发到期：新窗口让两 board 同一时刻到期，两个 timer 都必须执行
+    await host.sendTurn(agentA, "A-b4-2");
+    await host.sendTurn(agentB, "B-b4-2");
+    const concurrentAt = clock.now() + 240_000;
+    await sched.advanceTo(concurrentAt);
+    const pings = host.adapter.calls.filter((c: any) => c.maxTokens === 1);
+    assert.ok(pings.some((c: any) => c.sessionId === agentA.session.id));
+    assert.ok(pings.some((c: any) => c.sessionId === agentB.session.id));
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("B4 活动重置 deadline；配置关闭经 60s 检查上界生效；dispose 清 timer；maintenance busy 有界重排", async () => {
+  // 活动重置
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-b4-reset\n  keep_alive: true\n");
+    const agent = await makeAgent(host, "sup-b4-reset", root);
+    const clock = fakeClock(3_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agent, "reset-1");
+      await sched.advance(100_000);
+      await host.sendTurn(agent, "reset-2");
+      const t1 = t0 + 100_000;
+      await sched.advanceTo(t0 + 240_000);
+      assert.equal(host.adapter.calls.length, 2, "活动后旧 deadline 不得 ping");
+      await sched.advanceTo(t1 + 240_000);
+      assert.equal(host.adapter.calls.length, 3, "活动后新 deadline 精确 ping");
+      assert.equal(host.adapter.times[2], t1 + 240_000);
+    } finally { runtime.dispose(); }
+  }
+  // 配置关闭 + dispose
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-b4-off\n  keep_alive: true\n");
+    const agent = await makeAgent(host, "sup-b4-off", root);
+    const clock = fakeClock(4_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agent, "off-1");
+      writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sup-b4-off\n  keep_alive: false\n");
+      await sched.advanceTo(t0 + 240_000);
+      assert.equal(host.adapter.calls.length, 1, "配置关闭后不得 ping（配置检查上界 60s）");
+      assert.equal(runtime.statusFor(root).effective.effective, false);
+      runtime.dispose();
+      assert.equal(sched.pending().length, 0, "dispose/HMR 必须清掉本 board timer");
+      await sched.advanceTo(t0 + 600_000);
+      assert.equal(host.adapter.calls.length, 1, "dispose 后不得再 ping");
+    } finally { runtime.dispose(); }
+  }
+  // maintenance busy：同步拒绝、不发请求、不计预算，15s 后重排
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-b4-busy\n  keep_alive: true\n");
+    const agent = await makeAgent(host, "sup-b4-busy", root);
+    const clock = fakeClock(5_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agent, "busy-1");
+      let release: (() => void) | null = null;
+      const holding = agent.runMaintenance(async () => { await new Promise<void>((r) => { release = r; }); });
+      await sched.advanceTo(t0 + 240_000);
+      assert.equal(host.adapter.calls.length, 1, "维护忙时不得发请求");
+      assert.equal(runtime.stateFor(root).pingsInWindow, 0, "未发请求不计预算");
+      assert.equal(runtime.stateFor(root).lastOutcome, "maintenance_busy");
+      const due = runtime.stateFor(root).timerDueAt;
+      assert.equal(due, t0 + 240_000 + 15_000, "维护忙必须 15s 有界重排，不得 busy-spin");
+      release!();
+      await holding;
+      await sched.advanceTo(t0 + 240_000 + 15_000);
+      assert.equal(host.adapter.calls.length, 2, "维护释放后 15s 重排应真实 ping");
+      assert.equal(runtime.stateFor(root).pingsInWindow, 1);
+    } finally { runtime.dispose(); }
+  }
+});
+
+test("B4 计时器触发的维护中人类输入：只取消本插件 ping，排队轮随后执行，不重复请求", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard("supervisor:\n  session: sup-b4-abort\n  keep_alive: true\n");
+  const agent = await makeAgent(host, "sup-b4-abort", root);
+  const clock = fakeClock(9_000_000);
+  const sched = makeFakeScheduler(clock);
+  host.adapter.nowFn = clock.now;
+  const { runtime } = await makeRuntime(host, {
+    clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+  });
+  runtime.start();
+  try {
+    const t0 = clock.now();
+    await host.sendTurn(agent, "abort-b4");
+    const gate = Promise.withResolvers<void>();
+    host.adapter.gate = gate.promise;
+    host.adapter.behaviors.push("abort-delayed");
+    const advancing = sched.advanceTo(t0 + 240_000);
+    await waitFor(() => host.adapter.calls.length === 2, "timer 到期进入 ping");
+    assert.equal(runtime.stateFor(root).inflight, true);
+
+    const queued = host.llm.createUserMessage({ content: [{ type: "text", text: "timer-abort-human" }], source: { kind: "user" } });
+    agent.send(queued, "next-turn", true);
+    assert.equal(agent.inbox.nextTurn.length, 1);
+    assert.equal(runtime.stateFor(root).inflight, true, "输入只 abort 控制器，iterator 未释放前仍 inflight");
+    gate.resolve();
+    await advancing;
+    await agent.whenIdle();
+    assert.equal(runtime.stateFor(root).lastOutcome, "aborted_input");
+    assert.equal(host.adapter.calls.length, 3, "只允许一次 ping + 排队正常轮");
+    assert.equal(JSON.stringify(agent.session.deriveMessages()).includes("timer-abort-human"), true);
+    // 取消不是成功：不得写成功时间；活动重置后按新 lastLlm 重新计时
+    assert.equal(runtime.stateFor(root).lastOutcome !== "success", true);
+    assert.equal(runtime.stateFor(root).inflight, false);
+  } finally { runtime.dispose(); }
+});
+
+test("B6 阶段一失败：lastLlm/lastPing 不推进，独立 lastAttemptAt + 指数退避，4 次预算仍封顶", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard("supervisor:\n  session: sup-b6-fail\n  keep_alive: true\n");
+  const agent = await makeAgent(host, "sup-b6-fail", root);
+  const child = { id: "child-b6", status: "running", session: { id: "child-b6", header: { cwd: root } }, inbox: { nextTurn: [], nextStep: [] } } as any;
+  host.reg.enter(child, agent);
+  const clock = fakeClock(6_000_000);
+  const sched = makeFakeScheduler(clock);
+  host.adapter.nowFn = clock.now;
+  host.adapter.behaviors.push("error", "error", "error", "error");
+  const { runtime } = await makeRuntime(host, {
+    clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+  });
+  runtime.start();
+  try {
+    const t0 = clock.now();
+    await host.sendTurn(agent, "fail-1");
+    const llmBefore = runtime.stateFor(root).lastLlmAt;
+    await sched.advanceTo(t0 + 210_000);
+    assert.equal(host.adapter.calls.length, 2);
+    assert.equal(runtime.stateFor(root).lastOutcome, "adapter_error");
+    assert.equal(runtime.stateFor(root).lastLlmAt, llmBefore, "失败不得推进 lastLlmAt");
+    assert.equal(runtime.stateFor(root).lastPingAt, null, "失败不得写 lastPingAt");
+    assert.equal(runtime.stateFor(root).lastSuccessAt, null);
+    assert.equal(runtime.stateFor(root).lastAttemptAt, t0 + 210_000);
+    assert.equal(runtime.stateFor(root).timerDueAt, t0 + 240_000, "失败后 30s 退避（非立刻重试）");
+    await sched.advanceTo(t0 + 239_999);
+    assert.equal(host.adapter.calls.length, 2, "退避未到不得重复失败");
+    await sched.advanceTo(t0 + 240_000);
+    assert.equal(host.adapter.calls.length, 3, "30s 后允许一次重试");
+    assert.equal(host.adapter.times[2], t0 + 240_000);
+    await sched.advanceTo(t0 + 300_000);
+    assert.equal(host.adapter.calls.length, 4, "第二次失败后 60s 退避");
+    await sched.advanceTo(t0 + 420_000);
+    assert.equal(host.adapter.calls.length, 5, "第三次失败后 120s 退避");
+    assert.equal(runtime.stateFor(root).pingsInWindow, 4, "4 次尝试后熔断");
+    await sched.advanceTo(t0 + 2_000_000);
+    assert.equal(host.adapter.calls.length, 5, "熔断后不得再发");
+    assert.equal(runtime.statusFor(root).active.reason, "stage1_fused");
+  } finally { runtime.dispose(); }
+});
+
+test("B6 阶段一成功/阶段二成功：成功时间与 attempt 分开；stage1 4 次上限、stage2 单次", async () => {
+  // 阶段一 4 次成功 + 熔断
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-b6-ok\n  keep_alive: true\n");
+    const agent = await makeAgent(host, "sup-b6-ok", root);
+    host.reg.enter({ id: "child-ok", status: "running", session: { id: "child-ok", header: { cwd: root } }, inbox: { nextTurn: [], nextStep: [] } }, agent);
+    const clock = fakeClock(7_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agent, "ok-1");
+      for (const at of [210_000, 420_000, 630_000, 840_000]) {
+        await sched.advanceTo(t0 + at);
+      }
+      assert.equal(host.adapter.calls.length, 5, "loop + 4 次真实 ping");
+      assert.equal(runtime.stateFor(root).pingsInWindow, 4);
+      assert.equal(runtime.stateFor(root).lastPingAt, t0 + 840_000);
+      assert.equal(runtime.stateFor(root).lastSuccessAt, t0 + 840_000);
+      assert.equal(runtime.stateFor(root).lastLlmAt, t0 + 840_000);
+      await sched.advanceTo(t0 + 1_500_000);
+      assert.equal(host.adapter.calls.length, 5, "第 4 次后熔断");
+    } finally { runtime.dispose(); }
+  }
+  // 阶段二成功仅一次；之后 AFK
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-b6-s2\n  keep_alive: true\n");
+    const agent = await makeAgent(host, "sup-b6-s2", root);
+    const clock = fakeClock(8_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agent, "s2-1");
+      await sched.advanceTo(t0 + 240_000);
+      assert.equal(host.adapter.calls.length, 2);
+      assert.equal(runtime.stateFor(root).stage2Used, true);
+      assert.equal(runtime.stateFor(root).lastPingAt, t0 + 240_000);
+      await sched.advanceTo(t0 + 540_000);
+      assert.equal(host.adapter.calls.length, 2, "阶段二只能一次");
+      assert.equal(runtime.statusFor(root).active.phase, "afk");
+    } finally { runtime.dispose(); }
+  }
+});
+
+test("B5 显式可信长 TTL：完整 provider+model 匹配才豁免；未知/不匹配/畸形走原短策略", async () => {
+  // 匹配 ⇒ 豁免，不 ping
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-ttl-ok\n  keep_alive: true\n  keep_alive_ttl:\n    provider: observed\n    model: observed-model\n    ttl_ms: 900000\n");
+    const agent = await makeAgent(host, "sup-ttl-ok", root);
+    const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+    runtime.start();
+    try {
+      await host.sendTurn(agent, "SECRET-MESSAGE-XYZ");
+      const st = runtime.statusFor(root);
+      assert.equal(st.capable.ttl, "explicit");
+      assert.equal(st.capable.reason, "exempt_long_ttl");
+      assert.equal(st.configured.route_ttl_matched, true);
+      assert.deepEqual(st.configured.route_ttl, { provider: "observed", model: "observed-model", ttl_ms: 900000 });
+      assert.equal(runtime.snapshotProblem(agent), null, "TTL 豁免不得破坏快照可用性");
+      assert.equal(JSON.stringify(st).includes("SECRET-MESSAGE-XYZ"), false, "状态投影不得泄漏会话内容/messages");
+      clock.advance(240_000);
+      await runtime.sweep();
+      assert.equal(host.adapter.calls.length, 1, "显式长 TTL 匹配时不得 ping");
+      assert.equal(runtime.stateFor(root).lastOutcome, null);
+    } finally { runtime.dispose(); }
+  }
+  // 不匹配 ⇒ unknown，按原策略 ping
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-ttl-no\n  keep_alive: true\n  keep_alive_ttl:\n    provider: observed\n    model: other-model\n    ttl_ms: 900000\n");
+    const agent = await makeAgent(host, "sup-ttl-no", root);
+    const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+    runtime.start();
+    try {
+      await host.sendTurn(agent, "ttl-no");
+      const st = runtime.statusFor(root);
+      assert.equal(st.capable.ttl, "unknown");
+      assert.equal(st.configured.route_ttl_matched, false);
+      clock.advance(240_000);
+      await runtime.sweep();
+      assert.equal(host.adapter.calls.length, 2, "不匹配 ⇒ 未知 TTL 原策略照常 ping");
+    } finally { runtime.dispose(); }
+  }
+  // 畸形 ⇒ malformed + unknown，不豁免
+  {
+    const host = await makeRealHost({ adapterDefaults: true });
+    const root = makeBoard("supervisor:\n  session: sup-ttl-bad\n  keep_alive: true\n  keep_alive_ttl:\n    provider: observed\n    model: observed-model\n    ttl_ms: 1000\n");
+    const agent = await makeAgent(host, "sup-ttl-bad", root);
+    const { runtime, clock } = await makeRuntime(host, { defaultWorkspace: () => root });
+    runtime.start();
+    try {
+      await host.sendTurn(agent, "ttl-bad");
+      const st = runtime.statusFor(root);
+      assert.equal(st.configured.route_ttl_malformed, true);
+      assert.equal(st.capable.ttl, "unknown");
+      clock.advance(240_000);
+      await runtime.sweep();
+      assert.equal(host.adapter.calls.length, 2);
+    } finally { runtime.dispose(); }
+  }
+  // schema / 写入 / 清理
+  {
+    const root = makeBoard("supervisor:\n  session: sup-ttl-schema\n");
+    assert.equal(validateSchema({ supervisor: { keep_alive_ttl: { provider: "p", model: "m", ttl_ms: 1000 } } }, settingsPostSchema).valid, false, "小于豁免阈值必须拒绝");
+    assert.equal(validateSchema({ supervisor: { keep_alive_ttl: { provider: "p", model: "m" } } }, settingsPostSchema).valid, false, "缺 ttl_ms 必须拒绝");
+    writeProjectConfig(root, { supervisor: { keep_alive_ttl: { provider: "observed", model: "observed-model", ttl_ms: 900000 } } }, "g505-test");
+    let cfg = readProjectConfig(root);
+    assert.deepEqual(cfg.supervisor.keep_alive_ttl, { provider: "observed", model: "observed-model", ttl_ms: 900000 });
+    writeProjectConfig(root, { supervisor: { keep_alive_ttl: null } }, "g505-test");
+    cfg = readProjectConfig(root);
+    assert.equal(cfg.supervisor.keep_alive_ttl, null);
+    assert.equal(existsSync(join(root, "project.yaml")), true);
   }
 });
 
@@ -1072,6 +1489,24 @@ test("g505 REST：公开 settings 服务的显式值是现真源，优先于 set
     for (const d of h.cleanups.splice(0)) { try { d(); } catch { /* ignore */ } }
     rmSync(root, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("B5 REST：keep_alive_ttl 在 settings 投影中与项目配置同源，默认 null=未知", async () => {
+  const root = makeBoard("supervisor:\n  session: sup-ttl-rest\n  keep_alive: true\n  keep_alive_ttl:\n    provider: observed\n    model: observed-model\n    ttl_ms: 900000\n");
+  const h = makeApplyHarness(root);
+  try {
+    const got = await h.call("GET", "/api/dsh-graph/settings");
+    assert.equal(got.code, 200);
+    assert.deepEqual(got.body.supervisor.keep_alive_ttl, { provider: "observed", model: "observed-model", ttl_ms: 900000 });
+    const status = got.body.supervisor.keep_alive_status;
+    assert.deepEqual(status.configured.route_ttl, { provider: "observed", model: "observed-model", ttl_ms: 900000 });
+    assert.equal(status.configured.route_ttl_malformed, false);
+    assert.equal(status.configured.route_ttl_matched, false, "无观察 route 时不得假装匹配豁免");
+    assert.equal(status.capable.ttl, "unknown", "默认未知路径仍原样投影");
+  } finally {
+    for (const d of h.cleanups.splice(0)) { try { d(); } catch { /* ignore */ } }
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
