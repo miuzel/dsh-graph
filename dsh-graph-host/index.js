@@ -773,8 +773,9 @@ function resolvedRouteOf(options) {
  *
  * @param options.ctx 插件上下文（读取 `agents`/`llm` 服务，注册事件）
  * @param options.readGlobal 返回 `{ enabled, malformed, available, raw }`（profile 全局开关）
- * @param options.resolveRoot `(workspace) => boardRoot`（canonical 解析）
- * @param options.defaultWorkspace `() => workspaceRoot|null`（宿主默认 workspace；仅作候选之一）
+ * @param options.resolveRoot `(workspace) => canonical graph root`（**唯一** workspace→root 边界；
+ *   每个 workspace 恰好调用一次，返回的 graph root 绝不再当 workspace 传入）
+ * @param options.defaultWorkspace `() => workspaceRoot|null`（宿主默认 **workspace**，不是 graph root；仅作候选之一）
  * @param options.now/setTimeoutFn/clearTimeoutFn/... 可注入时钟与定时器（生产用全局实现）
  * @param options.log 结构化审计输出（默认 stderr 单行；绝不携带正文）
  */
@@ -813,21 +814,32 @@ export function createKeepAliveRuntime(options = {}) {
       else process.stderr.write(`[dsh-graph-host] ${formatKeepAliveAudit(entry)}\n`);
     } catch { /* 审计失败绝不影响主流程 */ }
   };
-  const normalizeRoot = (root) => {
-    if (!root || typeof root !== "string") return null;
+  /**
+   * **显式边界（B4 root）**：`resolveRoot` 只在「workspace → canonical graph root」这一处调用，
+   * 且每个 workspace **恰好一次**。返回的 graph root 之后不得再当 workspace 传给 resolver
+   * （否则会叠 `.dsh-graph/.dsh-graph`，产生 phantom board / 读不到 project.yaml）。
+   *
+   * `boardRootKey` 是 graph root 的**纯键**：不做任何 canonical 解析、不猜 basename/project.yaml
+   * 是否存在（自定义 root、真正名为 `.dsh-graph` 的 workspace、未初始化 root 均按原样作为边界值）。
+   */
+  const canonicalRootOfWorkspace = (workspace) => {
+    if (!workspace || typeof workspace !== "string") return null;
+    if (typeof resolveRoot !== "function") return null; // 无显式边界解析器 ⇒ fail-safe，不把 workspace 当 root
     try {
-      if (typeof resolveRoot === "function") {
-        const resolved = resolveRoot(root);
-        if (typeof resolved === "string" && resolved) return resolved;
-      }
-    } catch { /* canonical 解析失败：退回原值（同一 workspace 仍能命中同一 key） */ }
-    return root;
+      const resolved = resolveRoot(workspace);
+      return typeof resolved === "string" && resolved ? resolved : null;
+    } catch {
+      return null;
+    }
   };
+  // graph root 由 resolveRoot 产生，生产恒为绝对路径；只接受绝对键，避免误把相对 workspace 当 root
+  // 创建 phantom board（相对 root 的解析必须走 canonicalRootOfWorkspace 边界）。
+  const boardRootKey = (root) => (typeof root === "string" && root && isAbsolute(root) ? root : null);
   const rootOfAgent = (agent) => {
     try {
       const ws = agent?.session?.header?.cwd;
       if (!ws) return null;
-      return normalizeRoot(ws);
+      return canonicalRootOfWorkspace(ws);
     } catch {
       return null;
     }
@@ -835,7 +847,7 @@ export function createKeepAliveRuntime(options = {}) {
   const defaultRoot = () => {
     try {
       const ws = typeof defaultWorkspace === "function" ? defaultWorkspace() : null;
-      return ws ? normalizeRoot(ws) : null;
+      return ws ? canonicalRootOfWorkspace(ws) : null;
     } catch {
       return null;
     }
@@ -875,7 +887,8 @@ export function createKeepAliveRuntime(options = {}) {
     configError: false,
   });
   const boardForRoot = (root, create = true) => {
-    const key = normalizeRoot(root);
+    // 这里只接受**已归一 graph root**（调用方必须来自 canonicalRootOfWorkspace 或宿主 rootFor）。
+    const key = boardRootKey(root);
     if (!key) return null;
     let board = boards.get(key);
     if (!board && create) { board = makeBoard(key); boards.set(key, board); }
@@ -1000,10 +1013,10 @@ export function createKeepAliveRuntime(options = {}) {
     return null;
   };
 
-  /** 对外：传入 Agent / board root / 省略（默认 board）都能得到该 board 的快照可用性。 */
+  /** 对外：传入 Agent / **canonical graph root** / 省略（默认 board）得到该 board 的快照可用性。 */
   const snapshotProblem = (target) => {
     if (typeof target === "string") {
-      const board = boards.get(normalizeRoot(target)) ?? null;
+      const board = boards.get(boardRootKey(target)) ?? null;
       return snapshotProblemForBoard(board, board?.supervisorAgent ?? null);
     }
     if (target && typeof target === "object") {
@@ -1609,7 +1622,9 @@ export function createKeepAliveRuntime(options = {}) {
   };
 
   const statusFor = (rootArg) => {
-    const requested = rootArg ? normalizeRoot(rootArg) : defaultRoot();
+    // 对外契约：rootArg 是**已归一 graph root**（apply 的 rootFor / 测试的 canonical root）；
+    // workspace→root 的换算是调用方的显式边界，statusFor 绝不再二次解析。
+    const requested = rootArg ? boardRootKey(rootArg) : defaultRoot();
     let board = requested ? boards.get(requested) ?? null : null;
     if (!board && requested) board = boardForRoot(requested);
     if (!board) board = boards.values().next().value ?? null;
@@ -1648,8 +1663,10 @@ export function createKeepAliveRuntime(options = {}) {
     const ttlMatched = routeMatchesTtl(ttlEntry, board?.snapshot?.route) ? ttlEntry : null;
     let channel = resolveKeepAliveChannel(
       {
-        llm: !!(llm && typeof llm.prepareCall === "function"),
-        agents: !!(agents && typeof agents.isOwnedBy === "function"),
+        // 必须与调度器 capabilityOf 完全同口径（get/list/isOwnedBy + prepareCall/stream），
+        // 否则 status 会宣称 capable 而实际调度路径无法枚举/调用。
+        llm: !!(llm && typeof llm.prepareCall === "function" && typeof llm.stream === "function"),
+        agents: !!(agents && typeof agents.get === "function" && typeof agents.list === "function" && typeof agents.isOwnedBy === "function"),
         status: !!agent && (agent.status === "idle" || agent.status === "running"),
         maintenance: !!agent && typeof agent.runMaintenance === "function",
         snapshot: snapProblem === null,
@@ -1699,7 +1716,13 @@ export function createKeepAliveRuntime(options = {}) {
     sweep,
     statusFor,
     snapshotProblem,
-    stateFor: (root) => boards.get(normalizeRoot(root)) ?? null,
+    stateFor: (root) => boards.get(boardRootKey(root)) ?? null,
+    /** 显式 workspace→graph root 边界（供需要从 workspace 查询的调用方；内部不做二次解析）。 */
+    rootOfWorkspace: (workspace) => canonicalRootOfWorkspace(workspace),
+    stateForWorkspace: (workspace) => {
+      const root = canonicalRootOfWorkspace(workspace);
+      return root ? boards.get(root) ?? null : null;
+    },
     stateOf: (agent) => boardOfAgent(agent),
     states: () => [...boards.values()],
     rootOfAgent,

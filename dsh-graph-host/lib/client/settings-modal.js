@@ -1306,6 +1306,8 @@
                 status?.configured?.route_ttl_malformed
                   ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT("settings.keepAliveTtlMalformed"))
                   : null,
+                // 如实说明：TTL 是**只读展示**，实际配置入口在 project.yaml（不提供伪造/猜测 UI）。
+                h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.keepAliveTtlHint")),
                 unavailable
                   ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
                       dgT("settings.keepAliveCapability").replace("{v}", dgT("settings.keepAliveUnavailable"))

@@ -27,6 +27,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import {
   KEEP_ALIVE_MODES,
@@ -44,6 +46,7 @@ import {
 import { init, readProjectConfig, writeProjectConfig, settingsPostSchema, validateSchema } from "../ops.ts";
 import { apply } from "../../dist/index.js";
 import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+import { resolveCanonicalRoot, _clearCanonicalRootCache } from "../root.ts";
 
 // ─────────────────────────────── 公共夹具 ───────────────────────────────
 const TMP_ROOTS: string[] = [];
@@ -196,6 +199,20 @@ async function makeAgent(host: any, id: string, root: string, options: any = { p
   return host.loop.create(id, options, { cwd: root });
 }
 
+/** 建 workspace + graph root（不依赖 runtime/apply 的初始化路径）。 */
+function makeWorkspaceGraph(tag: string, projectYaml: string, rootName = ".dsh-graph") {
+  const ws = tmpDir(`ws-${tag}`);
+  const graphRoot = join(ws, rootName);
+  init(graphRoot);
+  if (projectYaml) writeFileSync(join(graphRoot, "project.yaml"), projectYaml);
+  return { ws, graphRoot };
+}
+
+/** 真实 `resolveCanonicalRoot` → graph root（与 apply 的 keepAliveRootOfWorkspace 同一语义）。 */
+function realResolver(rootName = ".dsh-graph") {
+  return (workspace: string) => resolveCanonicalRoot({ root: rootName }, workspace, { ttlMs: 0 }).root;
+}
+
 async function loadRuntimeFactory() {
   const mod: any = await import("../../dist/index.js");
   return mod.createKeepAliveRuntime as (opts: any) => any;
@@ -204,6 +221,7 @@ async function loadRuntimeFactory() {
 /** engine 侧 runtime 夹具：真实服务 + 假时钟（可注入读配置函数做异常/隔离用例）。 */
 async function makeRuntime(host: any, opts: {
   clock?: ReturnType<typeof fakeClock>;
+  resolveRoot?: (workspace: string) => string | null;
   defaultWorkspace?: () => string | null;
   readGlobal?: () => any;
   readProjectConfigFn?: (root: string) => any;
@@ -219,7 +237,7 @@ async function makeRuntime(host: any, opts: {
       get: (name: string) => (name === "llm" ? host.llmRuntime : name === "agents" ? host.reg : undefined),
     },
     readGlobal: opts.readGlobal ?? (() => ({ enabled: null, malformed: false, available: true, raw: "" })),
-    resolveRoot: (ws: string) => ws,
+    resolveRoot: opts.resolveRoot ?? ((ws: string) => ws),
     defaultWorkspace: opts.defaultWorkspace ?? (() => null),
     readProjectConfigFn: opts.readProjectConfigFn,
     now: opts.now ?? clock.now,
@@ -257,7 +275,21 @@ function makeFakeScheduler(clock: ReturnType<typeof fakeClock>) {
     await new Promise((r) => setImmediate(r));
   };
   const advance = (ms: number) => advanceTo(clock.now() + ms);
-  return { setTimeoutFn, clearTimeoutFn, pending, nextAt, advance, advanceTo, timers };
+  /** 模拟真实事件循环迟到：时钟先跳到 target，再执行所有 <=target 的到期 timer（不把时钟回拨）。 */
+  const advanceLateTo = async (target: number) => {
+    clock.set(target);
+    for (let guard = 0; guard < 500; guard += 1) {
+      const due = [...timers.entries()]
+        .filter(([, t]) => t.at <= target)
+        .sort((a, b) => a[1].at - b[1].at || a[0] - b[0]);
+      if (!due.length) break;
+      const [id, t] = due[0];
+      timers.delete(id);
+      await t.fn();
+    }
+    await new Promise((r) => setImmediate(r));
+  };
+  return { setTimeoutFn, clearTimeoutFn, pending, nextAt, advance, advanceTo, advanceLateTo, timers };
 }
 
 async function waitFor(cond: () => boolean, label: string, timeoutMs = 3_000) {
@@ -953,6 +985,8 @@ test("B4 任意相位：单 board 在 240s 真实 deadline 精确 ping（60s 配
     await host.sendTurn(agent, "b4-phase");
     assert.equal(host.adapter.calls.length, 1);
 
+    const sessionEventsBefore = agent.session.log.length;
+    const messagesBefore = agent.session.deriveMessages().length;
     await sched.advanceTo(t0 + 209_999);
     assert.equal(host.adapter.calls.length, 1, "209999ms 不得 ping（阶段二 240s）");
     await sched.advanceTo(t0 + 239_999);
@@ -960,6 +994,9 @@ test("B4 任意相位：单 board 在 240s 真实 deadline 精确 ping（60s 配
     await sched.advanceTo(t0 + 240_000);
     assert.equal(host.adapter.calls.length, 2, "240000ms 必须真实 ping");
     assert.equal(host.adapter.times[1], t0 + 240_000, "timer 到期即 ping，不得被 105/60s 轮询相位推迟");
+    // 成功 ping 不新增会话消息/事件（checkpoint flush 允许，不声称零磁盘 I/O）
+    assert.equal(agent.session.log.length, sessionEventsBefore, "成功 ping 不得新增 session 事件");
+    assert.equal(agent.session.deriveMessages().length, messagesBefore, "成功 ping 不得新增会话消息");
 
     await sched.advanceTo(t0 + 540_000);
     assert.equal(host.adapter.calls.length, 2, "阶段二单次后不得再 ping");
@@ -1313,6 +1350,283 @@ test("B5 显式可信长 TTL：完整 provider+model 匹配才豁免；未知/�
   }
 });
 
+// ─────────────────────────────── 4c. B-ROOT 出厂相对 root/显式边界 ───────────────────────────────
+
+test("B-ROOT 出厂相对 root='.dsh-graph'：真实 resolveCanonicalRoot + 真实 AgentLoop/timer，240s 真 ping 且无 phantom board", async () => {
+  _clearCanonicalRootCache();
+  const { ws, graphRoot } = makeWorkspaceGraph("rel", "supervisor:\n  session: sup-root-rel\n  keep_alive: true\n");
+  const host = await makeRealHost({ adapterDefaults: true });
+  const agent = await makeAgent(host, "sup-root-rel", ws); // agent.cwd = workspace，不是 graph root
+  const clock = fakeClock(11_000_000);
+  const sched = makeFakeScheduler(clock);
+  host.adapter.nowFn = clock.now;
+  const { runtime } = await makeRuntime(host, {
+    clock,
+    defaultWorkspace: () => ws,
+    resolveRoot: realResolver(".dsh-graph"),
+    setTimeoutFn: sched.setTimeoutFn,
+    clearTimeoutFn: sched.clearTimeoutFn,
+  });
+  runtime.start();
+  try {
+    const t0 = clock.now();
+    await host.sendTurn(agent, "root-relative");
+    assert.equal(runtime.rootOfAgent(agent), graphRoot, "workspace→canonical graph root 只解析一次");
+    assert.equal(runtime.states().length, 1, "恰好一个 board，不得叠加 .dsh-graph");
+    assert.ok(runtime.stateFor(graphRoot));
+    assert.equal(runtime.stateFor(graphRoot).root, graphRoot);
+    assert.equal(runtime.stateFor(join(graphRoot, ".dsh-graph")), null, "不得存在 graphRoot/.dsh-graph phantom");
+    assert.equal(runtime.stateForWorkspace(ws)?.root, graphRoot, "workspace 查询必须走显式边界");
+    // 相对字符串不是 graph root：statusFor 不得把它当 root 创建 phantom
+    runtime.statusFor(".dsh-graph");
+    assert.equal(runtime.states().length, 1);
+    assert.equal(runtime.snapshotProblem(agent), null);
+
+    const st = runtime.statusFor(graphRoot);
+    assert.equal(st.effective.effective, true);
+    assert.equal(st.effective.source, "project_explicit", "statusFor(graph root) 必须读同一 project.yaml");
+    assert.equal(st.configured.config_error, false);
+
+    await sched.advanceTo(t0 + 240_000);
+    assert.equal(host.adapter.calls.length, 2, "相对 root 下 240s 必须真实 ping");
+    assert.equal(host.adapter.times[1], t0 + 240_000);
+
+    // 连跑多 tick + 重复 statusFor(graphRoot)：不得新增 phantom board/层级
+    for (let i = 0; i < 3; i += 1) {
+      runtime.statusFor(graphRoot);
+      await runtime.sweep();
+      await sched.advance(60_000);
+    }
+    assert.equal(runtime.states().length, 1);
+    assert.ok(runtime.states().every((b: any) => b.root === graphRoot));
+    assert.equal(existsSync(join(graphRoot, ".dsh-graph")), false, "不得在 graph root 下再 init/写入嵌套 .dsh-graph");
+    assert.equal(runtime.statusFor(graphRoot).effective.source, "project_explicit");
+  } finally {
+    runtime.dispose();
+    _clearCanonicalRootCache();
+  }
+});
+
+test("B-ROOT 自定义相对 root / 绝对 root：board 键与 project.yaml 读取均用同一 canonical root", async () => {
+  _clearCanonicalRootCache();
+  // 自定义相对 root='custom-graph'
+  {
+    const { ws, graphRoot } = makeWorkspaceGraph("custom", "supervisor:\n  session: sup-root-custom\n  keep_alive: true\n", "custom-graph");
+    const host = await makeRealHost({ adapterDefaults: true });
+    const agent = await makeAgent(host, "sup-root-custom", ws);
+    const clock = fakeClock(12_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => ws, resolveRoot: realResolver("custom-graph"),
+      setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agent, "root-custom");
+      assert.equal(runtime.states().length, 1);
+      assert.equal(runtime.stateFor(graphRoot)?.root, graphRoot);
+      assert.equal(runtime.statusFor(graphRoot).effective.source, "project_explicit");
+      await sched.advanceTo(t0 + 240_000);
+      assert.equal(host.adapter.calls.length, 2);
+    } finally { runtime.dispose(); }
+  }
+  // 绝对 config.root：不经过 workspace 拼接
+  {
+    const absRoot = tmpDir("abs-graph");
+    init(absRoot);
+    writeFileSync(join(absRoot, "project.yaml"), "supervisor:\n  session: sup-root-abs\n  keep_alive: true\n");
+    const { ws } = makeWorkspaceGraph("abs-ws", "");
+    const host = await makeRealHost({ adapterDefaults: true });
+    const agent = await makeAgent(host, "sup-root-abs", ws);
+    const clock = fakeClock(13_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const absResolver = (workspace: string) => resolveCanonicalRoot({ root: absRoot }, workspace, { ttlMs: 0 }).root;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => ws, resolveRoot: absResolver,
+      setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agent, "root-abs");
+      assert.equal(runtime.states().length, 1);
+      assert.equal(runtime.stateFor(absRoot)?.root, absRoot);
+      assert.equal(runtime.statusFor(absRoot).effective.source, "project_explicit");
+      await sched.advanceTo(t0 + 240_000);
+      assert.equal(host.adapter.calls.length, 2);
+    } finally { runtime.dispose(); }
+  }
+  _clearCanonicalRootCache();
+});
+
+test("B-ROOT 两 workspace + 真正 linked worktree：归属路径正确，配置/预算不串", async () => {
+  _clearCanonicalRootCache();
+  // 两个独立 workspace
+  {
+    const A = makeWorkspaceGraph("two-A", "supervisor:\n  session: sup-two-A\n  keep_alive: true\n");
+    const B = makeWorkspaceGraph("two-B", "supervisor:\n  session: sup-two-B\n  keep_alive: false\n");
+    const host = await makeRealHost({ adapterDefaults: true });
+    const agentA = await makeAgent(host, "sup-two-A", A.ws);
+    const agentB = await makeAgent(host, "sup-two-B", B.ws);
+    const clock = fakeClock(14_000_000);
+    const sched = makeFakeScheduler(clock);
+    host.adapter.nowFn = clock.now;
+    const { runtime } = await makeRuntime(host, {
+      clock, defaultWorkspace: () => A.ws, resolveRoot: realResolver(),
+      setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+    });
+    runtime.start();
+    try {
+      const t0 = clock.now();
+      await host.sendTurn(agentA, "two-A");
+      await host.sendTurn(agentB, "two-B");
+      assert.equal(runtime.states().length, 2);
+      assert.equal(runtime.stateFor(A.graphRoot)?.root, A.graphRoot);
+      assert.equal(runtime.stateFor(B.graphRoot)?.root, B.graphRoot);
+      assert.equal(runtime.statusFor(A.graphRoot).effective.effective, true);
+      assert.equal(runtime.statusFor(B.graphRoot).effective.effective, false);
+      await sched.advanceTo(t0 + 240_000);
+      const pings = host.adapter.calls.filter((c: any) => c.maxTokens === 1);
+      assert.equal(pings.length, 1);
+      assert.equal(pings[0].sessionId, agentA.session.id);
+      assert.equal(runtime.stateFor(A.graphRoot).pingsInWindow, 1);
+      assert.equal(runtime.stateFor(B.graphRoot).pingsInWindow, 0);
+    } finally { runtime.dispose(); }
+  }
+  // 真正 linked worktree：session.cwd 在 linked tree，归属主工作树 graph root
+  {
+    const base = mkdtempSync(join(tmpdir(), "g505v3-git-"));
+    const main = join(base, "main");
+    const linked = join(base, "linked");
+    try {
+      mkdirSync(main, { recursive: true });
+      execFileSync("git", ["-C", main, "init"], { stdio: "pipe" });
+      execFileSync("git", ["-C", main, "config", "user.name", "g505-test"], { stdio: "pipe" });
+      execFileSync("git", ["-C", main, "config", "user.email", "g505@test"], { stdio: "pipe" });
+      execFileSync("git", ["-C", main, "commit", "--allow-empty", "-m", "init"], { stdio: "pipe" });
+      execFileSync("git", ["-C", main, "worktree", "add", linked], { stdio: "pipe" });
+      const mainGraph = join(main, ".dsh-graph");
+      init(mainGraph);
+      writeFileSync(join(mainGraph, "project.yaml"), "supervisor:\n  session: sup-linked\n  keep_alive: true\n");
+      const host = await makeRealHost({ adapterDefaults: true });
+      const agent = await makeAgent(host, "sup-linked", linked);
+      const clock = fakeClock(15_000_000);
+      const sched = makeFakeScheduler(clock);
+      host.adapter.nowFn = clock.now;
+      const { runtime } = await makeRuntime(host, {
+        clock, defaultWorkspace: () => linked, resolveRoot: realResolver(),
+        setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+      });
+      runtime.start();
+      try {
+        const t0 = clock.now();
+        await host.sendTurn(agent, "linked-root");
+        assert.equal(runtime.rootOfAgent(agent), mainGraph, "linked worktree 必须归一到主工作树 graph root");
+        assert.equal(runtime.states().length, 1);
+        assert.equal(runtime.stateFor(mainGraph)?.root, mainGraph);
+        assert.equal(runtime.stateFor(join(linked, ".dsh-graph")), null);
+        assert.equal(runtime.statusFor(mainGraph).effective.source, "project_explicit");
+        await sched.advanceTo(t0 + 240_000);
+        assert.equal(host.adapter.calls.length, 2);
+      } finally { runtime.dispose(); }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }
+  _clearCanonicalRootCache();
+});
+
+test("B-ROOT 不存在 workspace：不创建 .dsh-graph（零意外 init）", async () => {
+  const base = tmpDir("missing-ws");
+  const missing = join(base, "no-such-workspace");
+  const host = await makeRealHost({ adapterDefaults: true });
+  const { runtime } = await makeRuntime(host, {
+    defaultWorkspace: () => missing,
+    resolveRoot: realResolver(),
+  });
+  runtime.start();
+  try {
+    runtime.statusFor(join(missing, ".dsh-graph"));
+    await runtime.sweep();
+    assert.equal(existsSync(join(missing, ".dsh-graph")), false, "运行时读取不得 init 不存在的工作区");
+    assert.equal(existsSync(missing), false);
+  } finally { runtime.dispose(); }
+});
+
+test("B-ROOT apply 集成：相对 root='.dsh-graph' 时 REST 投影读同一 canonical graph root", async () => {
+  const { ws, graphRoot } = makeWorkspaceGraph("apply-rel", "supervisor:\n  session: sup-apply-rel\n  keep_alive: true\n");
+  const h = makeApplyHarness(ws, () => undefined, null, { root: ".dsh-graph" });
+  try {
+    const got = await h.call("GET", `/api/dsh-graph/settings?workspace=${encodeURIComponent(ws)}`);
+    assert.equal(got.code, 200);
+    const eff = got.body.supervisor.keep_alive_effective;
+    assert.equal(eff.effective, true);
+    assert.equal(eff.source, "project_explicit", "apply 的 keepAliveRootOfWorkspace 必须只解析一次");
+    assert.equal(got.body.supervisor.keep_alive_status.configured.config_error, false);
+    assert.equal(existsSync(join(graphRoot, ".dsh-graph")), false, "不得在 graph root 下叠出第二层");
+    // tool 面同一 root/同一 project.yaml，不得各自重新解析
+    const tool = h.byName.get("graph_get_settings");
+    const toolOut = await tool.execute({}, { agent: undefined, signal: new AbortController().signal });
+    assert.equal(toolOut.supervisor_keep_alive.effective.effective, true);
+    assert.equal(toolOut.supervisor_keep_alive.effective.source, "project_explicit");
+    // 显式 false 也必须同源
+    writeFileSync(join(graphRoot, "project.yaml"), "supervisor:\n  session: sup-apply-rel\n  keep_alive: false\n");
+    const gotOff = await h.call("GET", `/api/dsh-graph/settings?workspace=${encodeURIComponent(ws)}`);
+    assert.equal(gotOff.body.supervisor.keep_alive_effective.effective, false);
+    assert.equal(gotOff.body.supervisor.keep_alive_effective.source, "project_explicit");
+    const toolOff = await tool.execute({}, { agent: undefined, signal: new AbortController().signal });
+    assert.equal(toolOff.supervisor_keep_alive.effective.effective, false);
+    assert.equal(toolOff.supervisor_keep_alive.effective.source, "project_explicit");
+  } finally {
+    for (const d of h.cleanups.splice(0)) { try { d(); } catch { /* ignore */ } }
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("B4/B6 timer 迟到：时钟跳过大段后只发一次，不补偿风暴", async () => {
+  const host = await makeRealHost({ adapterDefaults: true });
+  const root = makeBoard("supervisor:\n  session: sup-late\n  keep_alive: true\n");
+  const agent = await makeAgent(host, "sup-late", root);
+  const clock = fakeClock(16_000_000);
+  const sched = makeFakeScheduler(clock);
+  host.adapter.nowFn = clock.now;
+  const { runtime } = await makeRuntime(host, {
+    clock, defaultWorkspace: () => root, setTimeoutFn: sched.setTimeoutFn, clearTimeoutFn: sched.clearTimeoutFn,
+  });
+  runtime.start();
+  try {
+    const t0 = clock.now();
+    await host.sendTurn(agent, "late-timer");
+    await sched.advanceLateTo(t0 + 1_000_000);
+    assert.equal(host.adapter.calls.length, 2, "迟到只允许一次 ping");
+    assert.equal(host.adapter.calls.filter((c: any) => c.maxTokens === 1).length, 1, "不得补偿风暴");
+    assert.equal(runtime.stateFor(root).lastOutcome, "success");
+    await sched.advanceLateTo(t0 + 1_300_000);
+    assert.equal(host.adapter.calls.length, 2, "迟到成功之后仍按单次 grace/AFK，不追发");
+  } finally { runtime.dispose(); }
+});
+
+test("B-ROOT status capability 与调度器同口径：缺 get/list/stream 时不得宣称 capable", async () => {
+  const root = makeBoard("");
+  const fakeHost = {
+    hostCtx: { on: () => () => {} },
+    llmRuntime: { prepareCall: () => {} }, // 缺 stream
+    reg: { isOwnedBy: () => true }, // 缺 get/list
+  } as any;
+  const { runtime } = await makeRuntime(fakeHost, { defaultWorkspace: () => root });
+  runtime.start();
+  try {
+    const st = runtime.statusFor(root);
+    assert.equal(st.capable.host_channel, false);
+    assert.ok(st.capable.missing.includes("llm.prepareCall/stream"), JSON.stringify(st.capable));
+    assert.ok(st.capable.missing.includes("agents.registry"));
+    assert.equal(st.capable.missing.includes("agent.status"), true, "无 agent 时 status 亦缺");
+  } finally { runtime.dispose(); }
+});
+
 // ─────────────────────────────── 5. REST / 工具 / GUI 契约 ───────────────────────────────
 
 function fakeRes() {
@@ -1323,7 +1637,7 @@ function fakeRes() {
 }
 
 /** apply 级夹具：真实唯一 prefix 注册 + g507 owner admit（测试自有凭证），服务缺失如实降级。 */
-function makeApplyHarness(root: string, extraGet: (name: string) => any = () => undefined, settingsService: any = null) {
+function makeApplyHarness(root: string, extraGet: (name: string) => any = () => undefined, settingsService: any = null, applyConfig: any = null) {
   const stub = createRegisterStub();
   const registered: any[] = [];
   const cleanups: Array<() => void> = [];
@@ -1346,7 +1660,7 @@ function makeApplyHarness(root: string, extraGet: (name: string) => any = () => 
         }
       : {}),
   };
-  apply(ctx, { root });
+  apply(ctx, applyConfig ?? { root });
   const byName = new Map(registered.map((d: any) => [d.name, d]));
   const call = async (method: string, path: string, body?: unknown) => {
     const handler = entryHandler(stub.routes);
@@ -1522,11 +1836,14 @@ test("g505 GUI 契约：客户端三态写入点/生效读数与 zh/en 文案键
   assert.match(client, /form\.supervisor\?\.keep_alive_effective/);
   assert.match(client, /dg-keep-alive/);
   assert.match(client, /keep_alive_status/);
+  assert.match(client, /settings\.keepAliveTtlHint/, "TTL 只读/实际配置说明必须在控件中展示");
   const i18n = readFileSync(new URL("../../dsh-graph-host/lib/client/i18n.js", import.meta.url), "utf8");
   for (const key of [
     "settings.keepAliveLabel", "settings.keepAliveHint", "settings.keepAliveAria",
     "settings.keepAliveInherit", "settings.keepAliveOn", "settings.keepAliveOff",
     "settings.keepAliveEffective", "settings.keepAliveMalformed", "settings.keepAliveTtlUnknown",
+    "settings.keepAliveTtlExplicit", "settings.keepAliveTtlMatched", "settings.keepAliveTtlUnmatched",
+    "settings.keepAliveTtlMalformed", "settings.keepAliveTtlHint",
     "settings.keepAliveCapability", "settings.keepAliveUnavailable",
     "settings.keepAliveSrcProject", "settings.keepAliveSrcGlobal", "settings.keepAliveSrcDefault",
     "settings.keepAliveSrcProjectInvalid", "settings.keepAliveSrcGlobalInvalid",
