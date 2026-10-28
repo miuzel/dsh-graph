@@ -8,7 +8,7 @@
  * 本套件把「帮助资产 = 引擎 schema 的投影」变成机器断言：引擎加参数/加工具而帮助没跟 → 必红。
  *
  * 断言面（真源固定为 `apply()` 实际注册的 tool def，不硬编码 49 名单）：
- *  A. 工具集合：schema 51 个 graph_* 工具（g-436 新增 graph_start_review）与 zh/en 两份帮助的条目**逐一相等**（不缺、不多、不重复），
+ *  A. 工具集合：schema 52 个 graph_* 工具（g-436 新增 graph_start_review）与 zh/en 两份帮助的条目**逐一相等**（不缺、不多、不重复），
  *     且两份帮助的条目**顺序一致**；文件头声明的工具计数与 schema 实数一致；
  *  B. 参数面：每个工具帮助行必须提及该工具 schema 的**全部**参数名（zh/en 双向），
  *     且**可选性必须与 schema 一致**（必填不带方括号、可选必须带方括号）；
@@ -419,7 +419,7 @@ const defs = toolDefsFrom(apply);
 const defByName = new Map(defs.map((d) => [d.name, d]));
 
 /**
- * ── g-495 改判（负责人授权）：help 资产的可判定面从「51 条工具清单」换成「功能模块表」 ──
+ * ── g-495 改判（负责人授权）：help 资产的可判定面从「52 条工具清单」换成「功能模块表」 ──
  *
  * help.zh/en 现在是 **agent 面的渐进式披露**：只列功能模块 + 当前开关状态，工具细节以
  * harness 注入的 schema 为准。原 A2（条目集合 == schema 工具集合）与 A3（条目数 == schema 实数）
@@ -566,9 +566,9 @@ function toolDetailWindow(text: string, tool: string): string {
   return next < 0 ? rest : rest.slice(0, tool.length + next);
 }
 
-test("A1 schema 恰为 51 个 graph_* 工具，且名字唯一", () => {
-  assert.equal(defs.length, 51, `引擎注册的 graph_* 工具数应为 51（g-436 新增 graph_start_review），实际 ${defs.length}`);
-  assert.equal(new Set(defs.map((d) => d.name)).size, 51, "引擎工具名存在重复");
+test("A1 schema 恰为 52 个 graph_* 工具，且名字唯一", () => {
+  assert.equal(defs.length, 52, `引擎注册的 graph_* 工具数应为 52（g-436 新增 graph_start_review），实际 ${defs.length}`);
+  assert.equal(new Set(defs.map((d) => d.name)).size, 52, "引擎工具名存在重复");
 });
 
 test("A2' zh/en 帮助模块表与引擎模块注册表逐一相等（不缺/不多/不重复），且 zh/en 结构对称", () => {
@@ -629,7 +629,7 @@ test("A2''/A3'' 负向对照：模块占位被改坏 / 模块数写错 / 声明�
 test("B（g-495 改判后已由 B' 接管）help 无逐工具签名行时本判据对空集合为真，不得退化为静默跳过", () => {
   // help 现在**刻意不含**逐工具签名（工具细节以 harness 注入的 schema 为准）。
   // 保留 signatureProblems 的**合成样本**判别力由 F 负责；真实资产上的口径改由 B'（按需面 usage）承担。
-  // 这里显式断言「help 确实没有签名条目」，使「help 又被加回 51 条清单」这种回退也能被看见。
+  // 这里显式断言「help 确实没有签名条目」，使「help 又被加回 52 条清单」这种回退也能被看见。
   assert.equal(help.zh.entries.length, 0, "help.zh.md 不应再有逐工具条目（改判后为模块清单）");
   assert.equal(help.en.entries.length, 0, "help.en.md 不应再有逐工具条目（改判后为模块清单）");
   // 若将来误把清单加回，signatureProblems 会重新生效并逐条校验（fail-closed，不是放行）。
@@ -645,8 +645,8 @@ test("B' 按需面（usage）里出现的每个工具签名都是 schema 的真�
   // ① usage 出现的每个签名都必须覆盖该工具 schema 的**全部**参数名（g-311/g-329 的原始判别力：
   //    引擎加了参数而文档没跟 ⇒ 必红）；② 必填/可选性必须与 schema.required 一致；
   // ③ union（`{a|b}`）只能用于真 XOR 白名单工具；④ 签名不得含 schema 外 token。
-  // 与 help 期不同之处只在「覆盖面」：usage 是**代表性**速查面（不是 51 条全量清单），故只对
-  // **它自己声明过的**工具判真，不要求它列全 51 个 —— 但列出来的每一条都必须逐字正确。
+  // 与 help 期不同之处只在「覆盖面」：usage 是**代表性**速查面（不是 52 条全量清单），故只对
+  // **它自己声明过的**工具判真，不要求它列全 52 个 —— 但列出来的每一条都必须逐字正确。
   const problems = [
     ...usageSignatureProblems(USAGE.zh.text, defByName, "zh"),
     ...usageSignatureProblems(USAGE.en.text, defByName, "en"),

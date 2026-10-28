@@ -1,10 +1,10 @@
-/** g-507 结构守卫：**生产注册路径不可能留下裸业务路由** + 基线 63 条清单不漂移。
+/** g-507 结构守卫：**生产注册路径不可能留下裸业务路由** + 基线 65 条清单不漂移。
  *
  * A 层用「真实注册入口」证明行为；本套件用**源码结构**证明「未来新增路由也不会绕开门禁」：
  *   · webServer 上只允许一次 `register(...)`，且其参数必须是唯一的 prefix 命名空间入口（dispatchRequest）；
  *   · 取消 provider 的一条路由定义都在命名空间内（越界 ⇒ `buildRouteTable` 抛错 ⇒ 不注册）；
  *   · 业务 handler 只能出现在 `httpRoutes()` 定义数组里，入口之外没有第二条 `webServer.register` 通路；
- *   · 基线 63 条（61 exact + 2 prefix）在**实现里**可被枚举，且与 A 层清单逐条一致。
+ *   · 基线 65 条（63 exact + 2 prefix）在**实现里**可被枚举，且与 A 层清单逐条一致。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -89,12 +89,12 @@ test("g-507 S3：准入拒绝面 —— 401/403 沿用宿主、非 owner 403、�
 });
 
 test("g-507 S4：业务路由集合来自**真实注册快照**，且与命名空间/kind 约束一致", () => {
-  // g-507 返工：此前用源码里 `\n    {\n` 计数 ⇒ 对「单行追加一条路由」静默失聪（实测仍报 63）。
+  // g-507 返工：此前用源码里 `\n    {\n` 计数 ⇒ 对「单行追加一条路由」静默失聪（实测仍报 65）。
   // 现改为读取插件在**真实注册前**生成的快照（仅 path + kind），结构约束直接作用在真实集合上。
   bootPlugin();
   const registered = getRegisteredRoutes();
   assert.ok(registered, "必须能从真实注册获得路由快照");
-  assert.equal(registered!.length, 63, `真实业务路由必须恰为 63 条（实得 ${registered!.length}）`);
+  assert.equal(registered!.length, 65, `真实业务路由必须恰为 65 条（实得 ${registered!.length}）`);
   const prefixes = registered!.filter((r) => r.kind === "prefix").map((r) => r.path).sort();
   assert.deepEqual(prefixes, [DESIGN_DIAGRAM_ROUTE, HELP_ASSET_ROUTE].sort(), "只有两条有意 prefix（图 / 帮助资产）");
   assert.equal(DESIGN_DIAGRAM_ROUTE, `${API_NAMESPACE}/diagram`);
@@ -137,12 +137,12 @@ test("g-507 S4：业务路由集合来自**真实注册快照**，且与命名�
 
 test("g-507 S4b：往返对账 —— 单行新增一条路由 / 删掉一条受测路由都必须判红", async () => {
   // 对被洗白的两类变化做**真实判红**证明（不是靠源码文本计数）：
-  // ① 单行新增（源码里就是一行 `{ path: "…", handler: … }`）⇒ 快照 64 条 ⇒ 对账断言失败；
+  // ① 单行新增（源码里就是一行 `{ path: "…", handler: … }`）⇒ 快照 66 条 ⇒ 对账断言失败；
   // ② 删掉一条受测业务路由 ⇒ 该端点 lookupRoute 未命中 ⇒ 逐端点断言失败。
   bootPlugin();
   const baseline = getRegisteredRoutes()!;
   const withExtra = [...baseline, { path: `${API_NAMESPACE}/__extra_probe__`, kind: "exact" }];
-  assert.equal(withExtra.length, 64);
+  assert.equal(withExtra.length, 66);
   assert.throws(
     () => assertSameRouteSet(withExtra, baseline),
     /路由集合漂移/,
@@ -251,6 +251,8 @@ test("g-507 S5：迁移清单上的旧套件全部经唯一门禁入口驱动（
     "g507-http-auth-surface.test.ts",
     "g507-http-auth-real-host.test.ts",
     "g251-brief-source-contract.test.ts",
+    // g-506：关照 REST 门禁证据套件（同样经唯一入口驱动）。
+    "g506-care.test.ts",
   ]);
   // 清单不得漏（有端点引用 + 装配入口 + 已适配）的套件
   const missingFromList = outsideList.filter(

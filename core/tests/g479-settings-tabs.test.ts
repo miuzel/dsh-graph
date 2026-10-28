@@ -86,6 +86,10 @@ const KEY_ANCHORS: Record<string, string> = {
   "supervisor.agent_teams": 'set(["supervisor", "agent_teams"], e.target.checked)',
   // g-505：保活三态下拉的唯一写入点（「高级设置」页签；与 supervisor.automation 同页签同类）。
   "supervisor.keep_alive": 'set(["supervisor", "keep_alive"], e.target.value === "inherit" ? null : e.target.value)',
+  // g-506：关照三态 + 阈值/复查间隔的唯一写入点（同属「高级设置」页签）。
+  "supervisor.care": 'set(["supervisor", "care"], e.target.value === "inherit" ? null : e.target.value)',
+  "supervisor.care_threshold_seconds": 'set(["supervisor", "care_threshold_seconds"], e.target.value === "" ? null : Number(e.target.value))',
+  "supervisor.care_recheck_seconds": 'set(["supervisor", "care_recheck_seconds"], e.target.value === "" ? null : Number(e.target.value))',
   "local.refresh_interval": "onChange: (e) => handleIntervalChange(e.target.value)",
   "local.live_display": "setLiveDisplay(e.target.checked)",
   // g-488：`defaults.review.reviewer` / `defaults.review.prompt` / `defaults.pk.lanes` /

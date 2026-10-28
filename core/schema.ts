@@ -441,6 +441,11 @@ export const projectConfigPatchSchema: ObjectSchema = {
           additionalProperties: false,
           nullable: true,
         },
+        // g-506：子代理长任务关照的项目级三态（inherit/true/false）。未配置/null = inherit（跟随全局）。
+        care: { type: "string", enum: ["inherit", "true", "false"], nullable: true },
+        // g-506：关照时间参数（秒）；范围与类型在 validateConfigPatch 内二次校验（[30, 86400]）。
+        care_threshold_seconds: { type: ["integer", "number"], minimum: 30, maximum: 86400, nullable: true },
+        care_recheck_seconds: { type: ["integer", "number"], minimum: 30, maximum: 86400, nullable: true },
       },
       additionalProperties: false,
     },

@@ -161,7 +161,7 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
   // host 半边：28 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor；
   // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete；g-150 新增 graph_record_attempt_handoff；g-150 范围扩展新增 graph_set_directive / graph_add_comment；g-128 新增 graph_delete_card；g-158 新增 graph_set_goal_type；g-138 新增 graph_postpone_goal；g-183 新增 graph_store_attachment / graph_delete_attachment）
   const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
-  assert.equal(toolNames.length, 51, "单包注册 51 个 graph_* 工具（g-374 新增 graph_write_results/graph_refresh_results；g-380 新增 graph_set_relation；g-436 新增 graph_start_review）");
+  assert.equal(toolNames.length, 52, "单包注册 52 个 graph_* 工具（g-374 新增 graph_write_results/graph_refresh_results；g-380 新增 graph_set_relation；g-436 新增 graph_start_review）");
   // client 半边：/api/dsh-graph* 全部端点（原 client 包 + g-110 archive/unarchive + g-140 delete + g-158 set-goal-type/create-goal type 透传）
   // g-507：业务定义不再逐条裸注册 —— 整个命名空间由**一个** prefix 入口覆盖（先鉴权后分发）。
   // 逐条端点仍全部可达：下面的清单在 g-507 之前是「逐条已注册」断言，现改为「全部落在唯一入口之下」，

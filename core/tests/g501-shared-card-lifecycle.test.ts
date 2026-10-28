@@ -92,7 +92,7 @@ type HostMock = {
   registeredDefs: Map<string, any>;
 };
 
-/** 模拟宿主：注册面（apply 期 51 个工具）+ `agent/created` 事件 + 每 agent 独立的 tools 服务。 */
+/** 模拟宿主：注册面（apply 期 52 个工具）+ `agent/created` 事件 + 每 agent 独立的 tools 服务。 */
 function makeHostMock(ws: string): HostMock {
   const registered: string[] = [];
   const registeredDefs = new Map<string, any>();
@@ -368,11 +368,11 @@ test("g-501 判据3：graph_delete_card 描述与 server-i18n 字典一致（zh/
   assert.deepEqual(params.required ?? [], ["goal", "card"], "goal/card 必填，detach_only 可选");
 });
 
-test("g-501 判据3：注册面不新增工具名（51 红线）——保底通道复用既有 graph_delete_card 入口", () => {
+test("g-501 判据3：注册面不新增工具名（52 红线）——保底通道复用既有 graph_delete_card 入口", () => {
   const ws = makeWorkspace("");
   const h = makeHostMock(ws.ws);
   apply(h.ctx, {});
-  assert.equal(h.registered.length, 51, `注册数应为 51（实得 ${h.registered.length}）`);
+  assert.equal(h.registered.length, 52, `注册数应为 52（实得 ${h.registered.length}）`);
   assert.equal(new Set(h.registered).size, h.registered.length, "无重名工具");
   // 未新增共享池专属工具名：否则会被模块映射表的命名面前缀（/_shared_cards?$/）吞并 ⇒ 关模块时保底入口一并消失
   const sharedish = h.registered.filter((n) => /_shared_cards?$/.test(n)).sort();

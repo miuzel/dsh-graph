@@ -13,7 +13,7 @@
  */
 import { writeFileSync, readFileSync, realpathSync, mkdirSync, readdirSync, existsSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -215,6 +215,37 @@ import {
   defaultKeepAliveConfig,
   makeKeepAliveAuditEntry,
   formatKeepAliveAudit,
+  // g-506：子代理长任务关照（调度/巡检状态机 + 两级配置 + 只读投影）。
+  // 判定唯一真源在 core/care.ts；宿主只做采样、维护临界区投递与窄工具身份/新鲜度校验。
+  CARE_MODES,
+  CARE_DEFAULTS,
+  CARE_OUTCOMES,
+  CARE_CAPABILITIES,
+  CARE_STALL_SIGNALS,
+  CARE_PRESERVED_GATES,
+  normalizeCareOutcome,
+  normalizeCareSeconds,
+  careResolutionOf,
+  careEffectiveOf,
+  assessCareCapabilities,
+  careTaskDueAt,
+  decideCare,
+  applyCareDelivery,
+  applyCareOutcome,
+  createCareInspection,
+  careInspectionOpen,
+  expireCareInspection,
+  validateCareOutcome,
+  applyCareInspectionOutcome,
+  pauseCare,
+  resumeCare,
+  resetCare,
+  newCareGroupState,
+  isCareReminderStillValid,
+  careStatusProjection,
+  formatCareWakeMessage,
+  makeCareAuditEntry,
+  formatCareAudit,
 } from "./core/ops.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
@@ -1730,6 +1761,1081 @@ export function createKeepAliveRuntime(options = {}) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// g-506：子代理长任务关照（宿主接线；判定真源在 core/care.ts）
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// 真源分工（单一真源，宿主不重写判定）：
+//   · 配置解析 / 调度状态机 / 巡检记录校验 / 计数与人工锁 / 暂停继续重置 全在 core/care.ts；
+//   · 宿主只负责：采样真实运行态、`runMaintenance` 短临界区投递、窄工具身份/新鲜度校验、
+//     以及把同一份投影下发给 REST/UI。
+//
+// 采样口径（全部公开面，绝不猜）：
+//   · 主管：project.yaml 的 supervisor.session → `agents.get(sid)`（**必须**是同一 live Agent）；
+//   · 子代理任务：catalog（board payload 的 attempt_binding）∩ live registry
+//     （`agents.get(child)` + `agents.isOwnedBy(child, supervisor)` + `status === "running"`）；
+//   · **绝不**用 mtime/size、durable 目录、隐藏思维或 `listDescendants.activity` 冒充运行/进展。
+//   · 进展证据只来自**主管**通过窄工具提交的有界证据摘要；`unknown`/未回复不计数。
+//
+// 投递边界（判据 2/7）：
+//   · 到期不打断忙主管；`runMaintenance` 同步抢占**真 idle**（忙则同步 throw ⇒ 有界重排）；
+//   · 回调内**不 await**：重验 generation/revision/身份/config/绑定后构造真实 UserMessage，
+//     用独立 care source（禁冒充 human）调用 `agent.send(message, "next-turn", true)`，立即结束维护；
+//   · `send` 返回 void ⇒ 只记为 queued；`agent/inbox/inserted` 才是 delivered，
+//     `claimed` 才表示主管即将处理；工具回传结论才是 answered。绝不把 send 当处理完成。
+//
+// 有界与仲裁：
+//   · 每组（workspace root + 主管）唯一 deadline/revision/paused/inspection 记录；
+//   · 单次投递一个巡检覆盖**本轮全部到期任务**（有界成本），复核间隔默认 300s；
+//   · 连续 3 份**新鲜且未解决**的 no-progress 结论 ⇒ 人工裁决锁（sticky，progress 不清锁）；
+//   · 任何异常都被吞掉并留结构化 stderr，绝不影响工具/看板/既有生命周期。
+
+export const CARE_CONFIG_RECHECK_MS = 30_000;
+export const CARE_BUSY_RECHECK_MS = 5_000;
+export const CARE_MAINTENANCE_RETRY_MS = 10_000;
+export const CARE_RETRY_MS = 30_000;
+export const CARE_OUTCOME_TOOL = "graph_care_outcome";
+
+/**
+ * 构造一条**真实宿主可接受**的 UserMessage（角色 user + 自定义 source kind）。
+ *
+ * 公开契约核实（0.2.1-rc.2）：
+ *   · `MessageSourceMap` 是**可合并扩展**的 Sum Type（各 producer 声明自己的 kind，无 catch-all）；
+ *   · `Session` 的 user/message 校验只要求 `source.kind` 为非空字符串 + content 数组；
+ *   · `createUserMessage` 的公开实现只做 `{...input, role:"user"}` + 新 id + 深冻结。
+ * 产品插件不静态 import `@deepseek-ai/*`，故这里按同一公开形状构造，并**深冻结**；
+ * source kind 用插件独有 `dsh-graph-care`，绝不冒充 `user`/`model`/`tool`。
+ */
+export function createCareUserMessage(input, deps = {}) {
+  const id = typeof deps.id === "string" && deps.id ? deps.id : randomUUID();
+  const content = [Object.freeze({ type: "text", text: String(input.text ?? "") })];
+  const source = Object.freeze({ ...input.source });
+  return Object.freeze({
+    id,
+    role: "user",
+    content: Object.freeze(content),
+    source,
+  });
+}
+
+/**
+ * 创建关照运行时（宿主 apply 内使用；测试可注入真实宿主服务 + 假时钟/假定时器）。
+ *
+ * @param options.ctx 插件上下文（读取 `agents`/`subagents`；注册公开事件）
+ * @param options.readGlobal `() => {enabled,thresholdSeconds,recheckSeconds,malformed,...}`
+ * @param options.resolveRoot `(workspace) => canonical graph root`
+ * @param options.defaultWorkspace `() => workspaceRoot|null`
+ * @param options.readBoardPayload `(root) => board payload|null`（catalog；只读）
+ * @param options.readSupervisorSessionFn / readProjectConfigFn 可注入（测试/降级）
+ * @param options.now/setTimeoutFn/clearTimeoutFn 可注入时钟与定时器
+ * @param options.appendEventFn 事件先行写入（默认真实 events.jsonl 追加）
+ * @param options.makeInspectionId 服务端 inspection id 生成（默认 randomUUID）
+ */
+export function createCareRuntime(options = {}) {
+  const {
+    ctx,
+    readGlobal = () => ({ enabled: null, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: false, raw: "" }),
+    resolveRoot = null,
+    defaultWorkspace = () => null,
+    readProjectConfigFn = readProjectConfig,
+    readSupervisorSessionFn = readSupervisorSession,
+    readBoardPayload = () => null,
+    now = () => Date.now(),
+    setTimeoutFn = (fn, ms) => setTimeout(fn, ms),
+    clearTimeoutFn = (h) => clearTimeout(h),
+    appendEventFn = appendEvent,
+    makeInspectionId = () => randomUUID(),
+    configRecheckMs = CARE_CONFIG_RECHECK_MS,
+    busyRecheckMs = CARE_BUSY_RECHECK_MS,
+    maintenanceRetryMs = CARE_MAINTENANCE_RETRY_MS,
+    retryMs = CARE_RETRY_MS,
+    log = null,
+  } = options;
+
+  const offs = [];
+  const entries = new Map(); // root → entry
+  let started = false;
+  let disposed = false;
+  let generation = 0;
+
+  const getService = (name) => {
+    try { return typeof ctx?.get === "function" ? ctx.get(name) : null; } catch { return null; }
+  };
+  const emitAudit = (entry) => {
+    try {
+      if (typeof log === "function") log(formatCareAudit(entry));
+      else process.stderr.write(`[dsh-graph-host] ${formatCareAudit(entry)}\n`);
+    } catch { /* 审计失败绝不影响主流程 */ }
+  };
+
+  const canonicalRootOfWorkspace = (workspace) => {
+    if (!workspace || typeof workspace !== "string") return null;
+    if (typeof resolveRoot !== "function") return null;
+    try {
+      const resolved = resolveRoot(workspace);
+      return typeof resolved === "string" && resolved ? resolved : null;
+    } catch { return null; }
+  };
+  const boardRootKey = (root) => (typeof root === "string" && root && isAbsolute(root) ? root : null);
+  const rootOfAgent = (agent) => {
+    try {
+      const ws = agent?.session?.header?.cwd;
+      return ws ? canonicalRootOfWorkspace(ws) : null;
+    } catch { return null; }
+  };
+  const defaultRoot = () => {
+    try {
+      const ws = typeof defaultWorkspace === "function" ? defaultWorkspace() : null;
+      return ws ? canonicalRootOfWorkspace(ws) : null;
+    } catch { return null; }
+  };
+
+  const makeEntry = (root) => ({
+    root,
+    supervisorId: null,
+    supervisorAgent: null,
+    group: newCareGroupState(),
+    tasks: new Map(),
+    inspections: new Map(),
+    messageIndex: new Map(),
+    timer: null,
+    timerDueAt: null,
+    retryNotBefore: null,
+    sweeping: false,
+    delivering: false,
+    lastDecision: null,
+    capabilities: null,
+    configError: false,
+    lastOutcome: null,
+    seq: 0,
+    lastReason: "disabled_by_config",
+  });
+  const entryOfRoot = (root, create = true) => {
+    const key = boardRootKey(root);
+    if (!key) return null;
+    let entry = entries.get(key);
+    if (!entry && create) { entry = makeEntry(key); entries.set(key, entry); }
+    return entry ?? null;
+  };
+  const entryOfAgent = (agent) => {
+    if (!agent) return null;
+    const sid = agent?.session?.id ?? agent?.id ?? null;
+    for (const entry of entries.values()) {
+      if (entry.supervisorAgent === agent) return entry;
+      if (sid && entry.supervisorId === sid) return entry;
+    }
+    return null;
+  };
+
+  const clearTimer = (entry) => {
+    if (!entry || entry.timer === null) return;
+    try { clearTimeoutFn(entry.timer); } catch { /* 忽略 */ }
+    entry.timer = null;
+    entry.timerDueAt = null;
+  };
+  const clearAllTimers = () => { for (const entry of entries.values()) clearTimer(entry); };
+
+  const supervisorOf = (root) => {
+    let sid = null;
+    try { sid = readSupervisorSessionFn(root); } catch { sid = null; }
+    if (!sid) return { sid: null, agent: null, live: false };
+    const agents = getService("agents");
+    let agent = null;
+    try { agent = typeof agents?.get === "function" ? agents.get(sid) : null; } catch { agent = null; }
+    const live = !!agent && (agent?.session?.id === sid || agent?.id === sid);
+    return { sid, agent: live ? agent : null, live };
+  };
+
+  const statusOf = (agent) => {
+    try {
+      if (!agent) return null;
+      if (agent.status === "idle") return "idle";
+      if (agent.status === "running") return "running";
+      return null;
+    } catch { return null; }
+  };
+
+  /**
+   * 采样当前组的**真实运行中任务**（catalog ∩ live registry ∩ ownership ∩ running）。
+   * `ok=false` ⇒ 运行态不可确认（fail-safe：不投递）。
+   */
+  const sampleTasks = (entry, agent) => {
+    const agents = getService("agents");
+    if (!agent || !agents || typeof agents.list !== "function" || typeof agents.get !== "function"
+      || typeof agents.isOwnedBy !== "function") {
+      return { ok: false, reason: "registry_missing", tasks: [] };
+    }
+    let payload = null;
+    try { payload = typeof readBoardPayload === "function" ? readBoardPayload(entry.root) : null; } catch { payload = null; }
+    if (!payload || typeof payload !== "object") return { ok: false, reason: "catalog_unavailable", tasks: [] };
+    const goals = [
+      ...(Array.isArray(payload.goals) ? payload.goals : []),
+      ...(Array.isArray(payload.versions) ? payload.versions.flatMap((v) => (Array.isArray(v?.goals) ? v.goals : [])) : []),
+    ];
+    const tasks = [];
+    for (const g of goals) {
+      const binding = g?.attempt_binding;
+      if (!binding || !binding.child_id) continue;
+      if (String(g?.status) !== "in_progress") continue;
+      const childId = String(binding.child_id);
+      const attempt = String(binding.attempt ?? "");
+      if (!attempt) continue;
+      let childAgent = null;
+      try { childAgent = agents.get(childId); } catch { return { ok: false, reason: "registry_error", tasks: [] }; }
+      if (!childAgent) continue; // 已结束/不 live ⇒ 陈旧任务不进清单
+      const childStatus = statusOf(childAgent);
+      if (childStatus === null) return { ok: false, reason: "child_status_unknown", tasks: [] };
+      if (childStatus !== "running") continue;
+      let owned = false;
+      try { owned = agents.isOwnedBy(childId, agent) === true; } catch { return { ok: false, reason: "ownership_unknown", tasks: [] }; }
+      if (!owned) continue;
+      const startedRaw = g?.attempt_started_at ? Date.parse(String(g.attempt_started_at)) : NaN;
+      const startedAt = Number.isFinite(startedRaw) && startedRaw <= now() ? startedRaw : now();
+      tasks.push({
+        goal: String(g?.id ?? ""),
+        attempt,
+        child: childId,
+        bindingVersion: Number(binding.binding_version) || 0,
+        startedAt,
+      });
+    }
+    return { ok: true, tasks };
+  };
+
+  const taskKey = (t) => `${t.child}\u0000${t.attempt}`;
+
+  /** 用最新采样对账任务表：结束/换 attempt ⇒ 移除；绑定换代 ⇒ 重置计数（新任务语义）。 */
+  const reconcileTasks = (entry, sampled, thresholdSeconds) => {
+    const next = new Map();
+    for (const s of sampled) {
+      const key = taskKey(s);
+      const prev = entry.tasks.get(key);
+      if (prev && prev.bindingVersion === s.bindingVersion) {
+        next.set(key, prev);
+      } else {
+        next.set(key, {
+          child: s.child,
+          attempt: s.attempt,
+          goal: s.goal,
+          bindingVersion: s.bindingVersion,
+          startedAt: s.startedAt,
+          lastProgressAt: null,
+          lastProgressFingerprint: null,
+          stagnantRounds: 0,
+          humanLocked: false,
+          lastCareAt: null,
+          frozenRemainingMs: entry.group.paused === true
+            ? Math.max(1, Math.floor(thresholdSeconds)) * 1000
+            : null,
+        });
+      }
+    }
+    entry.tasks = next;
+    return next;
+  };
+
+  const capabilitiesOf = (agent) => {
+    const agents = getService("agents");
+    const subagents = getService("subagents");
+    let progressRead = false;
+    try {
+      const session = agent?.session;
+      progressRead = !!session && (typeof session.deriveMessages === "function" || typeof session.toolHistory === "function");
+    } catch { progressRead = false; }
+    const report = assessCareCapabilities({
+      idle_probe: !!agent && statusOf(agent) !== null,
+      children_probe: !!(agents && typeof agents.list === "function" && typeof agents.get === "function" && typeof agents.isOwnedBy === "function"),
+      progress_read: progressRead,
+      wake_dispatch: !!agent && typeof agent.send === "function",
+      // 真实公开 seam：`subagents.interrupt`（live ancestor authority）+ `sendMessage`（停稳后续轮）。
+      // 只有服务真实暴露才置真；插件不自动执行干预，能力只如实投影给 UI/主管。
+      interrupt: !!agent && typeof subagents?.interrupt === "function",
+      resume: !!agent && typeof subagents?.sendMessage === "function",
+    });
+    return report;
+  };
+
+  /**
+   * 读配置并折叠为生效投影（项目半边 + 真实全局半边）。
+   * 项目畸形 ⇒ 传**原始值**给 core 以得到 `project_invalid`（fail-closed），绝不归一后默认开启。
+   */
+  const readConfig = (entry) => {
+    const cfg = readProjectConfigFn(entry.root);
+    const global = readGlobal() ?? {};
+    const projectHalf = {
+      mode: cfg?.supervisor?.care_malformed === true
+        ? (cfg.supervisor.care_raw ?? "invalid")
+        : (cfg?.supervisor?.care ?? null),
+      thresholdSeconds: cfg?.supervisor?.care_threshold_seconds ?? null,
+      recheckSeconds: cfg?.supervisor?.care_recheck_seconds ?? null,
+    };
+    const globalHalf = {
+      enabled: global.malformed === true ? "__invalid__" : (global.enabled ?? null),
+      thresholdSeconds: global.thresholdSeconds ?? null,
+      recheckSeconds: global.recheckSeconds ?? null,
+    };
+    const resolution = careResolutionOf(projectHalf, globalHalf);
+    const projection = careEffectiveOf(projectHalf, globalHalf);
+    entry.configError = false;
+    return { cfg, global, resolution, projection };
+  };
+
+  const warningsOf = (cfg, global) => {
+    const warnings = [];
+    if (cfg?.supervisor?.care_malformed === true) warnings.push("project_care_malformed");
+    if (cfg?.supervisor?.care_threshold_seconds_malformed === true) warnings.push("project_care_threshold_malformed");
+    if (cfg?.supervisor?.care_recheck_seconds_malformed === true) warnings.push("project_care_recheck_malformed");
+    if (global?.malformed === true) warnings.push("global_care_malformed");
+    if (global?.thresholdMalformed === true) warnings.push("global_care_threshold_malformed");
+    if (global?.recheckMalformed === true) warnings.push("global_care_recheck_malformed");
+    return warnings;
+  };
+
+  /** 结算一次决策所需全部采样（无副作用写外部；只更新 entry 的任务表与缓存）。 */
+  const decisionOf = (entry) => {
+    let cfg;
+    let global;
+    let resolution;
+    let projection;
+    try {
+      ({ cfg, global, resolution, projection } = readConfig(entry));
+    } catch {
+      entry.configError = true;
+      return { error: "config_unavailable", agent: null, caps: null, decision: null };
+    }
+    const sup = supervisorOf(entry.root);
+    const agent = sup.agent;
+    const caps = capabilitiesOf(agent);
+    entry.capabilities = caps;
+    let sampled = { ok: false, tasks: [] };
+    if (agent) sampled = sampleTasks(entry, agent);
+    if (sampled.ok) reconcileTasks(entry, sampled.tasks, projection.threshold_seconds);
+    const idle = agent ? (statusOf(agent) === "idle" ? true : statusOf(agent) === "running" ? false : null) : null;
+    const decision = decideCare({
+      now: now(),
+      enabled: resolution.enabled,
+      thresholdSeconds: projection.threshold_seconds,
+      recheckSeconds: projection.recheck_seconds,
+      maxStagnantRounds: projection.max_stagnant_rounds,
+      idle,
+      group: entry.group,
+      tasks: [...entry.tasks.values()],
+      delivering: entry.delivering === true,
+    }, caps.minimal && sampled.ok !== false && !entry.configError);
+    entry.lastDecision = decision;
+    entry.lastReason = decision.reason;
+    return { cfg, global, resolution, projection, agent, caps, sampled, decision, warnings: warningsOf(cfg, global) };
+  };
+
+  const scheduleEntry = (entry) => {
+    if (!started || disposed || !entry) return;
+    clearTimer(entry);
+    let computed = null;
+    try { computed = decisionOf(entry); } catch { computed = null; }
+    let delay = configRecheckMs;
+    const decision = computed?.decision ?? null;
+    if (decision?.deliver) delay = 0;
+    else if (decision?.nextDueAt !== null && decision?.nextDueAt !== undefined) {
+      delay = Math.max(0, decision.nextDueAt - now());
+    }
+    if (decision?.phase === "waiting_supervisor" || decision?.reason === "delivering") delay = Math.min(delay, busyRecheckMs);
+    if (decision?.deliver && entry.retryNotBefore !== null) {
+      delay = Math.max(delay, entry.retryNotBefore - now());
+    }
+    delay = Math.max(0, Math.min(delay, configRecheckMs));
+    entry.timerDueAt = now() + delay;
+    let handle = null;
+    try {
+      handle = setTimeoutFn(async () => {
+        entry.timer = null;
+        entry.timerDueAt = null;
+        try { await sweepEntry(entry); } catch { /* 忽略 */ }
+        scheduleEntry(entry);
+      }, delay);
+      handle?.unref?.();
+    } catch { handle = null; }
+    entry.timer = handle;
+  };
+
+  const dueTargetsOf = (entry, decision) => {
+    const due = [];
+    for (const s of decision?.tasks ?? []) {
+      if (s.escalated) continue;
+      if (s.dueInMs === null || s.dueInMs > 0) continue;
+      const st = entry.tasks.get(`${s.child}\u0000${s.attempt}`);
+      if (!st) continue;
+      due.push({
+        goal: s.goal,
+        attempt: s.attempt,
+        child: s.child,
+        bindingVersion: st.bindingVersion,
+        startedAt: st.startedAt,
+        lastCareAt: st.lastCareAt,
+        stagnantRounds: st.stagnantRounds,
+        humanLocked: st.humanLocked === true,
+      });
+    }
+    return due;
+  };
+
+  const careSourceOf = (entry, inspection, targets) => ({
+    kind: "dsh-graph-care",
+    form: "notice",
+    summary: `care inspection: ${targets.length} task(s)`, // ≤ 120 字符
+    inspectionId: inspection.id,
+    workspaceRoot: entry.root,
+    supervisorSession: inspection.supervisor,
+    targets: targets.slice(0, 8).map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child })),
+  });
+
+  const langOf = () => {
+    try {
+      const settings = readGraphSettings();
+      return settings.promptLanguage === "en" ? "en" : "zh";
+    } catch { return "zh"; }
+  };
+
+  const deliverNow = async (entry, computed) => {
+    const agent = computed?.agent;
+    if (!agent || typeof agent.send !== "function" || typeof agent.runMaintenance !== "function") return false;
+    const sid = entry.supervisorId;
+    if (!sid) return false;
+    const revision = entry.group.revision;
+    const gen = generation;
+    let maintenanceEntered = false;
+    let outcome = "not_attempted";
+    entry.delivering = true;
+    try {
+      await agent.runMaintenance(() => {
+        maintenanceEntered = true;
+        if (disposed || generation !== gen) return "aborted";
+        const supNow = supervisorOf(entry.root);
+        if (supNow.sid !== entry.supervisorId || supNow.agent !== agent) return "identity_changed";
+        if (entry.group.revision !== revision) return "revision_changed";
+        if (entry.group.paused === true) return "paused";
+        let nowCfg;
+        try { nowCfg = readConfig(entry); } catch { return "config_unavailable"; }
+        if (!nowCfg.resolution.enabled) return "disabled";
+        const capsNow = capabilitiesOf(agent);
+        if (!capsNow.minimal) return "capability_missing";
+        const sampledNow = sampleTasks(entry, agent);
+        if (!sampledNow.ok) return "state_unknown";
+        reconcileTasks(entry, sampledNow.tasks, nowCfg.projection.threshold_seconds);
+        const idleNow = statusOf(agent) === "idle" ? true : statusOf(agent) === "running" ? false : null;
+        const decisionNow = decideCare({
+          now: now(),
+          enabled: nowCfg.resolution.enabled,
+          thresholdSeconds: nowCfg.projection.threshold_seconds,
+          recheckSeconds: nowCfg.projection.recheck_seconds,
+          maxStagnantRounds: nowCfg.projection.max_stagnant_rounds,
+          idle: idleNow,
+          group: entry.group,
+          tasks: [...entry.tasks.values()],
+          delivering: false,
+        }, capsNow.minimal);
+        if (!decisionNow.deliver) return decisionNow.reason;
+        const due = dueTargetsOf(entry, decisionNow);
+        if (due.length === 0) return "no_due_target";
+        // 投递前再核一次：每个到期目标必须仍是 live + owned + running（陈旧提醒失效）。
+        const liveNow = sampleTasks(entry, agent);
+        if (!liveNow.ok) return "state_unknown";
+        for (const target of due) {
+          const live = liveNow.tasks.find((t) => t.child === target.child && t.attempt === target.attempt);
+          if (!live || live.bindingVersion !== target.bindingVersion) return "stale_target";
+          if (!isCareReminderStillValid(
+            { child: target.child, attempt: target.attempt, bindingVersion: target.bindingVersion },
+            { child: live.child, attempt: live.attempt, bindingVersion: live.bindingVersion, liveState: "running" },
+          )) return "stale_target";
+        }
+        const at = now();
+        const inspection = createCareInspection({
+          id: makeInspectionId(),
+          root: entry.root,
+          supervisor: entry.supervisorId,
+          now: at,
+          revision,
+          recheckSeconds: nowCfg.projection.recheck_seconds,
+          targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, bindingVersion: t.bindingVersion })),
+        });
+        const text = formatCareWakeMessage({
+          inspectionId: inspection.id,
+          targets: due.map((t) => ({
+            goal: t.goal,
+            attempt: t.attempt,
+            child: t.child,
+            elapsedMs: Math.max(0, at - t.startedAt),
+            lastCareAgoMs: t.lastCareAt === null ? null : Math.max(0, at - t.lastCareAt),
+            stagnantRounds: t.stagnantRounds,
+            maxStagnantRounds: nowCfg.projection.max_stagnant_rounds,
+            humanLocked: t.humanLocked,
+          })),
+          maxStagnantRounds: nowCfg.projection.max_stagnant_rounds,
+          lang: langOf(),
+        });
+        const message = createCareUserMessage({
+          text,
+          source: careSourceOf(entry, inspection, due),
+        });
+        inspection.messageId = message.id;
+        // 事件先行：先落可追溯事件，再登记状态与投递（append 失败 ⇒ 不投递）。
+        appendEventFn(entry.root, {
+          actor: `supervisor:${entry.supervisorId}`,
+          event: "care.inspection",
+          details: {
+            inspection: inspection.id,
+            supervisor: entry.supervisorId,
+            targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, binding_version: t.bindingVersion })),
+            revision,
+            max_stagnant_rounds: nowCfg.projection.max_stagnant_rounds,
+            wake_kind: "care_inspection",
+            message_id: message.id,
+          },
+        });
+        entry.inspections.set(inspection.id, inspection);
+        entry.messageIndex.set(message.id, inspection.id);
+        try {
+          agent.send(message, "next-turn", true);
+        } catch (e) {
+          inspection.status = "failed";
+          inspection.lastError = String(e?.message ?? e).slice(0, 120);
+          try {
+            appendEventFn(entry.root, {
+              actor: `supervisor:${entry.supervisorId}`,
+              event: "care.inspection.failed",
+              details: { inspection: inspection.id, reason: inspection.lastError },
+            });
+          } catch { /* 事件失败不掩盖投递失败 */ }
+          return "send_failed";
+        }
+        // send 返回 void ⇒ 只推进计时与审计，**不**标记 delivered/answered。
+        const applied = applyCareDelivery(entry.group, [...entry.tasks.values()], at, due.map((t) => ({ child: t.child, attempt: t.attempt })));
+        entry.group = { ...applied.group, revision: entry.group.revision + 1 };
+        entry.tasks = new Map(applied.tasks.map((t) => [taskKey(t), t]));
+        entry.seq += 1;
+        entry.lastDecision = { ...decisionNow, phase: "counting", deliver: false, reason: "delivering" };
+        entry.lastReason = "delivering";
+        emitAudit(makeCareAuditEntry(entry.seq, decisionNow, entry.supervisorId, at));
+        outcome = "queued";
+        return "queued";
+      });
+    } catch (e) {
+      outcome = maintenanceEntered ? "send_failed" : "maintenance_busy";
+      entry.retryNotBefore = now() + (maintenanceEntered ? retryMs : maintenanceRetryMs);
+      try {
+        process.stderr.write(`[dsh-graph-host] 关照投递跳过（${outcome}）：${String(e?.message ?? e).slice(0, 120)}\n`);
+      } catch { /* 忽略 */ }
+    } finally {
+      entry.delivering = false;
+    }
+    return outcome === "queued";
+  };
+
+  const syncIdentity = (entry) => {
+    const sup = supervisorOf(entry.root);
+    if (sup.sid !== entry.supervisorId) {
+      // 主管切换：整组调度与暂停状态都属于「旧主管」，新主管从干净组开始；
+      // 旧 pending 巡检保留在记录里（身份不匹配的结论会被拒绝）。
+      entry.group = { ...newCareGroupState(), revision: entry.group.revision + 1 };
+      entry.tasks = new Map();
+      entry.retryNotBefore = null;
+      entry.supervisorId = sup.sid;
+      entry.supervisorAgent = sup.agent;
+      return true;
+    }
+    if (sup.agent !== entry.supervisorAgent) {
+      entry.supervisorAgent = sup.agent;
+      if (sup.agent) {
+        entry.group = { ...entry.group, revision: entry.group.revision + 1 };
+        // Agent 实例替换：旧巡检不再可信（同一 session 也不假称可续）。
+        for (const [id, ins] of entry.inspections) {
+          if (ins.status !== "resolved" && ins.status !== "failed") {
+            entry.inspections.set(id, { ...ins, status: "expired", lastError: "agent_replaced" });
+          }
+        }
+      }
+      return true;
+    }
+    return false;
+  };
+
+  const sweepEntry = async (entry) => {
+    if (disposed || !entry || entry.sweeping) return;
+    entry.sweeping = true;
+    try {
+      syncIdentity(entry);
+      let computed;
+      try { computed = decisionOf(entry); } catch { computed = null; }
+      if (!computed || computed.error) { entry.lastReason = "state_unknown"; return; }
+      if (!computed.decision?.deliver) return;
+      if (entry.retryNotBefore !== null && now() < entry.retryNotBefore) return;
+      await deliverNow(entry, computed);
+    } finally {
+      entry.sweeping = false;
+    }
+  };
+
+  const candidateRoots = () => {
+    const roots = new Set();
+    const dflt = defaultRoot();
+    if (dflt) roots.add(dflt);
+    const agents = getService("agents");
+    if (agents && typeof agents.list === "function") {
+      try {
+        for (const agent of agents.list() ?? []) {
+          const root = rootOfAgent(agent);
+          if (!root) continue;
+          let supId = null;
+          try { supId = readSupervisorSessionFn(root); } catch { supId = null; }
+          if (supId && (agent?.session?.id === supId || agent?.id === supId)) roots.add(root);
+        }
+      } catch { /* registry 异常：至少保留默认 root */ }
+    }
+    for (const entry of entries.values()) roots.add(entry.root);
+    return [...roots];
+  };
+
+  const start = () => {
+    if (started || disposed) return;
+    started = true;
+    for (const root of candidateRoots()) entryOfRoot(root);
+    for (const entry of entries.values()) {
+      syncIdentity(entry);
+      scheduleEntry(entry);
+    }
+  };
+
+  const dispose = () => {
+    if (disposed) return;
+    generation += 1;
+    disposed = true;
+    for (const entry of entries.values()) {
+      clearTimer(entry);
+      entry.delivering = false;
+      entry.sweeping = false;
+      entry.lastReason = "disabled_by_config";
+    }
+    for (const off of offs.splice(0)) { try { off?.(); } catch { /* 忽略 */ } }
+  };
+
+  const sweep = async () => {
+    if (disposed) return;
+    for (const root of candidateRoots()) entryOfRoot(root);
+    for (const entry of entries.values()) {
+      syncIdentity(entry);
+      await sweepEntry(entry);
+      scheduleEntry(entry);
+    }
+  };
+
+  const statusFor = (rootArg) => {
+    const root = boardRootKey(rootArg) ?? defaultRoot();
+    if (!root) {
+      return {
+        root: null,
+        supervisor: null,
+        supervisor_live: false,
+        supervisor_idle: null,
+        configured: careEffectiveOf({ mode: "inherit", thresholdSeconds: null, recheckSeconds: null }, { enabled: null }),
+        capable: assessCareCapabilities({}),
+        phase: "unavailable",
+        reason: "capability_missing",
+        next_due_at: null,
+        next_due_in_ms: null,
+        server_now: now(),
+        paused: false,
+        paused_remaining_ms: null,
+        revision: 0,
+        tasks: [],
+        escalate_tasks: [],
+        awaiting_human: false,
+        pending_inspections: [],
+        last_outcome: null,
+        warnings: ["workspace_unresolved"],
+      };
+    }
+    const entry = entryOfRoot(root);
+    if (syncIdentity(entry)) { /* identity refreshed */ }
+    // 过期巡检按时间自然失效（服务端唯一真源；绝不依赖客户端清理）。
+    for (const [id, ins] of entry.inspections) {
+      const expired = expireCareInspection(ins, now());
+      if (expired !== ins) entry.inspections.set(id, expired);
+    }
+    let computed = null;
+    try { computed = decisionOf(entry); } catch { computed = null; }
+    if (!computed || computed.error) {
+      return {
+        root,
+        supervisor: entry.supervisorId,
+        supervisor_live: false,
+        supervisor_idle: null,
+        configured: careEffectiveOf(
+          { mode: "inherit", thresholdSeconds: null, recheckSeconds: null },
+          { enabled: "__invalid__" },
+        ),
+        capable: assessCareCapabilities({}),
+        phase: "unavailable",
+        reason: "capability_missing",
+        next_due_at: null,
+        next_due_in_ms: null,
+        server_now: now(),
+        paused: entry.group.paused === true,
+        paused_remaining_ms: entry.group.pausedRemainingMs,
+        revision: entry.group.revision,
+        tasks: [],
+        escalate_tasks: [],
+        awaiting_human: false,
+        pending_inspections: [],
+        last_outcome: entry.lastOutcome,
+        warnings: ["config_unavailable"],
+      };
+    }
+    const pending = [...entry.inspections.values()].filter((i) => i.status !== "failed").slice(-8);
+    return careStatusProjection({
+      now: now(),
+      root,
+      supervisor: entry.supervisorId,
+      supervisorLive: !!computed.agent,
+      supervisorIdle: computed.agent ? statusOf(computed.agent) === "idle" : null,
+      configured: computed.projection,
+      capable: computed.caps,
+      decision: computed.decision,
+      group: entry.group,
+      tasks: [...entry.tasks.values()],
+      pendingInspections: pending,
+      lastOutcome: entry.lastOutcome,
+      warnings: computed.warnings,
+    });
+  };
+
+  /**
+   * 暂停/继续/重置（REST 控制入口；**只作用当前主管当前工作区整组**）。
+   * 事件先行；幂等（重复 pause/resume 不递增 revision）；可选 expected_revision 防陈旧点击。
+   */
+  const control = (rootArg, action, opts = {}) => {
+    const root = boardRootKey(rootArg);
+    if (!root) return { ok: false, code: "workspace_unresolved" };
+    if (!(action === "pause" || action === "resume" || action === "reset")) return { ok: false, code: "invalid_action" };
+    const entry = entryOfRoot(root);
+    if (syncIdentity(entry)) { /* identity refreshed */ }
+    const sup = supervisorOf(root);
+    if (!sup.sid || !sup.live) return { ok: false, code: "no_live_supervisor" };
+    if (entry.supervisorId !== sup.sid) return { ok: false, code: "identity_changed" };
+    if (typeof opts.expectedRevision === "number" && opts.expectedRevision !== entry.group.revision) {
+      return { ok: false, code: "revision_conflict", revision: entry.group.revision };
+    }
+    // 首次控制可能早于第一次状态查询：先做一次纯采样，保证暂停冻结的是真实任务的剩余，
+    // 而不是「空组暂停 → 继续后立刻到期」。采样不投递、不写事件、不改 revision。
+    try { decisionOf(entry); } catch { /* 采样失败按空组处理（下方 readConfig 仍会如实拒绝） */ }
+    let computed;
+    try { computed = readConfig(entry); } catch { return { ok: false, code: "config_unavailable" }; }
+    const timing = { now: now(), thresholdSeconds: computed.projection.threshold_seconds, recheckSeconds: computed.projection.recheck_seconds };
+    const tasks = [...entry.tasks.values()];
+    let nextGroup = entry.group;
+    let nextTasks = tasks;
+    if (action === "pause") {
+      if (entry.group.paused === true) return { ok: true, idempotent: true, status: statusFor(root) };
+      const r = pauseCare(entry.group, tasks, timing);
+      nextGroup = r.group; nextTasks = r.tasks;
+    } else if (action === "resume") {
+      if (entry.group.paused !== true) return { ok: true, idempotent: true, status: statusFor(root) };
+      const r = resumeCare(entry.group, tasks, timing);
+      nextGroup = r.group; nextTasks = r.tasks;
+    } else {
+      const r = resetCare(entry.group, tasks, timing);
+      nextGroup = r.group; nextTasks = r.tasks;
+    }
+    try {
+      appendEventFn(root, {
+        actor: `human:${opts.actor ?? "ui"}`,
+        event: "care.control",
+        details: {
+          action,
+          supervisor: entry.supervisorId,
+          revision: nextGroup.revision,
+          paused: nextGroup.paused,
+          paused_remaining_ms: nextGroup.pausedRemainingMs,
+        },
+      });
+    } catch (e) {
+      return { ok: false, code: "event_append_failed", detail: String(e?.message ?? e).slice(0, 120) };
+    }
+    entry.group = nextGroup;
+    entry.tasks = new Map(nextTasks.map((t) => [taskKey(t), t]));
+    scheduleEntry(entry);
+    return { ok: true, idempotent: false, status: statusFor(root) };
+  };
+
+  /**
+   * 窄结果工具的服务端受理：精确主管/live/绑定/新鲜度/一次性校验 →
+   * **事件先行** → 更新计数与人工锁。返回真实结果（不是「已收到」）。
+   */
+  const submitOutcome = (input) => {
+    const root = boardRootKey(input?.root);
+    if (!root) return { ok: false, code: "workspace_unresolved" };
+    const entry = entryOfRoot(root);
+    if (syncIdentity(entry)) { /* identity refreshed */ }
+    const sup = supervisorOf(root);
+    if (!sup.sid || !sup.live || sup.sid !== String(input?.supervisor ?? "")) {
+      return { ok: false, code: "wrong_identity" };
+    }
+    if (entry.supervisorId !== sup.sid) return { ok: false, code: "identity_changed" };
+    const inspection = entry.inspections.get(String(input?.inspection ?? "")) ?? null;
+    const outcome = normalizeCareOutcome(input?.outcome);
+    const evidence = String(input?.evidence ?? "").trim();
+    if (!evidence) return { ok: false, code: "evidence_required" };
+    // 当前 catalog 绑定（服务端真源）：goal/attempt/child/版本必须与结论完全一致。
+    let payload = null;
+    try { payload = typeof readBoardPayload === "function" ? readBoardPayload(root) : null; } catch { payload = null; }
+    const goals = payload && typeof payload === "object"
+      ? [
+          ...(Array.isArray(payload.goals) ? payload.goals : []),
+          ...(Array.isArray(payload.versions) ? payload.versions.flatMap((v) => (Array.isArray(v?.goals) ? v.goals : [])) : []),
+        ]
+      : [];
+    const goal = goals.find((g) => String(g?.id) === String(input?.goal));
+    const binding = goal?.attempt_binding ?? null;
+    const bindingVersion = Number(binding?.binding_version) || 0;
+    if (!goal || !binding
+      || String(binding.attempt) !== String(input?.attempt)
+      || String(binding.child_id) !== String(input?.child)) {
+      return { ok: false, code: "stale_binding" };
+    }
+    const digest = createHash("sha256").update(evidence).digest("hex").slice(0, 16);
+    const validated = validateCareOutcome({
+      inspection,
+      now: now(),
+      root,
+      supervisor: sup.sid,
+      goal: String(input?.goal),
+      attempt: String(input?.attempt),
+      child: String(input?.child),
+      bindingVersion,
+      outcome,
+      evidenceDigest: digest,
+    });
+    if (!validated.ok) return { ok: false, code: validated.code };
+    if (validated.idempotent) {
+      return {
+        ok: true,
+        idempotent: true,
+        inspection: inspection.id,
+        goal: String(input.goal),
+        attempt: String(input.attempt),
+        child: String(input.child),
+        outcome: validated.target.outcome,
+        counted: false,
+      };
+    }
+    const at = now();
+    let maxRounds = CARE_DEFAULTS.maxStagnantRounds;
+    try { maxRounds = readConfig(entry).projection.max_stagnant_rounds; } catch { /* 用受控默认 */ }
+    const preTask = entry.tasks.get(`${String(input.child)}\u0000${String(input.attempt)}`) ?? null;
+    // 先在**副本**上算出结果（事件先行：任何写入失败都不得留下半状态）。
+    const applied = applyCareOutcome(entry.group, [...entry.tasks.values()], {
+      child: String(input.child),
+      attempt: String(input.attempt),
+    }, {
+      kind: outcome,
+      fingerprint: digest,
+      now: at,
+      maxStagnantRounds: maxRounds,
+    });
+    const nextInspection = applyCareInspectionOutcome(inspection, {
+      goal: String(input.goal),
+      attempt: String(input.attempt),
+      child: String(input.child),
+      kind: outcome,
+      evidenceDigest: digest,
+      now: at,
+    });
+    const targetTask = applied.tasks.find((t) => t.child === String(input.child) && t.attempt === String(input.attempt)) ?? null;
+    const newlyLocked = targetTask?.humanLocked === true && preTask?.humanLocked !== true;
+    // 事件先行：先写 care.outcome（必要时再写 care.escalated），再更新巡检记录与计数。
+    try {
+      appendEventFn(root, {
+        actor: `supervisor:${sup.sid}`,
+        event: "care.outcome",
+        details: {
+          inspection: inspection.id,
+          supervisor: sup.sid,
+          goal: String(input.goal),
+          attempt: String(input.attempt),
+          child: String(input.child),
+          outcome,
+          evidence_digest: digest,
+          binding_version: bindingVersion,
+        },
+      });
+      if (newlyLocked) {
+        appendEventFn(root, {
+          actor: `supervisor:${sup.sid}`,
+          event: "care.escalated",
+          details: {
+            inspection: inspection.id,
+            supervisor: sup.sid,
+            goal: String(input.goal),
+            attempt: String(input.attempt),
+            child: String(input.child),
+            stagnant_rounds: targetTask?.stagnantRounds ?? maxRounds,
+            max_stagnant_rounds: maxRounds,
+            reason: "fresh_no_progress_limit",
+          },
+        });
+      }
+    } catch (e) {
+      return { ok: false, code: "event_append_failed", detail: String(e?.message ?? e).slice(0, 120) };
+    }
+    entry.inspections.set(inspection.id, nextInspection);
+    entry.group = applied.group;
+    entry.tasks = new Map(applied.tasks.map((t) => [taskKey(t), t]));
+    entry.lastOutcome = {
+      inspection: inspection.id,
+      goal: String(input.goal),
+      attempt: String(input.attempt),
+      child: String(input.child),
+      outcome,
+      at,
+      counted: applied.counted,
+      idempotent: false,
+      stagnant_rounds: targetTask?.stagnantRounds ?? 0,
+      human_locked: targetTask?.humanLocked === true,
+    };
+    scheduleEntry(entry);
+    return {
+      ok: true,
+      idempotent: false,
+      inspection: inspection.id,
+      goal: String(input.goal),
+      attempt: String(input.attempt),
+      child: String(input.child),
+      outcome,
+      counted: applied.counted,
+      stagnant_rounds: targetTask?.stagnantRounds ?? 0,
+      max_stagnant_rounds: maxRounds,
+      human_locked: targetTask?.humanLocked === true,
+      awaiting_human: applied.humanLocked,
+    };
+  };
+
+  // ── 事件接线（全部公开事件；HMR/晚到服务由 apply 的 effect 生命周期管理）──
+  const onEvent = (name, handler) => {
+    if (typeof ctx?.on !== "function") return;
+    try {
+      const off = ctx.on(name, handler);
+      if (typeof off === "function") offs.push(off);
+    } catch { /* 事件面不支持 ⇒ 静默（能力探测） */ }
+  };
+
+  onEvent("agent/inbox/inserted", (payload) => {
+    try {
+      const agent = payload?.agent;
+      const entry = entryOfAgent(agent);
+      if (!entry) return;
+      const id = entry.messageIndex.get(payload?.message?.id);
+      if (!id) return;
+      const ins = entry.inspections.get(id);
+      if (ins && ins.status === "queued") {
+        entry.inspections.set(id, { ...ins, status: "delivered", deliveredAt: now() });
+      }
+      scheduleEntry(entry);
+    } catch { /* 忽略 */ }
+  });
+
+  onEvent("agent/inbox/claimed", (payload) => {
+    try {
+      const entry = entryOfAgent(payload?.agent);
+      if (!entry) return;
+      const id = entry.messageIndex.get(payload?.message?.id);
+      if (!id) return;
+      const ins = entry.inspections.get(id);
+      if (ins && (ins.status === "queued" || ins.status === "delivered")) {
+        entry.inspections.set(id, { ...ins, status: "claimed", deliveredAt: ins.deliveredAt ?? now(), claimedAt: now() });
+      }
+      scheduleEntry(entry);
+    } catch { /* 忽略 */ }
+  });
+
+  onEvent("agent/inbox/discarded", (payload) => {
+    try {
+      const entry = entryOfAgent(payload?.agent);
+      if (!entry) return;
+      const id = entry.messageIndex.get(payload?.message?.id);
+      if (!id) return;
+      const ins = entry.inspections.get(id);
+      if (ins && ins.status !== "resolved") {
+        entry.inspections.set(id, { ...ins, status: "expired", lastError: "inbox_discarded" });
+      }
+      scheduleEntry(entry);
+    } catch { /* 忽略 */ }
+  });
+
+  onEvent("agent/status", (payload) => {
+    try {
+      const entry = entryOfAgent(payload?.agent);
+      if (entry) scheduleEntry(entry);
+    } catch { /* 忽略 */ }
+  });
+
+  onEvent("agent/created", (payload) => {
+    try {
+      const agent = payload?.agent;
+      if (!agent) return;
+      const root = rootOfAgent(agent);
+      if (!root) return;
+      let supId = null;
+      try { supId = readSupervisorSessionFn(root); } catch { supId = null; }
+      if (!supId || (agent?.session?.id !== supId && agent?.id !== supId)) return;
+      const entry = entryOfRoot(root);
+      entry.supervisorId = supId;
+      entry.supervisorAgent = agent;
+      scheduleEntry(entry);
+    } catch { /* 忽略 */ }
+  });
+
+  onEvent("agent/disposed", (payload) => {
+    try {
+      const entry = entryOfAgent(payload?.agent);
+      if (!entry) return;
+      entry.supervisorAgent = null;
+      scheduleEntry(entry);
+    } catch { /* 忽略 */ }
+  });
+
+  onEvent("session/event", (session, event) => {
+    try {
+      if (!session?.id) return;
+      const entry = [...entries.values()].find((e) => e.supervisorId === session.id);
+      if (!entry) return;
+      const surfaceOp = event?.surfaceOp;
+      const isReplacement = !!surfaceOp && typeof surfaceOp === "object" && surfaceOp.op === "replace";
+      const isCompactionOrClear = typeof event?.type === "string" && /(compact|clear)/i.test(event.type);
+      if (!isReplacement && !isCompactionOrClear) return;
+      for (const [id, ins] of entry.inspections) {
+        if (ins.status !== "resolved" && ins.status !== "failed") {
+          entry.inspections.set(id, { ...ins, status: "expired", lastError: "surface_replaced" });
+        }
+      }
+      scheduleEntry(entry);
+    } catch { /* 忽略 */ }
+  });
+
+  return {
+    start,
+    dispose,
+    sweep,
+    statusFor,
+    control,
+    submitOutcome,
+    entryOfRoot,
+    rootOfWorkspace: (workspace) => canonicalRootOfWorkspace(workspace),
+    stateForWorkspace: (workspace) => {
+      const root = canonicalRootOfWorkspace(workspace);
+      return root ? entries.get(root) ?? null : null;
+    },
+    states: () => [...entries.values()],
+  };
+}
+
 const text = (s) => [{ type: "text", text: s }];
 const objOut = {
   schema: { type: "object" },
@@ -1791,6 +2897,16 @@ const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
    * 如实标 malformed ⇒ fail-closed 关闭，绝不归一成「未配置 ⇒ 默认开启」。
    */
   supervisorKeepAlive: "",
+  /**
+   * g-506：子代理长任务关照的 **profile 级**全局开关（三态字符串；默认未配置 ⇒ 受控默认开启）。
+   *   "" = 未配置；"on" = 显式开启；"off" = 显式关闭。
+   * 畸形值（如手改 "yes"）由 readGlobalCareState 如实标 malformed ⇒ fail-closed 关闭。
+   */
+  supervisorCare: "",
+  /** g-506：全局任务工作阈值（秒，字符串原值；"" = 未配置 ⇒ 300s）。 */
+  supervisorCareThresholdSeconds: "",
+  /** g-506：全局复查间隔（秒，字符串原值；"" = 未配置 ⇒ 300s）。 */
+  supervisorCareRecheckSeconds: "",
 });
 
 // ── g-454：宿主代次迁移缺口（旧 settings.yaml 的 `dsh-graph` 节进不了新条目 `dsh-graph-host`）──
@@ -1835,6 +2951,8 @@ function coerceLegacyGraphSettings(section) {
     // g-505：`supervisorKeepAlive` 是本版新字段，不属于旧节迁移范围 —— 当前全局值只认
     // 公开 settings 条目的显式值/当前 settings.yaml，绝不让迁移遗留（含 `.imported`）复活它。
     if (key === "supervisorKeepAlive") continue;
+    // g-506：关照字段同为当前版本新字段，绝不从旧节复活（当前值只认活动条目/当前 settings.yaml）。
+    if (key === "supervisorCare" || key === "supervisorCareThresholdSeconds" || key === "supervisorCareRecheckSeconds") continue;
     out[key] = value;
   }
   return Object.keys(out).length ? out : null;
@@ -1870,6 +2988,10 @@ function buildGraphSettingsSchema(z) {
     promptLanguage: z.union(["follow", "zh", "en"]).default("follow"),
     // g-505：全局保活开关（"" = 未配置/跟随受控默认；"on"/"off" = 显式）。
     supervisorKeepAlive: z.union(["", "on", "off"]).default(""),
+    // g-506：全局关照开关与时间参数（"" = 未配置；时间参数为字符串原值，非法值由读侧标 malformed）。
+    supervisorCare: z.union(["", "on", "off"]).default(""),
+    supervisorCareThresholdSeconds: z.string().default(""),
+    supervisorCareRecheckSeconds: z.string().default(""),
   });
 }
 
@@ -1890,6 +3012,9 @@ function buildGraphSettingsConfigSchema(z) {
     subagentPrompt: live(z.string().default("")),
     promptLanguage: live(z.union(["follow", "zh", "en"]).default("follow")),
     supervisorKeepAlive: live(z.union(["", "on", "off"]).default("")),
+    supervisorCare: live(z.union(["", "on", "off"]).default("")),
+    supervisorCareThresholdSeconds: live(z.string().default("")),
+    supervisorCareRecheckSeconds: live(z.string().default("")),
   });
 }
 // g-351：schemastery 是**可选** peer，插件不得硬依赖它。宿主部署形态不同，可解析的基准也不同
@@ -3423,6 +4548,10 @@ export function apply(ctx, config) {
         promptLanguage: ["follow", "zh", "en"].includes(v.promptLanguage) ? v.promptLanguage : "follow",
         // g-505：**保留原始字符串**（不在这里归一成 ""）——畸形值必须能被下游判为 malformed。
         supervisorKeepAlive: typeof v.supervisorKeepAlive === "string" ? v.supervisorKeepAlive : "",
+        // g-506：同上，保留原始字符串；非法值由 readGlobalCareState 标 malformed。
+        supervisorCare: typeof v.supervisorCare === "string" ? v.supervisorCare : "",
+        supervisorCareThresholdSeconds: typeof v.supervisorCareThresholdSeconds === "string" ? v.supervisorCareThresholdSeconds : "",
+        supervisorCareRecheckSeconds: typeof v.supervisorCareRecheckSeconds === "string" ? v.supervisorCareRecheckSeconds : "",
       };
     } catch {
       return { ...GRAPH_SETTINGS_DEFAULTS };
@@ -3506,6 +4635,104 @@ export function apply(ctx, config) {
     };
   };
 
+  // ── g-506：profile 全局关照配置的**原始值**读取（raw + malformed 端到端闭锁）────────────
+  // 与 keep_alive 同款：settings 服务的 cooked 值可能已被宿主 schema 回落；手改 settings.yaml
+  // 写入坏值时只能从当前文件原值判定 malformed。绝不读 `.imported`，绝不读取/回传其它键。
+  const rawGlobalCareCache = { at: -1, file: null, value: undefined };
+  const readRawGlobalCareFromProfile = () => {
+    let profile = null;
+    try { profile = typeof ctx.get === "function" ? ctx.get("profileContext") : null; } catch { profile = null; }
+    const home = typeof profile?.home === "string" && profile.home ? profile.home : null;
+    if (!home) return { present: false };
+    const file = join(home, "settings.yaml");
+    let stat = null;
+    try { stat = statSync(file); } catch { return { present: false }; }
+    if (!stat?.isFile()) return { present: false };
+    if (rawGlobalCareCache.file === file && rawGlobalCareCache.at === stat.mtimeMs) {
+      return rawGlobalCareCache.value;
+    }
+    let result = { present: false };
+    try {
+      const doc = parseYaml(readFileSync(file, "utf8"));
+      const hasEntry = !!doc && typeof doc === "object" && Object.hasOwn(doc, GRAPH_SETTINGS_ENTRY_ID);
+      const section = hasEntry ? doc[GRAPH_SETTINGS_ENTRY_ID] : (doc && typeof doc === "object" ? doc[GRAPH_SETTINGS_NS] : null);
+      if (section && typeof section === "object") {
+        const pick = {};
+        for (const key of ["supervisorCare", "supervisorCareThresholdSeconds", "supervisorCareRecheckSeconds"]) {
+          if (Object.hasOwn(section, key)) pick[key] = section[key];
+        }
+        if (Object.keys(pick).length) result = { present: true, values: pick };
+      }
+    } catch { /* 不可读/不可解析：不据此造 malformed */ }
+    rawGlobalCareCache.at = stat.mtimeMs;
+    rawGlobalCareCache.file = file;
+    rawGlobalCareCache.value = result;
+    return result;
+  };
+
+  const parseCareGlobalSwitch = (raw) => {
+    if (raw === undefined || raw === null || raw === "") return { enabled: null, malformed: false, raw: "" };
+    if (raw === "on") return { enabled: true, malformed: false, raw: "on" };
+    if (raw === "off") return { enabled: false, malformed: false, raw: "off" };
+    let display = "";
+    try { display = typeof raw === "string" ? raw : JSON.stringify(raw); } catch { display = ""; }
+    return { enabled: null, malformed: true, raw: display.slice(0, 80) };
+  };
+  const parseCareGlobalSeconds = (raw) => {
+    if (raw === undefined || raw === null || raw === "") return { value: null, malformed: false };
+    const v = normalizeCareSeconds(raw);
+    return { value: v, malformed: v === null };
+  };
+
+  /**
+   * g-506：全局关照配置的读侧状态（调度器/REST/UI 同源）。
+   * `available=false` 仅在 settings 能力缺失时出现；`malformed=true` ⇒ 决策 fail-closed 关闭。
+   */
+  const readGlobalCareState = () => {
+    let cooked = { ...GRAPH_SETTINGS_DEFAULTS };
+    try { cooked = readGraphSettings(); } catch { cooked = { ...GRAPH_SETTINGS_DEFAULTS }; }
+    const sw = parseCareGlobalSwitch(cooked.supervisorCare);
+    const th = parseCareGlobalSeconds(cooked.supervisorCareThresholdSeconds);
+    const rc = parseCareGlobalSeconds(cooked.supervisorCareRecheckSeconds);
+    const rawFile = readRawGlobalCareFromProfile();
+    let enabled = sw.enabled;
+    let malformed = sw.malformed;
+    let raw = sw.raw;
+    let thresholdSeconds = th.value;
+    let thresholdMalformed = th.malformed;
+    let recheckSeconds = rc.value;
+    let recheckMalformed = rc.malformed;
+    if (rawFile.present) {
+      const rv = rawFile.values ?? {};
+      if (Object.hasOwn(rv, "supervisorCare")) {
+        const rawSw = parseCareGlobalSwitch(rv.supervisorCare);
+        if (rawSw.malformed) { malformed = true; raw = rawSw.raw; enabled = null; }
+        else if (sw.enabled === null || sw.malformed) { enabled = rawSw.enabled; raw = rawSw.raw; malformed = false; }
+      }
+      if (Object.hasOwn(rv, "supervisorCareThresholdSeconds")) {
+        const rawTh = parseCareGlobalSeconds(rv.supervisorCareThresholdSeconds);
+        if (rawTh.malformed) thresholdMalformed = true;
+        else if (th.value === null || th.malformed) { thresholdSeconds = rawTh.value; thresholdMalformed = false; }
+      }
+      if (Object.hasOwn(rv, "supervisorCareRecheckSeconds")) {
+        const rawRc = parseCareGlobalSeconds(rv.supervisorCareRecheckSeconds);
+        if (rawRc.malformed) recheckMalformed = true;
+        else if (rc.value === null || rc.malformed) { recheckSeconds = rawRc.value; recheckMalformed = false; }
+      }
+    }
+    return {
+      enabled,
+      thresholdSeconds,
+      recheckSeconds,
+      malformed,
+      thresholdMalformed,
+      recheckMalformed,
+      available: graphSettingsScope != null,
+      raw,
+    };
+  };
+
+
   // ── g-505：保活运行时（effect 内 start，卸载即 dispose）与只读投影入口 ─────────────
   // 运行时只做采样/抢占/真实调用；「是否该保活」的唯一判定在 core/keepalive.ts。
   let keepAliveRuntime = null;
@@ -3527,6 +4754,29 @@ export function apply(ctx, config) {
   const keepAliveStatusOf = (rootForStatus) => {
     try { return keepAliveRuntime ? keepAliveRuntime.statusFor(rootForStatus) : null; } catch { return null; }
   };
+  // ── g-506：关照运行时（effect 内 start，卸载即 dispose）与只读投影入口 ─────────────
+  let careRuntime = null;
+  /** 项目半边（原始 mode + 归一时间参数）；畸形 mode 保留原始值给 core 判 project_invalid。 */
+  const careProjectHalfOf = (cfg) => ({
+    mode: cfg?.supervisor?.care_malformed === true
+      ? (cfg.supervisor.care_raw ?? "invalid")
+      : (cfg?.supervisor?.care ?? null),
+    thresholdSeconds: cfg?.supervisor?.care_threshold_seconds ?? null,
+    recheckSeconds: cfg?.supervisor?.care_recheck_seconds ?? null,
+  });
+  /** 项目 + 真实全局 → 生效投影（REST/UI/调度器同源，绝不各自重算）。 */
+  const careProjectionOf = (cfg) => {
+    const g = readGlobalCareState();
+    return careEffectiveOf(careProjectHalfOf(cfg), {
+      enabled: g.malformed === true ? "__invalid__" : (g.enabled ?? null),
+      thresholdSeconds: g.thresholdSeconds,
+      recheckSeconds: g.recheckSeconds,
+    });
+  };
+  /** 运行时状态投影（服务端唯一倒计时真源；失败返回 null）。 */
+  const careStatusOf = (rootForStatus) => {
+    try { return careRuntime ? careRuntime.statusFor(rootForStatus) : null; } catch { return null; }
+  };
   /**
    * 设置面（REST GET/POST）下发的配置投影：在项目读值上补齐**真实全局值**算出的生效投影
    * 与运行时状态。GUI 只消费服务端下发的 `effective`，绝不自备默认值副本 ⇒ 不会与调度器漂移。
@@ -3536,12 +4786,17 @@ export function apply(ctx, config) {
     try {
       const effective = keepAliveProjectionOf(cfg);
       const status = keepAliveStatusOf(rootForUi);
+      // g-506：关照的生效投影与运行时状态（与调度器/REST 同源；GUI 不自备默认值副本）。
+      const careEffective = careProjectionOf(cfg);
+      const careStatus = careStatusOf(rootForUi);
       return {
         ...cfg,
         supervisor: {
           ...cfg.supervisor,
           keep_alive_effective: effective,
           ...(status ? { keep_alive_status: status } : {}),
+          care_effective: careEffective,
+          ...(careStatus ? { care_status: careStatus } : {}),
         },
       };
     } catch {
@@ -5729,6 +6984,41 @@ export function apply(ctx, config) {
       },
     },
     {
+      // g-506：提交一次**关照巡检结论**（唯一窄回传入口；不是通用写接口）。
+      // 身份 = ex.agent.session（真实主管）+ 服务端 inspection/attempt/binding；拒绝伪造 attempt/结论。
+      def: {
+        name: "graph_care_outcome",
+        description: sT("tool.graph_care_outcome"),
+        parameters: params({
+          inspection: { type: "string", minLength: 1, maxLength: 128 },
+          goal: { type: "string", minLength: 1, maxLength: 128 },
+          attempt: { type: "string", minLength: 1, maxLength: 128 },
+          child: { type: "string", minLength: 1, maxLength: 128 },
+          outcome: { type: "string", enum: [...CARE_OUTCOMES] },
+          evidence: { type: "string", minLength: 1, maxLength: 800 },
+        }, ["inspection", "goal", "attempt", "child", "outcome", "evidence"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const sid = ex?.agent?.session?.id;
+        if (!sid) return { ok: false, code: "wrong_identity" };
+        if (readSupervisorSession(r) !== sid) return { ok: false, code: "wrong_identity" };
+        if (!careRuntime || typeof careRuntime.submitOutcome !== "function") {
+          return { ok: false, code: "care_runtime_unavailable" };
+        }
+        return losslessJson(careRuntime.submitOutcome({
+          root: r,
+          supervisor: sid,
+          inspection: a.inspection,
+          goal: a.goal,
+          attempt: a.attempt,
+          child: a.child,
+          outcome: a.outcome,
+          evidence: a.evidence,
+        }));
+      },
+    },
+    {
       // g-310：读取当前 workspace 项目配置（只读查询 + schema/枚举元信息）
       def: {
         name: "graph_get_settings",
@@ -5738,6 +7028,9 @@ export function apply(ctx, config) {
       run: (_a, ex) => {
         const r = rootFor(ex);
         const config = readProjectConfig(r);
+        // 与 REST/GUI/调度器同一真源：项目读值上的 care_effective 必须用**真实全局值**重投影，
+        // 不能把 core 的「项目半边默认值」当作生效值下发。
+        try { config.supervisor = { ...config.supervisor, care_effective: careProjectionOf(config) }; } catch { /* 读取失败时保留项目半边 */ }
         return losslessJson({
           config,
           config_path: join(r, "project.yaml"),
@@ -5747,6 +7040,17 @@ export function apply(ctx, config) {
           supervisor_keep_alive: keepAliveStatusOf(r) ?? {
             effective: keepAliveProjectionOf(config),
             capable: { channel: "none", reason: "missing_capability", missing: ["keepalive.runtime"], ttl: "unknown", short_ttl_bound_ms: KEEP_ALIVE_SHORT_TTL_MS, host_channel: false },
+          },
+          // g-506：关照的 configured/effective/capable/active 投影（与 REST/GUI/调度器同源）。
+          supervisor_care: careStatusOf(r) ?? {
+            configured: careProjectionOf(config),
+            capable: { available: {}, missing: [...CARE_CAPABILITIES], minimal: false },
+            phase: "unavailable",
+            reason: "capability_missing",
+            next_due_at: null,
+            next_due_in_ms: null,
+            paused: false,
+            warnings: ["care_runtime_unavailable"],
           },
           // g-480：**宿主真裁剪能力**如实下发（与监听器注册、GUI 提示同一判定，apply 期一次探测）：
           // true = 本版本 DSH 同时有 `agent/created` 与 `tools.restrict` ⇒ 模块开关真裁剪生效；
@@ -5778,6 +7082,27 @@ export function apply(ctx, config) {
               scope: "workspace",
               default: null,
               values: [...KEEP_ALIVE_MODES, null],
+            },
+            // g-506：项目级关照三态与时间参数（null = inherit 跟随全局；生效值见 supervisor_care）。
+            "supervisor.care": {
+              type: "string",
+              scope: "workspace",
+              default: null,
+              values: [...CARE_MODES, null],
+            },
+            "supervisor.care_threshold_seconds": {
+              type: "integer",
+              scope: "workspace",
+              default: null,
+              minimum: 30,
+              maximum: 86400,
+            },
+            "supervisor.care_recheck_seconds": {
+              type: "integer",
+              scope: "workspace",
+              default: null,
+              minimum: 30,
+              maximum: 86400,
             },
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
@@ -6229,6 +7554,58 @@ export function apply(ctx, config) {
           const canonical = resolveCanonicalRoot(config, resolve(workspace));
           const session = readSupervisorSession(canonical.root);
           return json(res, 200, { supervisorSession: session });
+        } catch (e) {
+          return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      // g-506：关照状态（服务端唯一倒计时真源；客户端只派生显示）。
+      path: "/api/dsh-graph/care/status",
+      handler: (req, res) => {
+        try {
+          if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+          const workspace = workspaceOf(req);
+          if (typeof workspace !== "string" || !workspace.trim()) return json(res, 400, { error: "missing workspace" });
+          const canonical = resolveCanonicalRoot(config, resolve(workspace));
+          const status = careStatusOf(canonical.root);
+          if (!status) return json(res, 503, { error: "care_runtime_unavailable" });
+          return json(res, 200, { ...status, workspace });
+        } catch (e) {
+          return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      // g-506：暂停/继续/重置（只作用当前主管当前工作区整组；经 g507 admit+owner 门禁）。
+      path: "/api/dsh-graph/care/control",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          let body = {};
+          try { body = await readBody(req); } catch (e) { return json(res, 400, { error: String(e?.message ?? e) }); }
+          const workspace = workspaceOf(req, body);
+          if (typeof workspace !== "string" || !workspace.trim()) return json(res, 400, { error: "missing workspace" });
+          const action = body?.action;
+          if (!(action === "pause" || action === "resume" || action === "reset")) {
+            return json(res, 400, { error: "invalid action" });
+          }
+          if (!careRuntime || typeof careRuntime.control !== "function") {
+            return json(res, 503, { error: "care_runtime_unavailable" });
+          }
+          const canonical = resolveCanonicalRoot(config, resolve(workspace));
+          const result = careRuntime.control(canonical.root, action, {
+            expectedRevision: typeof body?.expected_revision === "number" ? body.expected_revision : undefined,
+            actor: "web-ui",
+          });
+          if (result?.ok !== true) {
+            const code = result?.code ?? "control_failed";
+            const status = code === "workspace_unresolved" || code === "invalid_action" ? 400
+              : code === "config_unavailable" || code === "care_runtime_unavailable" ? 503
+                : 409;
+            return json(res, status, { error: code, revision: result?.revision ?? null });
+          }
+          return json(res, 200, result);
         } catch (e) {
           return json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) });
         }
@@ -7881,6 +9258,24 @@ export function apply(ctx, config) {
       try { process.stderr.write(`[dsh-graph-host] 主管上下文缓存保活运行时未启动（已降级，不影响看板与工具）：${String(e?.message ?? e).slice(0, 160)}\n`); } catch { /* 忽略 */ }
     }
 
+    // ==== g-506：子代理长任务关照（到期巡检 + 真实维护临界区投递 + 窄工具结果回传）====
+    // 判定真源在 core/care.ts；运行时只采样真实运行态、抢占真 idle 投递、校验结论身份/新鲜度。
+    try {
+      careRuntime = createCareRuntime({
+        ctx,
+        readGlobal: readGlobalCareState,
+        resolveRoot: keepAliveRootOfWorkspace,
+        defaultWorkspace: () => (isAbsoluteConfig ? config.root : (ctx.get?.("sandboxPolicy")?.workspaceRoot ?? null)),
+        readBoardPayload: (root) => {
+          try { return getCachedBoardPayload(root, { lazy: true })?.payload ?? null; } catch { return null; }
+        },
+      });
+      careRuntime.start();
+    } catch (e) {
+      careRuntime = null;
+      try { process.stderr.write(`[dsh-graph-host] 长任务关照运行时未启动（已降级，不影响看板与工具）：${String(e?.message ?? e).slice(0, 160)}\n`); } catch { /* 忽略 */ }
+    }
+
     // ==== g-480：模块开关的**工具面真裁剪** ====
     // 目标：关闭某模块后，该模块的受管工具**从模型可见的工具清单里真正消失**（不是 UI 隐藏）。
     //
@@ -8215,6 +9610,7 @@ export function apply(ctx, config) {
       if (sectionState.timer) clearTimeout(sectionState.timer);
       // g-505：卸载/HMR ⇒ 先停保活（clear timer、abort 在途、解绑事件、清内存快照），再释放其余。
       try { keepAliveRuntime?.dispose(); } catch { /* 卸载路径绝不抛 */ }
+      try { careRuntime?.dispose(); } catch { /* 卸载路径绝不抛 */ }
       keepAliveRuntime = null;
       disposers.forEach((d) => d());
     };

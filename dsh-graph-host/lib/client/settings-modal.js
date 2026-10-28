@@ -34,6 +34,10 @@
           // g-505：保活三态归一（与 core `normalizeKeepAliveMode` 同口径）——只有三种合法形态保留，
           // 其余（未配置/畸形/未知字符串）一律归一为 null（＝inherit 跟随全局）。
           keep_alive: normalizeKeepAliveDraft(form?.supervisor?.keep_alive),
+          // g-506：关照三态与时间参数（非法/越界一律归一 null；写侧仍由服务端二次校验）。
+          care: normalizeCareDraft(form?.supervisor?.care),
+          care_threshold_seconds: normalizeCareSecondsDraft(form?.supervisor?.care_threshold_seconds),
+          care_recheck_seconds: normalizeCareSecondsDraft(form?.supervisor?.care_recheck_seconds),
         },
         prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
         modules: Object.fromEntries(MODULE_SWITCH_KEYS.map((k) => [k, normalizeModuleSwitchDraft(form?.modules?.[k])])),
@@ -128,6 +132,46 @@
       if (eff.source === "project_invalid" || eff.source === "global_invalid") return "settings.keepAliveMalformed";
       if (eff.source === "project_explicit") return "settings.keepAliveMalformedOverridden";
       return "settings.keepAliveMalformedUnknown";
+    };
+    // ===== g-506：长任务关照（项目级三态 + 阈值/复查间隔继承或覆盖）=====
+    // 与 core `CARE_MODES` 同源同序（浏览器 bundle 无法 import core；一致性由前后端对账测试钉住）。
+    const CARE_MODES = ["inherit", "true", "false"];
+    const CARE_LABEL_KEYS = {
+      inherit: "settings.careInherit",
+      "true": "settings.careOn",
+      "false": "settings.careOff",
+    };
+    const normalizeCareDraft = (v) => {
+      if (v === true) return "true";
+      if (v === false) return "false";
+      if (typeof v === "string") {
+        const s = v.trim().toLowerCase();
+        if (s === "inherit" || s === "true" || s === "false") return s;
+      }
+      return null;
+    };
+    const normalizeCareSecondsDraft = (v) => {
+      const n = typeof v === "number" ? v : (typeof v === "string" && v.trim() !== "" ? Number(v) : NaN);
+      if (!Number.isFinite(n)) return null;
+      const f = Math.floor(n);
+      return f >= 30 && f <= 86400 ? f : null;
+    };
+    const CARE_SOURCE_KEYS = {
+      project_explicit: "settings.careSrcProject",
+      global_explicit: "settings.careSrcGlobal",
+      global_default: "settings.careSrcDefault",
+      project_invalid: "settings.careSrcProjectInvalid",
+      global_invalid: "settings.careSrcGlobalInvalid",
+    };
+    const CARE_EFFECTIVE_LABEL_KEYS = {
+      on: "settings.careEffectiveOn",
+      off: "settings.careEffectiveOff",
+    };
+    const careMalformedKey = (eff) => {
+      if (!eff || eff.malformed !== true) return null;
+      if (eff.source === "project_invalid" || eff.source === "global_invalid") return "settings.careMalformed";
+      if (eff.source === "project_explicit") return "settings.careMalformedOverridden";
+      return "settings.careMalformedUnknown";
     };
     // ===== g-333：override + 空文本 ≡ disable =====
     // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
@@ -297,6 +341,21 @@
           leaf(["supervisor", "keep_alive"], (v) => (v === "true" || v === "false" ? v : null));
         }
       }
+      // g-506：关照三态与时间参数同口径（无基线 + null = 跟随全局，不实体化）。
+      {
+        const to = getLeafPath(draft, ["supervisor", "care"]);
+        const from = getLeafPath(base, ["supervisor", "care"]);
+        if (to === "true" || to === "false" || from === "true" || from === "false") {
+          leaf(["supervisor", "care"], (v) => (v === "true" || v === "false" ? v : null));
+        }
+      }
+      for (const key of ["care_threshold_seconds", "care_recheck_seconds"]) {
+        const to = getLeafPath(draft, ["supervisor", key]);
+        const from = getLeafPath(base, ["supervisor", key]);
+        // 无基线且草稿为空 = 无话可说（旧客户端/未配置），不把 null 实体化进稀疏 patch。
+        const norm = (v) => (v === undefined ? null : v);
+        if (norm(to) !== null || norm(from) !== null) leaf(["supervisor", key]);
+      }
       // g-480：模块开关同 agent_teams 口径——「无基线且草稿为 null」= 无话可说（不把「未配置」实体化
       // 进 project.yaml）；只有草稿是布尔、或基线是布尔而草稿回 null（显式清空回到默认开启）时才提交。
       for (const k of MODULE_SWITCH_KEYS) {
@@ -379,6 +438,10 @@
         "supervisor.automation.release",
         // g-505：保活三态（主管会话行为面，与 supervisor.automation 同页签）
         "supervisor.keep_alive",
+        // g-506：关照三态 + 阈值/复查间隔（同为主管会话行为面）
+        "supervisor.care",
+        "supervisor.care_threshold_seconds",
+        "supervisor.care_recheck_seconds",
         "prompt_overrides.subagent",
       ],
     };
@@ -1338,6 +1401,73 @@
                           : ""))
                   : null,
                 // 畸形取值：按**来源分层**警示（非法来源确按关闭；项目覆盖畸形全局时只报覆盖，不谎称关闭）
+                malformedKey
+                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT(malformedKey))
+                  : null);
+            })(),
+
+            // ===== g-506：子代理长任务关照（项目级三态 + 阈值/复查间隔继承/覆盖）=====
+            // 与保活同页签（主管会话行为面），但**独立开关/独立时间参数**；生效值与来源必须同屏。
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            (() => {
+              const eff = form.supervisor?.care_effective;
+              const status = form.supervisor?.care_status;
+              const draft = normalizeCareDraft(form.supervisor?.care);
+              const srcKey = eff ? CARE_SOURCE_KEYS[eff.source] : null;
+              const malformedKey = careMalformedKey(eff);
+              const unavailable = status && status.capable && status.capable.minimal === false;
+              return h("div", { style: { minWidth: 0 } },
+                h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                  h("label", { htmlFor: "dg-care", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.careLabel")),
+                  settingsHintIcon(dgT("settings.careHint"))),
+                h("select", {
+                  id: "dg-care",
+                  "aria-label": dgT("settings.careAria"),
+                  style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                  value: draft ?? "inherit",
+                  onChange: (e) => set(["supervisor", "care"], e.target.value === "inherit" ? null : e.target.value),
+                },
+                  ...CARE_MODES.map((m) => h("option", { key: m, value: m, style: policyOptionStyle }, dgT(CARE_LABEL_KEYS[m])))),
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } },
+                      dgT("settings.careEffective").replace("{v}",
+                        eff.effective ? dgT(CARE_EFFECTIVE_LABEL_KEYS.on) : dgT(CARE_EFFECTIVE_LABEL_KEYS.off))
+                        + (srcKey ? " · " + dgT(srcKey) : ""))
+                  : null,
+                h("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginTop: 6 } },
+                  h("div", null,
+                    h("label", { htmlFor: "dg-care-threshold", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.careThresholdLabel")),
+                    h("input", {
+                      id: "dg-care-threshold", type: "number", min: 30, max: 86400, step: 1,
+                      "aria-label": dgT("settings.careThresholdLabel"),
+                      style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                      value: form.supervisor?.care_threshold_seconds ?? "",
+                      placeholder: String(eff?.defaults?.threshold_seconds ?? 300),
+                      onChange: (e) => set(["supervisor", "care_threshold_seconds"], e.target.value === "" ? null : Number(e.target.value)),
+                    })),
+                  h("div", null,
+                    h("label", { htmlFor: "dg-care-recheck", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.careRecheckLabel")),
+                    h("input", {
+                      id: "dg-care-recheck", type: "number", min: 30, max: 86400, step: 1,
+                      "aria-label": dgT("settings.careRecheckLabel"),
+                      style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                      value: form.supervisor?.care_recheck_seconds ?? "",
+                      placeholder: String(eff?.defaults?.recheck_seconds ?? 300),
+                      onChange: (e) => set(["supervisor", "care_recheck_seconds"], e.target.value === "" ? null : Number(e.target.value)),
+                    }))),
+                h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.careSecondsHint")),
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careEffectiveTiming")
+                        .replace("{threshold}", String(eff.threshold_seconds))
+                        .replace("{recheck}", String(eff.recheck_seconds))
+                        .replace("{max}", String(eff.max_stagnant_rounds)))
+                  : null,
+                unavailable
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careUnavailable")
+                        + (Array.isArray(status.capable.missing) && status.capable.missing.length ? ": " + status.capable.missing.join(", ") : ""))
+                  : null,
                 malformedKey
                   ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT(malformedKey))
                   : null);
