@@ -392,6 +392,10 @@ test("g506 投影/正文：到零只表示巡检到期；唤醒正文有界且�
   assert.match(text, /inspection: insp-1/);
   assert.match(text, /不是\*\*卡死证据|不是.*卡死/);
   assert.ok(text.length < 4000, "唤醒正文必须保持有界");
+  // 返工：正文与巡检 targets 必须同集合，不得截断到前 8 个（否则第 9+ 个任务无法按正文回传）
+  const many = Array.from({ length: 10 }, (_, i) => ({ goal: `goal-${i}`, attempt: `att-${i}`, child: `child-${i}`, elapsedMs: 400_000, lastCareAgoMs: null, stagnantRounds: 0, maxStagnantRounds: 3, humanLocked: false }));
+  const full = formatCareWakeMessage({ inspectionId: "insp-many", targets: many, maxStagnantRounds: 3 });
+  for (const t of many) assert.ok(full.includes(`goal=${t.goal}`), `唤醒正文必须包含 ${t.goal}（不得只列前 8 个）`);
   const en = formatCareWakeMessage({ inspectionId: "insp-1", targets: [], maxStagnantRounds: 3, lang: "en" });
   assert.match(en, /NOT evidence of a stall/);
   assert.match(en, /graph_care_outcome/);
@@ -646,6 +650,14 @@ test("g506 B1 真实 boardPayload：版本目标 + 独立目标均采样，backl
     const ins = runtime.entryOfRoot(root).inspections.get("b1-1");
     assert.ok(ins, "投递了真实巡检");
     assert.deepEqual(ins.targets.map((t: any) => t.goal).sort(), ["g-101", "g-102"]);
+    // 真正的窄工具回传也必须用同一生产枚举找到版本/独立目标（而不是只看 payload.goals）。
+    const submit = (goal: string, child2: string, outcome: string) => runtime.submitOutcome({
+      root, supervisor: sup.id, inspection: "b1-1", goal, attempt: "att-001", child: child2, outcome, evidence: `b1 ${goal}`,
+    });
+    assert.equal(submit("g-101", childV.id, "no-progress").ok, true);
+    assert.equal(submit("g-102", childS.id, "progress").ok, true);
+    assert.equal(runtime.statusFor(root).tasks.filter((t: any) => t.human_locked).length, 0);
+    assert.equal(runtime.statusFor(root).last_outcome?.outcome, "progress");
     // 负向：移除 standalone 支持（模拟旧枚举）后，独立目标不再出现——证明该分支真被覆盖。
     const payload = ops.getCachedBoardPayload(root, { lazy: true }).payload;
     const onlyVersions = { ...payload, standalone: [] };
@@ -947,6 +959,7 @@ test("g506 真实宿主：主管忙时延后；维护占用时同步拒绝并有
     await waitFor(() => sup.status === "idle", "maintenance projects idle");
     await runtime.sweep();
     assert.equal(events.length, 0, "维护占用不得投递");
+    assert.equal(runtime.entryOfRoot(WS).transportFailures, 0, "维护占用不消耗真实发送预算");
     release?.();
     await maintenance;
     clock.advance(15_000);
@@ -1273,6 +1286,31 @@ test("g506 B5 事件写失败：control 不得半更新（paused/revision/锁保
     assert.equal(after.paused, false, "事件失败不得落地暂停");
     assert.equal(after.revision, before.revision, "事件失败不得推进 revision");
   } finally { runtime.dispose(); }
+});
+
+test("g506 B5 事件文件损坏：fail-closed 不投递、不重建锁/暂停；绝不半信状态", async () => {
+  const host = await makeRealHost();
+  const root = makeBoard("");
+  writeFileSync(join(root, "events.jsonl"), "{not json\n", "utf8");
+  const sup = (await host.reg.create({ sessionId: "sup-corrupt", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-corrupt", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  host.adapter.hold("CHILD-CORRUPT");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-CORRUPT" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const payload = boardPayload([{ id: "goal-c", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const { runtime, events } = await makeCareRuntime(host, { clock, scheduler: fakeScheduler(clock), payload, supervisorId: sup.id });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    assert.equal(events.filter((e) => e.event === "care.inspection").length, 0, "损坏状态不得投递");
+    const st = runtime.statusFor(root);
+    assert.equal(st.phase, "unavailable");
+    assert.equal(st.paused, false, "不得凭空重建暂停/锁");
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
 });
 
 test("g506 REST：g507 门禁 401/403/503 + status/control 语义（无 live 主管如实 409）", async () => {
