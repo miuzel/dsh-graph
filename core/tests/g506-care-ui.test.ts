@@ -43,6 +43,8 @@ function makeHarness(opts: {
   zh: any;
   status: any;
   onControl?: (action: string) => any;
+  controlError?: string;
+  lang?: "zh" | "en";
 }) {
   const posts: Array<{ url: string; body: any }> = [];
   const sandbox: any = {};
@@ -80,6 +82,7 @@ function makeHarness(opts: {
   sandbox.S = new Proxy({}, { get: () => ({}) });
   sandbox.useLocaleRevision = () => 0;
   sandbox.dgT = (key: string) => String(opts.zh[key] ?? key);
+  sandbox.dgLang = opts.lang ?? "zh";
   sandbox.resolveWorkspaceOfSession = () => "/ws";
   sandbox.window = { addEventListener() {}, removeEventListener() {} };
   sandbox.document = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
@@ -89,6 +92,7 @@ function makeHarness(opts: {
     if (String(url).includes("/care/control")) {
       const body = JSON.parse(init?.body ?? "{}");
       posts.push({ url: String(url), body });
+      if (opts.controlError) return { ok: false, json: async () => ({ error: opts.controlError }) };
       const next = opts.onControl?.(body.action) ?? opts.status;
       return { ok: true, json: async () => ({ ok: true, idempotent: false, status: next }) };
     }
@@ -284,7 +288,14 @@ test("g506 UI B6：真实 plugin header 注册的 GRAPH主管 旁有倒计时/�
       ok: true,
       json: async () => String(url).includes("supervisor-session")
         ? { supervisorSession: "sup-1" }
-        : status({ phase: "counting", next_due_at: NOW + 61_000, server_now: NOW, next_due_in_ms: 61_000 }),
+        : status({
+          phase: "counting", next_due_at: NOW + 200_000, server_now: NOW, next_due_in_ms: 200_000,
+          awaiting_human: true,
+          tasks: [
+            { child: "c-lock", attempt: "a1", goal: "g1", human_locked: true, human_reason: "no_response_limit", reminders_sent: 3, due_at: null, due_in_ms: null, escalated: true, stagnant_rounds: 0 },
+            { child: "c-live", attempt: "a1", goal: "g2", human_locked: false, due_at: NOW + 200_000, due_in_ms: 200_000, escalated: false, stagnant_rounds: 0 },
+          ],
+        }),
     }),
     console: { log() {}, warn() {} },
   };
@@ -396,9 +407,12 @@ test("g506 B9 补充：header 面板逐项显示非最小能力缺口与 unverif
   assert.ok(textOf(unvLine[0]).includes(zh["care.unverifiedCapabilities"]));
   // 中英文案都可理解（不出现裸 key）
   assert.ok(!textOf(partialMissing[0]).includes("care.cap."));
-  const enH = makeHarness({ zh: en, status: status({ capable: { available: {}, missing: ["progress_read"], minimal: true } }) });
+  const enH = makeHarness({ zh: en, lang: "en", status: status({ capable: { available: {}, missing: ["progress_read", "wake_dispatch"], minimal: true } }) });
   enH.render(); await enH.flush(); enH.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick(); await enH.flush();
-  assert.ok(textOf(enH.nodes().find((n) => n.props?.className === "dg-care-missing")).includes(en["care.cap.progress_read"]));
+  const enMissing = textOf(enH.nodes().find((n) => n.props?.className === "dg-care-missing"));
+  assert.ok(enMissing.includes(en["care.cap.progress_read"]));
+  assert.ok(enMissing.includes(", "), "英文缺口列表必须用逗号分隔");
+  assert.ok(!enMissing.includes("、"), "英文缺口列表不得用中文顿号");
 });
 
 test("g506 B10：delivery_failed_limit 面板提供唯一 reset（真实 POST request_id/revision），普通 unavailable/idle 无假恢复", async () => {
@@ -458,4 +472,74 @@ test("g506 B9 补充：settings 关照页签常态逐项展示 missing/unverifie
   }
   assert.match(zh["settings.careMissing"], /能力缺口/);
   assert.match(en["settings.careMissing"], /Capability gaps/);
+});
+
+test("g506 B13 局部锁不吞倒计时：phase 优先、全锁无假剩余、局部锁附 N 项待人；中英/ARIA", async () => {
+  const { zh, en } = loadI18n();
+  const locked = { child: "c-lock", attempt: "a1", goal: "g1", human_locked: true, human_reason: "no_response_limit", reminders_sent: 3, due_at: null, due_in_ms: null, escalated: true, stagnant_rounds: 0 };
+  const live200 = { child: "c-live", attempt: "a1", goal: "g2", human_locked: false, due_at: NOW + 200_000, due_in_ms: 200_000, escalated: false, stagnant_rounds: 0 };
+  const chipText = async (st: any, dict: any = zh) => {
+    const h = makeHarness({ zh: dict, status: st });
+    h.render(); await h.flush();
+    const chip = h.nodes().find((n) => n.props?.className === "dg-care-chip");
+    return { text: textOf(chip), chip, h };
+  };
+  // 1 锁 + 1 有效 200s：主 chip 保留倒计时，并附 1 项待人（不能显示全组待人工）
+  const mixed200 = await chipText(status({ phase: "counting", reason: "counting", awaiting_human: true, next_due_at: NOW + 200_000, next_due_in_ms: 200_000, tasks: [locked, live200] }));
+  assert.ok(mixed200.text.includes("3:20"), `局部锁不得吞未锁任务倒计时：${mixed200.text}`);
+  assert.ok(mixed200.text.includes(zh["care.partialLocked"].replace("{n}", "1")), "必须附 1 项待人提示");
+  assert.ok(!mixed200.text.includes(zh["care.awaitingHuman"]), "部分锁不得显示全组待人工");
+  // 有效任务 0s：显示已到期 + 局部待人
+  const mixedDue = await chipText(status({ phase: "counting", reason: "counting", awaiting_human: true, next_due_at: NOW, next_due_in_ms: 0, tasks: [locked, live200] }));
+  assert.ok(mixedDue.text.includes(zh["care.dueNow"]), mixedDue.text);
+  assert.ok(mixedDue.text.includes("1 项待人"));
+  // 主管忙：priority 为 waiting_supervisor，但仍附局部待人
+  const busy = await chipText(status({ phase: "waiting_supervisor", reason: "supervisor_busy", awaiting_human: true, next_due_at: NOW, next_due_in_ms: 0, tasks: [locked, live200] }));
+  assert.ok(busy.text.includes(zh["care.waitingSupervisor"]));
+  assert.ok(busy.text.includes("1 项待人"));
+  // 全锁暂停：无假 0:00/阈值，显示待人工裁决
+  const allPaused = await chipText(status({ phase: "paused", reason: "paused", paused: true, paused_remaining_ms: null, awaiting_human: true, next_due_at: null, next_due_in_ms: null, tasks: [locked] }));
+  assert.ok(allPaused.text.includes(zh["care.pausedAwaitingHuman"]), allPaused.text);
+  assert.ok(!allPaused.text.includes("0:00") && !allPaused.text.includes("5:00"), "全锁暂停不得伪造倒计时");
+  // 无任务暂停：明确无任务，不得说待人工/无主管
+  const emptyPaused = await chipText(status({ phase: "paused", reason: "paused", paused: true, paused_remaining_ms: null, awaiting_human: false, next_due_at: null, next_due_in_ms: null, tasks: [] }));
+  assert.ok(emptyPaused.text.includes(zh["care.pausedNoCountdown"]));
+  // 部分锁暂停：保留未锁任务真实剩余 + 局部提示
+  const partialPaused = await chipText(status({ phase: "paused", reason: "paused", paused: true, paused_remaining_ms: 200_000, awaiting_human: true, next_due_at: null, next_due_in_ms: null, tasks: [locked, { ...live200, due_at: null, due_in_ms: null }] }));
+  assert.ok(partialPaused.text.includes(zh["care.pausedRemaining"].replace("{t}", "3:20")), partialPaused.text);
+  assert.ok(partialPaused.text.includes("1 项待人"));
+  // 英文列表分隔符不得用中文顿号
+  const enStatus = status({ phase: "counting", reason: "counting", awaiting_human: true, next_due_at: NOW + 200_000, next_due_in_ms: 200_000, tasks: [locked, live200] });
+  const enH = makeHarness({ zh: en, status: enStatus, lang: "en" });
+  enH.render(); await enH.flush();
+  const enPartial = { text: textOf(enH.nodes().find((n) => n.props?.className === "dg-care-chip")) };
+  assert.ok(enPartial.text.includes("1 awaiting human"));
+  assert.ok(!enPartial.text.includes("、"), "英文不得出现中文顿号");
+  // 键盘/ARIA：chip 是可展开对话框，Esc 可关
+  assert.equal(mixed200.chip.props["aria-haspopup"], "dialog");
+  assert.equal(mixed200.chip.props["aria-expanded"], "false");
+  mixed200.chip.props.onClick();
+  await mixed200.h.flush();
+  const openChip = mixed200.h.nodes().find((n) => n.props?.className === "dg-care-chip");
+  assert.equal(openChip.props["aria-expanded"], "true");
+  const rootSpan = mixed200.h.nodes()[0];
+  let escHandled = false;
+  rootSpan.props.onKeyDown?.({ key: "Escape", stopPropagation: () => { escHandled = true; } });
+  await mixed200.h.flush();
+  assert.equal(escHandled, true);
+  assert.equal(mixed200.h.nodes().find((n) => n.props?.className === "dg-care-chip").props["aria-expanded"], "false");
+});
+
+test("g506 B10 补充：409 冲突保留上一次服务端快照并显示冲突，不误报可用性", async () => {
+  const { zh } = loadI18n();
+  const h = makeHarness({ zh, status: status({ phase: "counting" }), controlError: "revision_conflict" });
+  h.render(); await h.flush();
+  h.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick();
+  await h.flush();
+  h.nodes().find((n) => n.props?.className === "dg-btn dg-care-pause").props.onClick();
+  await h.flush();
+  const panelText = textOf(h.nodes().find((n) => n.props?.className === "dg-care-panel"));
+  assert.ok(panelText.includes(zh["care.conflict"]), "必须显示冲突提示");
+  assert.ok(!panelText.includes(zh["care.statusUnavailable"]), "不得把已有快照误报为不可用");
+  assert.ok(h.nodes().some((n) => typeof textOf(n) === "string" && textOf(n).includes(zh["care.countdown"].replace("{t}", "1:01"))), "保留上一次倒计时");
 });

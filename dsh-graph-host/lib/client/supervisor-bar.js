@@ -92,24 +92,34 @@
       const pausedRemaining = typeof status?.paused_remaining_ms === "number" ? status.paused_remaining_ms : null;
       const pendingDelivered = (status?.pending_inspections ?? []).some((i) => i.status === "delivered" || i.status === "claimed" || i.status === "queued");
       const fmt = (ms) => {
-        const total = Math.max(0, Math.ceil((ms ?? 0) / 1000));
+        const total = Math.max(0, Math.ceil(ms / 1000));
         return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
       };
+      const taskList = status?.tasks ?? [];
+      const lockedTasks = taskList.filter((t) => t.human_locked === true);
+      const unlockedTasks = taskList.filter((t) => t.human_locked !== true);
+      const allLocked = taskList.length > 0 && unlockedTasks.length === 0;
+      const partialLocked = lockedTasks.length > 0 && unlockedTasks.length > 0;
 
       let label;
       if (snap.error || !status) label = dgT("care.statusUnavailable");
       else if (effective === false) label = dgT("care.disabled");
       else if (status.reason === "delivery_failed_limit") label = dgT("care.deliveryFailed");
       else if (phase === "unavailable") label = dgT("care.unavailable");
-      else if (phase === "paused") label = dgT("care.pausedRemaining").replace("{t}", fmt(pausedRemaining ?? remainingMs));
-      else if (status.reason === "no_response_limit") label = dgT("care.noResponseLimit");
-      else if (status.awaiting_human || phase === "awaiting_human") label = dgT("care.awaitingHuman");
-      else if (phase === "awaiting_outcome") label = dgT("care.awaitingOutcome");
+      else if (phase === "paused") {
+        // B12：只有真实可执行（未锁）任务的冻结剩余才显示数字；全锁/无任务不得回退 0:00 或阈值。
+        if (pausedRemaining !== null) label = dgT("care.pausedRemaining").replace("{t}", fmt(pausedRemaining));
+        else if (allLocked) label = dgT("care.pausedAwaitingHuman");
+        else label = dgT("care.pausedNoCountdown");
+      } else if (phase === "awaiting_human" || (status.awaiting_human === true && unlockedTasks.length === 0)) {
+        label = status.reason === "no_response_limit" ? dgT("care.noResponseLimit") : dgT("care.awaitingHuman");
+      } else if (phase === "awaiting_outcome") label = dgT("care.awaitingOutcome");
       else if (phase === "waiting_supervisor") label = dgT("care.waitingSupervisor");
       else if (phase === "idle") label = dgT("care.noTasks");
       else if (remainingMs !== null && remainingMs > 0) label = dgT("care.countdown").replace("{t}", fmt(remainingMs));
       else if (remainingMs === 0) label = dgT("care.dueNow");
       else label = dgT("care.noTasks");
+      if (partialLocked) label += " · " + dgT("care.partialLocked").replace("{n}", String(lockedTasks.length));
 
       const submit = (action) => {
         if (busy) return;
@@ -132,8 +142,8 @@
             setNote({ kind: "ok", text: dgT("care.actionDone") });
           } else {
             const data = await res.json().catch(() => null);
+            // B10 补充：409 只提示冲突并保留上一次真实快照，绝不把面板打成「不可用」。
             setNote({ kind: "err", text: data?.error === "revision_conflict" ? dgT("care.conflict") : dgT("care.failed") });
-            if (data?.error === "revision_conflict") setSnap((prev) => ({ ...prev, error: "conflict" }));
           }
         }).catch(() => setNote({ kind: "err", text: dgT("care.failed") }))
           .finally(() => { setBusy(false); });
@@ -177,6 +187,7 @@
         global_care_recheck_malformed: "care.warnGlobalRecheckMalformed",
       })[w]).filter(Boolean).map((k) => dgT(k));
       const capLabel = (cap) => dgT("care.cap." + cap);
+      const listSep = (typeof dgLang !== "undefined" && dgLang === "en") ? ", " : "、";
       const missingCaps = (status?.capable?.missing ?? []).map(capLabel);
       const unverifiedCaps = (status?.capable?.unverified ?? []).map(capLabel);
       const sourceLabel = (src) => (src ? dgT({
@@ -237,11 +248,11 @@
                 : null,
               missingCaps.length
                 ? h("div", { className: "dg-care-missing", style: { opacity: 0.9, marginTop: 2 } },
-                    dgT("care.missingCapabilities") + ": " + missingCaps.join("、"))
+                    dgT("care.missingCapabilities") + ": " + missingCaps.join(listSep))
                 : null,
               unverifiedCaps.length
                 ? h("div", { className: "dg-care-unverified", style: { opacity: 0.8, marginTop: 2 } },
-                    dgT("care.unverifiedCapabilities") + ": " + unverifiedCaps.join("、"))
+                    dgT("care.unverifiedCapabilities") + ": " + unverifiedCaps.join(listSep))
                 : null,
               status && dueAt !== null && remainingMs !== null && phase !== "paused"
                 ? h("div", { style: { opacity: 0.85, marginTop: 2 } }, dgT("care.countdownHint"))

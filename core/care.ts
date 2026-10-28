@@ -578,6 +578,8 @@ export interface CareGroupState {
   revision: number;
   /** 最近一次控制动作（机读；`null` = 从未）。 */
   lastControl: "pause" | "resume" | "reset" | null;
+  /** 与最近一次 requestId 绑定的控制动作（同 id 重放/冲突判定）。 */
+  lastControlAction?: "pause" | "resume" | "reset" | null;
   /** 最近一次控制动作时刻（ms epoch）。 */
   lastControlAt: number | null;
   /** g-506 返工：最近一次 `reset` 的唯一请求 id（重试幂等；不按秒猜重复）。 */
@@ -677,17 +679,25 @@ export type CareReason =
  * - 已关照 ⇒ 从上次关照起算**复查间隔**；
  * - 组级 `resetAt` 晚于上述基准 ⇒ 从重置时刻按当前间隔重新计满。
  */
+export function careTaskIntervalMs(task: CareTaskState, timing: {
+  thresholdSeconds: number;
+  recheckSeconds: number;
+}): number {
+  const thresholdMs = Math.max(1, Math.floor(timing.thresholdSeconds)) * 1000;
+  const recheckMs = Math.max(1, Math.floor(timing.recheckSeconds)) * 1000;
+  if (task.lastCareAt === null) return thresholdMs;
+  // 连续无有效结论的提醒至少间隔 300s（即使项目复查更短）——避免「短阈值 + 未回复」高频唤醒。
+  const unanswered = (task.remindersSent ?? 0) > 0 || task.awaitingReply === true;
+  return Math.max(recheckMs, unanswered ? CARE_NO_RESPONSE_COOLDOWN_MS : 0);
+}
+
 export function careTaskDueAt(task: CareTaskState, timing: {
   thresholdSeconds: number;
   recheckSeconds: number;
   resetAt: number | null;
 }): number {
-  const thresholdMs = Math.max(1, Math.floor(timing.thresholdSeconds)) * 1000;
-  const recheckMs = Math.max(1, Math.floor(timing.recheckSeconds)) * 1000;
   const base = task.lastCareAt === null ? task.startedAt : task.lastCareAt;
-  // 连续无有效结论的提醒至少间隔 300s（即使项目阈值更短）——避免「短阈值 + 未回复」高频唤醒。
-  const unanswered = (task.remindersSent ?? 0) > 0 || task.awaitingReply === true;
-  const interval = task.lastCareAt === null ? thresholdMs : Math.max(recheckMs, unanswered ? CARE_NO_RESPONSE_COOLDOWN_MS : 0);
+  const interval = careTaskIntervalMs(task, timing);
   const resetAt = timing.resetAt;
   return resetAt !== null && resetAt > base ? resetAt + interval : base + interval;
 }
@@ -1016,8 +1026,6 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
   recheckSeconds: number;
 }): { group: CareGroupState; tasks: CareTaskState[] } {
   if (group.paused === true) return { group: { ...group }, tasks: tasks.map((t) => ({ ...t })) };
-  const thresholdMs = Math.max(1, Math.floor(inputs.thresholdSeconds)) * 1000;
-  const recheckMs = Math.max(1, Math.floor(inputs.recheckSeconds)) * 1000;
   const nextTasks = tasks.map((t) => {
     if (t.humanLocked === true) return { ...t, frozenRemainingMs: null }; // 人工锁任务本无倒计时
     const due = careTaskDueAt(t, {
@@ -1030,7 +1038,8 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
   const remainings = nextTasks
     .filter((t) => t.humanLocked !== true && typeof t.frozenRemainingMs === "number")
     .map((t) => t.frozenRemainingMs as number);
-  const remaining = remainings.length > 0 ? Math.min(...remainings) : thresholdMs;
+  // 没有任何可执行（未锁）任务 ⇒ 如实无倒计时，绝不回退 threshold 伪造数字。
+  const remaining = remainings.length > 0 ? Math.min(...remainings) : null;
   return {
     group: {
       ...group,
@@ -1039,6 +1048,7 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
       pausedRemainingMs: remaining,
       revision: group.revision + 1,
       lastControl: "pause",
+      lastControlAction: "pause",
       lastControlAt: inputs.now,
     },
     tasks: nextTasks,
@@ -1060,10 +1070,8 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
   if (group.paused !== true) {
     return { group: { ...group }, tasks: tasks.map((t) => ({ ...t })) }; // 幂等
   }
-  const thresholdMs = Math.max(1, Math.floor(inputs.thresholdSeconds)) * 1000;
-  const recheckMs = Math.max(1, Math.floor(inputs.recheckSeconds)) * 1000;
   const nextTasks = tasks.map((t) => {
-    const interval = t.lastCareAt === null ? thresholdMs : recheckMs;
+    const interval = careTaskIntervalMs(t, inputs);
     const frozen = t.frozenRemainingMs;
     if (frozen === null || t.humanLocked === true) return { ...t, frozenRemainingMs: null };
     const base = inputs.now + frozen - interval;
@@ -1079,6 +1087,7 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
       resetAt: null,
       revision: group.revision + 1,
       lastControl: "resume",
+      lastControlAction: "resume",
       lastControlAt: inputs.now,
     },
     tasks: nextTasks,
@@ -1099,20 +1108,17 @@ export function resetCare(group: CareGroupState, tasks: CareTaskState[], inputs:
   thresholdSeconds: number;
   recheckSeconds: number;
 }): { group: CareGroupState; tasks: CareTaskState[] } {
-  const thresholdMs = Math.max(1, Math.floor(inputs.thresholdSeconds)) * 1000;
-  const recheckMs = Math.max(1, Math.floor(inputs.recheckSeconds)) * 1000;
   const nextTasks = tasks.map((t) => {
     if (group.paused !== true) return { ...t, frozenRemainingMs: null };
     if (t.humanLocked === true) return { ...t, frozenRemainingMs: null };
-    const interval = t.lastCareAt === null ? thresholdMs : recheckMs;
-    return { ...t, frozenRemainingMs: interval };
+    return { ...t, frozenRemainingMs: careTaskIntervalMs(t, inputs) };
   });
   const remaining = group.paused === true
     ? (() => {
         const frozen = nextTasks
           .filter((t) => t.humanLocked !== true && typeof t.frozenRemainingMs === "number")
           .map((t) => t.frozenRemainingMs as number);
-        return frozen.length > 0 ? Math.min(...frozen) : thresholdMs;
+        return frozen.length > 0 ? Math.min(...frozen) : null;
       })()
     : group.pausedRemainingMs;
   return {
@@ -1122,6 +1128,7 @@ export function resetCare(group: CareGroupState, tasks: CareTaskState[], inputs:
       pausedRemainingMs: remaining,
       revision: group.revision + 1,
       lastControl: "reset",
+      lastControlAction: "reset",
       lastControlAt: inputs.now,
     },
     tasks: nextTasks,
@@ -1139,6 +1146,7 @@ export function newCareGroupState(): CareGroupState {
     escalated: false,
     revision: 0,
     lastControl: null,
+    lastControlAction: null,
     lastControlAt: null,
   };
 }

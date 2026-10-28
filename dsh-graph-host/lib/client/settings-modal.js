@@ -1417,6 +1417,7 @@
               const malformedKey = careMalformedKey(eff);
               const unavailable = status && status.capable && status.capable.minimal === false;
               const capLabel = (cap) => dgT("care.cap." + cap);
+              const listSep = (typeof dgLang !== "undefined" && dgLang === "en") ? ", " : "、";
               const timingSrc = (src) => dgT(CARE_SOURCE_KEYS[src] ?? "care.srcUnknown");
               const missingCaps = (status?.capable?.missing ?? []).map(capLabel);
               const unverifiedCaps = (status?.capable?.unverified ?? []).map(capLabel);
@@ -1482,11 +1483,11 @@
                 // 不能只在 minimal=false 时显示；unverified 单独标注，绝不混同 available。
                 missingCaps.length
                   ? h("div", { className: "dg-care-missing", style: { ...S.meta, marginTop: 2, fontSize: 11 } },
-                      dgT("settings.careMissing") + ": " + missingCaps.join("、"))
+                      dgT("settings.careMissing") + ": " + missingCaps.join(listSep))
                   : null,
                 unverifiedCaps.length
                   ? h("div", { className: "dg-care-unverified", style: { ...S.meta, marginTop: 2, fontSize: 11 } },
-                      dgT("settings.careUnverified") + ": " + unverifiedCaps.join("、"))
+                      dgT("settings.careUnverified") + ": " + unverifiedCaps.join(listSep))
                   : null,
                 malformedKey
                   ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT(malformedKey))

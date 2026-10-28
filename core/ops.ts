@@ -323,6 +323,7 @@ export {
   assertNoMutualWake,
   careDedupeKey,
   careTaskDueAt,
+  careTaskIntervalMs,
   decideCare,
   applyCareDelivery,
   applyCareOutcome,

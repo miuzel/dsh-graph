@@ -2027,6 +2027,7 @@ export function createCareRuntime(options = {}) {
       escalated: g.escalated === true,
       revision: Math.max(0, Math.floor(numberOr(g.revision, 0))),
       lastControl: ["pause", "resume", "reset"].includes(String(g.lastControl)) ? g.lastControl : null,
+      lastControlAction: ["pause", "resume", "reset"].includes(String(g.lastControlAction)) ? g.lastControlAction : null,
       lastControlAt: g.lastControlAt === null || g.lastControlAt === undefined ? null : numberOr(g.lastControlAt, null),
       lastControlRequestId: typeof g.lastControlRequestId === "string" ? g.lastControlRequestId : null,
     };
@@ -2836,15 +2837,18 @@ export function createCareRuntime(options = {}) {
     const sup = supervisorOf(root);
     if (!sup.sid || !sup.live) return { ok: false, code: "no_live_supervisor" };
     if (entry.supervisorId !== sup.sid) return { ok: false, code: "identity_changed" };
-    if (typeof opts.expectedRevision === "number" && opts.expectedRevision !== entry.group.revision) {
-      return { ok: false, code: "revision_conflict", revision: entry.group.revision };
-    }
-    // g-506 返工：reset 的**同一次点击重试**用调用方唯一 requestId 幂等；不同真实点击（id 不同）
-    // 必须真的重新计时——绝不按秒级时间猜重复而吞掉用户点击。
+    // g-506 返工 B14：同一次 HTTP 重试必须先按 requestId 识别，再校验 expectedRevision；
+    // 否则第一次 reset 已递增 revision，带原 revision 的网络重试会被误判 409。
     const requestId = typeof opts.requestId === "string" && opts.requestId.trim()
       ? opts.requestId.trim().slice(0, 100) : null;
-    if (action === "reset" && requestId !== null && entry.group.lastControlRequestId === requestId) {
+    if (requestId !== null && entry.group.lastControlRequestId === requestId) {
+      if (action !== "reset" || entry.group.lastControlAction !== "reset") {
+        return { ok: false, code: "request_conflict" };
+      }
       return { ok: true, idempotent: true, status: statusFor(root) };
+    }
+    if (typeof opts.expectedRevision === "number" && opts.expectedRevision !== entry.group.revision) {
+      return { ok: false, code: "revision_conflict", revision: entry.group.revision };
     }
     // 首次控制可能早于第一次状态查询：先做一次纯采样，保证暂停冻结的是真实任务的剩余，
     // 而不是「空组暂停 → 继续后立刻到期」。采样不投递、不写事件、不改 revision。
@@ -2858,14 +2862,14 @@ export function createCareRuntime(options = {}) {
     if (action === "pause") {
       if (entry.group.paused === true) return { ok: true, idempotent: true, status: statusFor(root) };
       const r = pauseCare(entry.group, tasks, timing);
-      nextGroup = r.group; nextTasks = r.tasks;
+      nextGroup = { ...r.group, lastControlAction: "pause" }; nextTasks = r.tasks;
     } else if (action === "resume") {
       if (entry.group.paused !== true) return { ok: true, idempotent: true, status: statusFor(root) };
       const r = resumeCare(entry.group, tasks, timing);
-      nextGroup = r.group; nextTasks = r.tasks;
+      nextGroup = { ...r.group, lastControlAction: "resume" }; nextTasks = r.tasks;
     } else {
       const r = resetCare(entry.group, tasks, timing);
-      nextGroup = { ...r.group, lastControlRequestId: requestId };
+      nextGroup = { ...r.group, lastControlRequestId: requestId, lastControlAction: "reset" };
       nextTasks = r.tasks;
     }
     // g-506 返工 B5：事件先行 + 完整状态快照（paused/剩余/reset/未答计数/人工锁/inflight）。
