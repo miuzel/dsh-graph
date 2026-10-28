@@ -1792,11 +1792,25 @@ export function createKeepAliveRuntime(options = {}) {
 //   · 单次投递一个巡检覆盖**本轮全部到期任务**（有界成本），复核间隔默认 300s；
 //   · 连续 3 份**新鲜且未解决**的 no-progress 结论 ⇒ 人工裁决锁（sticky，progress 不清锁）；
 //   · 任何异常都被吞掉并留结构化 stderr，绝不影响工具/看板/既有生命周期。
+//
+// 自举（g-506 返工，3110 真实缺口：目标 workspace 不是启动默认根 + 主管晚 claim）：
+//   · `armForRoot(root)`：claim 成功后由**事件链**显式布防该 canonical root（幂等：一 root 单 timer）；
+//     布防前重验「project.yaml supervisor.session == registry 里同一 live Agent」且该 Agent 的
+//     workspace 真解析到本 root（禁止给非主管/foreign agent 装错 root 的 timer）。
+//   · `agent/status` / `agent/created`：先走已绑定快路径；未绑定时做**只读**身份校验后 idempotent 布防
+//     （自然 turn-end 就是生产事件，不依赖用户打开设置页/手工 sweep/客户端 GET）。
+//   · **有界后台发现**：仅当尚无任何 root 布防时启动，只在 registry 上做只读身份核对（零模型请求/
+//     零投递），间隔与次数都有上界（默认 30s × 20 ≈ 10 分钟；可注入覆盖），一旦有 root 布防即停止。
+//   · `statusFor` 保持**纯读**：读接口绝不装 timer（不以客户端 GET 作为自举真源）。
 
 export const CARE_CONFIG_RECHECK_MS = 30_000;
 export const CARE_BUSY_RECHECK_MS = 5_000;
 export const CARE_MAINTENANCE_RETRY_MS = 10_000;
 export const CARE_RETRY_MS = 30_000;
+/** 有界自举发现：检查间隔（只读 registry/project.yaml，无模型请求、无投递）。 */
+export const CARE_ARM_DISCOVERY_INTERVAL_MS = 30_000;
+/** 有界自举发现：最多尝试次数（≈ 10 分钟窗口；之后由 claim 事件与 agent 事件继续兜底）。 */
+export const CARE_ARM_DISCOVERY_MAX_ATTEMPTS = 20;
 export const CARE_OUTCOME_TOOL = "graph_care_outcome";
 
 /**
@@ -1852,6 +1866,8 @@ export function createCareRuntime(options = {}) {
     busyRecheckMs = CARE_BUSY_RECHECK_MS,
     maintenanceRetryMs = CARE_MAINTENANCE_RETRY_MS,
     retryMs = CARE_RETRY_MS,
+    armDiscoveryIntervalMs = CARE_ARM_DISCOVERY_INTERVAL_MS,
+    armDiscoveryMaxAttempts = CARE_ARM_DISCOVERY_MAX_ATTEMPTS,
     log = null,
   } = options;
 
@@ -1860,6 +1876,9 @@ export function createCareRuntime(options = {}) {
   let started = false;
   let disposed = false;
   let generation = 0;
+  // 有界自举发现（仅当没有任何 root 布防时使用；见文件头「自举」小节）。
+  let discoveryTimer = null;
+  let discoveryAttempts = 0;
 
   const getService = (name) => {
     try { return typeof ctx?.get === "function" ? ctx.get(name) : null; } catch { return null; }
@@ -2108,6 +2127,109 @@ export function createCareRuntime(options = {}) {
       if (agent.status === "running") return "running";
       return null;
     } catch { return null; }
+  };
+
+  // ── g-506 返工：晚 claim / 晚加入 workspace 的自举布防（见文件头「自举」小节） ──────────
+  /**
+   * 该 root 的**可信 live 主管绑定**：project.yaml supervisor.session → registry live Agent，
+   * 且该 Agent 的 workspace 真解析到本 root（绝对 root 配置下 rootOfAgent 恒等，符合既有口径）。
+   * 任一不满足 ⇒ `ok:false`（**绝不**布防，避免给非主管/foreign agent 装错 root 的 timer）。
+   */
+  const supervisorBindingOf = (root) => {
+    const sup = supervisorOf(root);
+    if (!sup.sid || !sup.agent) return { ok: false, sid: sup.sid ?? null, agent: null };
+    let agentRoot = null;
+    try { agentRoot = rootOfAgent(sup.agent); } catch { agentRoot = null; }
+    if (agentRoot !== root) return { ok: false, sid: sup.sid, agent: null };
+    return { ok: true, sid: sup.sid, agent: sup.agent };
+  };
+
+  /**
+   * 幂等布防一个 canonical root（**生产事件驱动**的唯一入口）：
+   *  - 无 live/同 root 的可信主管 ⇒ 只返回（不装 timer；等 claim/事件/发现）；
+   *  - 否则同步身份后 `scheduleEntry`（先 clearTimer ⇒ 一 root 单 timer，绝不双投递）；
+   *  - 不重置 pause/人工锁/未答计数/事件提交点（只走既有 syncIdentity + schedule 语义）。
+   */
+  const armForRoot = (rootArg) => {
+    if (disposed) return null;
+    const root = boardRootKey(rootArg) ?? defaultRoot();
+    if (!root) return null;
+    const entry = entryOfRoot(root);
+    if (!entry) return null;
+    const binding = supervisorBindingOf(root);
+    if (!binding.ok) return entry;
+    if (disposed) return null;
+    syncIdentity(entry);
+    scheduleEntry(entry);
+    // 已有可信 root 布防 ⇒ 有界发现没有意义，立即停止（不额外扫描、不额外 timer）。
+    stopDiscovery();
+    return entry;
+  };
+
+  /**
+   * 从**真实 Agent**反查并布防它自己的 root（只读 project.yaml 校验，绝不写身份/不跨 root）：
+   * 该 Agent 必须正是其 workspace canonical root 的已登记主管。否则返回 null（不动任何状态）。
+   */
+  const adoptAgentRoot = (agent) => {
+    if (disposed || !agent) return null;
+    const root = rootOfAgent(agent);
+    if (!root) return null;
+    const sid = agent?.session?.id ?? agent?.id ?? null;
+    if (!sid) return null;
+    let registered = null;
+    try { registered = readSupervisorSessionFn(root); } catch { registered = null; }
+    if (!registered || registered !== sid) return null;
+    return armForRoot(root);
+  };
+
+  const anyArmedEntry = () => {
+    for (const entry of entries.values()) if (entry.timer !== null) return true;
+    return false;
+  };
+  const stopDiscovery = () => {
+    if (discoveryTimer === null) return;
+    try { clearTimeoutFn(discoveryTimer); } catch { /* 忽略 */ }
+    discoveryTimer = null;
+  };
+  /** 一轮有界发现：只核对 registry 里每个 live Agent 是否正是其 root 的已登记主管。 */
+  const discoverArmedRoots = () => {
+    if (disposed || !started) return false;
+    const agents = getService("agents");
+    if (!agents || typeof agents.list !== "function") return false;
+    let armed = false;
+    try {
+      for (const agent of agents.list() ?? []) {
+        const entry = adoptAgentRoot(agent);
+        if (entry && entry.timer !== null) armed = true;
+      }
+    } catch { /* registry 异常 ⇒ 本轮放弃，下一轮/事件再试 */ }
+    return armed;
+  };
+  /**
+   * 有界后台发现：间隔与次数都有上界；已有 root 布防即停止；**绝不**发模型请求或投递。
+   * `reset:true` 用于「新建 Agent（可能是尚未 claim 的主管）/冷启动」重新开一个有界窗口。
+   */
+  const scheduleDiscovery = (reset = false) => {
+    if (disposed || !started) return;
+    if (reset) discoveryAttempts = 0;
+    if (!(armDiscoveryMaxAttempts > 0)) { stopDiscovery(); return; }
+    if (discoveryAttempts >= armDiscoveryMaxAttempts) { stopDiscovery(); return; }
+    if (discoveryTimer !== null) return; // 已有一次待跑 ⇒ 不叠加
+    const interval = Number.isFinite(Number(armDiscoveryIntervalMs))
+      ? Math.max(0, Number(armDiscoveryIntervalMs))
+      : CARE_ARM_DISCOVERY_INTERVAL_MS;
+    let handle = null;
+    try {
+      handle = setTimeoutFn(() => {
+        discoveryTimer = null;
+        if (disposed || !started) return;
+        discoveryAttempts += 1;
+        if (discoverArmedRoots()) { stopDiscovery(); return; }
+        scheduleDiscovery(false);
+      }, interval);
+      handle?.unref?.();
+    } catch { handle = null; }
+    discoveryTimer = handle;
   };
 
   /**
@@ -2754,12 +2876,17 @@ export function createCareRuntime(options = {}) {
       syncIdentity(entry);
       scheduleEntry(entry);
     }
+    // g-506 返工：启动时默认 workspace 为空/指向别的 root（3110 现场）⇒ 没有任何 root 布防。
+    // 这里开一个**有界**的后台发现窗口（只读 registry/project.yaml，零模型请求），
+    // 让晚 claim/晚加入的 workspace 无需用户打开设置页或手工 sweep 也能自举；事件链仍是主路径。
+    try { if (!anyArmedEntry()) scheduleDiscovery(true); } catch { /* 发现机制失败绝不影响既有功能 */ }
   };
 
   const dispose = () => {
     if (disposed) return;
     generation += 1;
     disposed = true;
+    stopDiscovery();
     for (const entry of entries.values()) {
       clearTimer(entry);
       entry.delivering = false;
@@ -3170,8 +3297,15 @@ export function createCareRuntime(options = {}) {
 
   onEvent("agent/status", (payload) => {
     try {
-      const entry = entryOfAgent(payload?.agent);
-      if (entry) scheduleEntry(entry);
+      const agent = payload?.agent;
+      // 快路径：已绑定本 root 的主管 ⇒ 重排即可。
+      const bound = entryOfAgent(agent);
+      if (bound) { scheduleEntry(bound); return; }
+      // 自举路径（3110 现场）：条目可能是 claim 前 statusFor 建的 dormant 条目，或根本不存在；
+      // 这里做**只读**身份校验（该 Agent 正是其 workspace root 的已登记主管）后 idempotent 布防。
+      // 自然 turn-end 就是生产事件 ⇒ 不依赖设置页 / 客户端 GET / 手工 sweep。
+      const adopted = adoptAgentRoot(agent);
+      if (adopted && adopted.timer !== null) return; // armForRoot 已排程（一 root 单 timer）
     } catch { /* 忽略 */ }
   });
 
@@ -3179,15 +3313,20 @@ export function createCareRuntime(options = {}) {
     try {
       const agent = payload?.agent;
       if (!agent) return;
+      // 已登记主管（含 HMR 后重建的 Agent 实例）⇒ 直接布防其真实 root。
+      // 未 claim 时 adoptAgentRoot 只读校验后返回 null，绝不抢先绑定/装 timer。
+      const adopted = adoptAgentRoot(agent);
+      if (adopted && adopted.timer !== null) return;
+      const bound = entryOfAgent(agent);
+      if (bound) { scheduleEntry(bound); return; }
+      // 新建 Agent 可能是尚未 claim 的主管 ⇒ **仅当它所在 root 确实没有登记主管**时，才重开一次
+      // 有界发现窗口（否则已 claim 的工作区会因每个新 Agent 反复重置窗口 ⇒ 高频扫描）。
       const root = rootOfAgent(agent);
       if (!root) return;
-      let supId = null;
-      try { supId = readSupervisorSessionFn(root); } catch { supId = null; }
-      if (!supId || (agent?.session?.id !== supId && agent?.id !== supId)) return;
-      const entry = entryOfRoot(root);
-      entry.supervisorId = supId;
-      entry.supervisorAgent = agent;
-      scheduleEntry(entry);
+      let registered = null;
+      try { registered = readSupervisorSessionFn(root); } catch { registered = null; }
+      if (registered) return;
+      try { if (!anyArmedEntry()) scheduleDiscovery(true); } catch { /* 忽略 */ }
     } catch { /* 忽略 */ }
   });
 
@@ -3226,6 +3365,8 @@ export function createCareRuntime(options = {}) {
     control,
     submitOutcome,
     entryOfRoot,
+    // g-506 返工：生产事件链（成功 claim / 真实主管事件）显式布防入口；幂等、只读校验、失败不抛。
+    armForRoot,
     rootOfWorkspace: (workspace) => canonicalRootOfWorkspace(workspace),
     stateForWorkspace: (workspace) => {
       const root = canonicalRootOfWorkspace(workspace);
@@ -6944,6 +7085,13 @@ export function apply(ctx, config) {
       run: (a, ex) => {
         const r = rootFor(ex);
         const res = claimSupervisor(r, ex?.agent?.session?.id, actorOf(ex));
+        // g-506 返工（3110 现场根因）：claim 只写 project.yaml，不产生 Cordis 事件。若关照运行时
+        // 启动时的默认根不是本 root（或当时默认 workspace 还没就绪），无人布防 ⇒ 到阈值也永不投递。
+        // 这里在**成功 claim 后**把 canonical root 显式交给运行时（内部重验 live 主管一致性，幂等），
+        // 失败/无运行时一律静默：claim 的成功语义不受关照影响。
+        try {
+          if (careRuntime && typeof careRuntime.armForRoot === "function") careRuntime.armForRoot(r);
+        } catch { /* 忽略 */ }
         return { supervisor_session: res.supervisor_session, handoff: res.handoff };
       },
     },
