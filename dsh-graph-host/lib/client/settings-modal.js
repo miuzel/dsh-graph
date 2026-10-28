@@ -1416,6 +1416,10 @@
               const srcKey = eff ? CARE_SOURCE_KEYS[eff.source] : null;
               const malformedKey = careMalformedKey(eff);
               const unavailable = status && status.capable && status.capable.minimal === false;
+              const capLabel = (cap) => dgT("care.cap." + cap);
+              const timingSrc = (src) => dgT(CARE_SOURCE_KEYS[src] ?? "care.srcUnknown");
+              const missingCaps = (status?.capable?.missing ?? []).map(capLabel);
+              const unverifiedCaps = (status?.capable?.unverified ?? []).map(capLabel);
               return h("div", { style: { minWidth: 0 } },
                 h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
                   h("label", { htmlFor: "dg-care", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.careLabel")),
@@ -1433,6 +1437,14 @@
                       dgT("settings.careEffective").replace("{v}",
                         eff.effective ? dgT(CARE_EFFECTIVE_LABEL_KEYS.on) : dgT(CARE_EFFECTIVE_LABEL_KEYS.off))
                         + (srcKey ? " · " + dgT(srcKey) : ""))
+                  : null,
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careTimingSource")
+                        .replace("{threshold}", String(eff.threshold_seconds))
+                        .replace("{tsrc}", timingSrc(eff.threshold_source))
+                        .replace("{recheck}", String(eff.recheck_seconds))
+                        .replace("{rsrc}", timingSrc(eff.recheck_source)))
                   : null,
                 h("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginTop: 6 } },
                   h("div", null,
@@ -1464,9 +1476,17 @@
                         .replace("{max}", String(eff.max_stagnant_rounds)))
                   : null,
                 unavailable
-                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
-                      dgT("settings.careUnavailable")
-                        + (Array.isArray(status.capable.missing) && status.capable.missing.length ? ": " + status.capable.missing.join(", ") : ""))
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.careUnavailable"))
+                  : null,
+                // B9 补充：非最小缺口（如 progress_read 缺失但唤醒仍可用）也必须常态逐项可见，
+                // 不能只在 minimal=false 时显示；unverified 单独标注，绝不混同 available。
+                missingCaps.length
+                  ? h("div", { className: "dg-care-missing", style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careMissing") + ": " + missingCaps.join("、"))
+                  : null,
+                unverifiedCaps.length
+                  ? h("div", { className: "dg-care-unverified", style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careUnverified") + ": " + unverifiedCaps.join("、"))
                   : null,
                 malformedKey
                   ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT(malformedKey))

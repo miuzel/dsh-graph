@@ -464,11 +464,13 @@ export const CARE_WAKE_KINDS = ["care_inspection", "cache_keepalive"] as const;
 export type CareWakeKind = (typeof CARE_WAKE_KINDS)[number];
 
 /**
- * 结构性保证「二者协调去重、不得互相唤醒成循环」（判据 7）。
+ * 唤醒通道的防御性一致性 helper（判据 7）。
  *
- * 关照调度器产生的唤醒**只可能是** `care_inspection`；保活调度器产生的**只可能是**
- * `cache_keepalive`。本函数在投递前断言这一点：任何调度器试图投递另一种唤醒都被拒绝。
- * ⇒ 「关照触发保活」或「保活触发关照」在结构上不可能发生（不是靠自觉）。
+ * **真实机制**不是「投递前调用本函数」：关照与保活是两个独立 runtime/调度器，各自只构造自己
+ * 的 source kind（`care_inspection` / `cache_keepalive`），且 g-506 已用双 runtime × 双 workspace
+ * 实证互不唤醒（见 `core/tests/g506-care.test.ts` 的隔离用例与 g505 保活用例）。
+ * 本函数只是可复用的防御性 helper，**当前生产投递路径并不调用它**；不得把「未调用的断言」
+ * 宣称为运行时保证。保留它用于未来显式交叉检查，交叉调用会抛出。
  */
 export function assertNoMutualWake(producer: CareWakeKind, emitted: CareWakeKind): void {
   if (producer !== emitted) {

@@ -129,7 +129,7 @@ const NOW = 1_700_000_000_000;
 function status(over: any = {}) {
   return {
     root: "/ws", supervisor: "sup-1", supervisor_live: true, supervisor_idle: true,
-    configured: { effective: true, source: "global_default", threshold_seconds: 300, recheck_seconds: 300, max_stagnant_rounds: 3, defaults: { threshold_seconds: 300, recheck_seconds: 300, max_stagnant_rounds: 3 } },
+    configured: { effective: true, source: "global_default", threshold_seconds: 300, threshold_source: "global_default", recheck_seconds: 300, recheck_source: "global_default", max_stagnant_rounds: 3, defaults: { threshold_seconds: 300, recheck_seconds: 300, max_stagnant_rounds: 3 } },
     capable: { available: {}, missing: [], minimal: true },
     phase: "counting", reason: "counting",
     next_due_at: NOW + 61_000, next_due_in_ms: 61_000, server_now: NOW,
@@ -355,4 +355,107 @@ test("g506 UI B6：真实 plugin header 注册的 GRAPH主管 旁有倒计时/�
   const btns = findAll(idleHarness.nodes(), (n) => n.props?.className?.startsWith?.("dg-btn dg-care-"));
   assert.equal(btns.length, 0, "idle 无任务时不提供可点击操作（面板明确显示原因）");
   assert.ok(idleHarness.nodes().some((n) => textOf(n).includes(zh["care.noTasks"])), "idle 面板显示不可操作原因");
+});
+
+test("g506 B9 补充：header 面板逐项显示非最小能力缺口与 unverified，不伪称可用；无缺口不显示", async () => {
+  const { zh, en } = loadI18n();
+  const openPanel = async (st: any) => {
+    const h = makeHarness({ zh, status: st });
+    h.render(); await h.flush();
+    const chip = h.nodes().find((n) => n.props?.className === "dg-care-chip");
+    chip.props.onClick();
+    await h.flush();
+    return h;
+  };
+  // wake 可用但 progress_read 缺失：minimal 仍 true，但缺口必须常态可见
+  const partial = await openPanel(status({
+    phase: "counting",
+    capable: { available: { idle_probe: true, children_probe: true, wake_dispatch: true, progress_read: false }, missing: ["progress_read"], minimal: true },
+  }));
+  const partialMissing = partial.nodes().filter((n) => n.props?.className === "dg-care-missing");
+  assert.equal(partialMissing.length, 1, "progress_read 缺失必须显示为能力缺口");
+  assert.ok(textOf(partialMissing[0]).includes(zh["care.cap.progress_read"]));
+  assert.equal(partial.nodes().filter((n) => n.props?.className === "dg-care-unverified").length, 0);
+  // 缺 runMaintenance：minimal=false，必须显示 wake_dispatch 缺口，且不出现可点击恢复
+  const broken = await openPanel(status({
+    phase: "unavailable", reason: "capability_missing", next_due_at: null, next_due_in_ms: null,
+    capable: { available: { idle_probe: true, children_probe: true, wake_dispatch: false }, missing: ["wake_dispatch", "progress_read"], minimal: false },
+  }));
+  const brokenMissing = broken.nodes().filter((n) => n.props?.className === "dg-care-missing");
+  assert.equal(brokenMissing.length, 1);
+  assert.ok(textOf(brokenMissing[0]).includes(zh["care.cap.wake_dispatch"]));
+  assert.equal(broken.nodes().filter((n) => n.props?.className?.startsWith?.("dg-btn dg-care-")).length, 0, "缺 runMaintenance 不得出现可操作按钮");
+  // unverified 与真正 missing 分开展示
+  const unv = await openPanel(status({
+    capable: { available: { idle_probe: true, children_probe: true, wake_dispatch: true, progress_read: true }, missing: [], unverified: ["interrupt", "resume"], minimal: true },
+  }));
+  assert.equal(unv.nodes().filter((n) => n.props?.className === "dg-care-missing").length, 0);
+  const unvLine = unv.nodes().filter((n) => n.props?.className === "dg-care-unverified");
+  assert.equal(unvLine.length, 1);
+  assert.ok(textOf(unvLine[0]).includes(zh["care.cap.interrupt"]));
+  assert.ok(textOf(unvLine[0]).includes(zh["care.unverifiedCapabilities"]));
+  // 中英文案都可理解（不出现裸 key）
+  assert.ok(!textOf(partialMissing[0]).includes("care.cap."));
+  const enH = makeHarness({ zh: en, status: status({ capable: { available: {}, missing: ["progress_read"], minimal: true } }) });
+  enH.render(); await enH.flush(); enH.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick(); await enH.flush();
+  assert.ok(textOf(enH.nodes().find((n) => n.props?.className === "dg-care-missing")).includes(en["care.cap.progress_read"]));
+});
+
+test("g506 B10：delivery_failed_limit 面板提供唯一 reset（真实 POST request_id/revision），普通 unavailable/idle 无假恢复", async () => {
+  const { zh } = loadI18n();
+  const counting = status({ phase: "counting", reason: "counting", next_due_at: NOW + 30_000, next_due_in_ms: 30_000, revision: 8 });
+  let posted: any = null;
+  const failed = status({
+    phase: "unavailable", reason: "delivery_failed_limit", awaiting_human: false,
+    next_due_at: null, next_due_in_ms: null, revision: 7,
+    tasks: [{ child: "c1", attempt: "a1", goal: "g", due_at: null, due_in_ms: null, escalated: false, human_locked: false, stagnant_rounds: 0 }],
+  });
+  const h = makeHarness({ zh, status: failed, onControl: (action: string) => { posted = action; return counting; } });
+  h.render(); await h.flush();
+  h.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick();
+  await h.flush();
+  const resetBtns = h.nodes().filter((n) => n.props?.className === "dg-btn dg-care-reset");
+  assert.equal(resetBtns.length, 1, "delivery_failed_limit 必须有唯一 reset 按钮");
+  assert.equal(resetBtns[0].props.disabled, false);
+  assert.equal(h.nodes().filter((n) => n.props?.className === "dg-btn dg-care-pause").length, 0, "不得放行 pause");
+  assert.ok(textOf(h.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.deliveryFailedHint"]));
+  resetBtns[0].props.onClick();
+  await h.flush();
+  assert.equal(posted, "reset");
+  assert.equal(h.posts.length, 1);
+  assert.equal(h.posts[0].body.action, "reset");
+  assert.equal(typeof h.posts[0].body.request_id, "string");
+  assert.equal(h.posts[0].body.expected_revision, 7);
+  // 服务端返回 counting：面板/标签不再显示失败
+  assert.ok(!textOf(h.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.deliveryFailed"]));
+  // 普通 unavailable（能力缺口）不得出现 reset 假入口
+  const normal = makeHarness({ zh, status: status({ phase: "unavailable", reason: "capability_missing", next_due_at: null, next_due_in_ms: null }) });
+  normal.render(); await normal.flush(); normal.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick(); await normal.flush();
+  assert.equal(normal.nodes().filter((n) => n.props?.className === "dg-btn dg-care-reset").length, 0);
+  // idle/无任务：显示真实 noTasks，不显示「无主管」误导
+  const idle = makeHarness({ zh, status: status({ phase: "idle", reason: "no_running_tasks", tasks: [], next_due_at: null, next_due_in_ms: null }) });
+  idle.render(); await idle.flush(); idle.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick(); await idle.flush();
+  assert.ok(textOf(idle.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.noTasks"]));
+  assert.ok(!textOf(idle.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.noSupervisor"]));
+});
+
+test("g506 B9 补充：settings 关照页签常态逐项展示 missing/unverified 与真实 timing source（不再仅 minimal=false）", () => {
+  const { zh, en } = loadI18n();
+  const src = readFileSync(join(ROOT, "dsh-graph-host", "lib", "client", "settings-modal.js"), "utf8");
+  // 非空 missing 独立渲染，且不嵌套在 unavailable 条件里
+  assert.match(src, /const missingCaps = \(status\?\.capable\?\.missing \?\? \[\]\)\.map\(capLabel\)/);
+  assert.match(src, /missingCaps\.length[\s\S]{0,600}settings\.careMissing/);
+  assert.match(src, /unverifiedCaps\.length[\s\S]{0,600}settings\.careUnverified/);
+  assert.match(src, /settings\.careTimingSource/);
+  assert.match(src, /threshold_source/);
+  assert.match(src, /recheck_source/);
+  // 中英文两侧键都存在且可理解
+  for (const [lang, dict] of [["zh", zh], ["en", en]] as const) {
+    for (const key of ["care.cap.progress_read", "care.cap.wake_dispatch", "settings.careMissing", "settings.careUnverified", "settings.careTimingSource"]) {
+      assert.equal(typeof dict[key], "string", `${lang} 缺 ${key}`);
+      assert.ok(dict[key].length > 3, `${lang}.${key} 不得为裸 key/空文案`);
+    }
+  }
+  assert.match(zh["settings.careMissing"], /能力缺口/);
+  assert.match(en["settings.careMissing"], /Capability gaps/);
 });

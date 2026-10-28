@@ -527,14 +527,16 @@ async function makeCareRuntime(host: any, opts: {
   appendEventFn?: (root: string, ev: any) => void;
   readGlobal?: () => any;
   resolveRoot?: (ws: string) => string | null;
+  agents?: any;
+  readProjectConfigFn?: () => any;
 }) {
   const mod: any = await import("../../dist/index.js");
   const events: any[] = [];
   const runtime = mod.createCareRuntime({
-    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : n === "subagents" ? host.subagents : undefined) },
+    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? (opts.agents ?? host.reg) : n === "llm" ? host.llmRuntime : n === "subagents" ? host.subagents : undefined) },
     readGlobal: opts.readGlobal ?? (() => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: true, raw: "on" })),
     resolveRoot: opts.resolveRoot ?? ((ws: string) => ws),
-    readProjectConfigFn: () => opts.project ?? { supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } },
+    readProjectConfigFn: opts.readProjectConfigFn ?? (() => opts.project ?? { supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } }),
     readSupervisorSessionFn: opts.readSupervisorSessionFn ?? (() => opts.supervisorId),
     readBoardPayload: opts.readBoardPayload ?? (() => opts.payload ?? null),
     now: opts.clock.now,
@@ -796,6 +798,13 @@ test("g506 B2 unknown：每次回传 unknown 也只累计 3 次提醒，不增�
     assert.equal(st.phase, "awaiting_human");
     assert.equal(st.tasks[0].stagnant_rounds, 0, "unknown 不得增加 no-progress");
     assert.equal(st.tasks[0].human_reason, "no_response_limit");
+    // B10：reset 只重设计时，不得清除未答上限锁/人类决策。
+    const reset = runtime.control(WS, "reset", { requestId: "reset-un" });
+    assert.equal(reset.ok, true);
+    const afterReset = runtime.statusFor(WS);
+    assert.equal(afterReset.phase, "awaiting_human");
+    assert.equal(afterReset.tasks[0].human_locked, true);
+    assert.equal(afterReset.tasks[0].human_reason, "no_response_limit");
   } finally {
     host.adapter.releaseAll?.();
     runtime.dispose();
@@ -1068,6 +1077,10 @@ test("g506 B3 send 同步抛错：非零回退、不推进计时、不计投递�
     // 用户 reset 清除投递失败预算（不是解除人工锁/暂停）
     const reset = runtime.control(WS, "reset", { requestId: "reset-sf" });
     assert.equal(reset.ok, true);
+    const afterReset = runtime.statusFor(WS);
+    assert.equal(afterReset.phase, "counting", "投递失败上限的 reset 必须真正恢复到可调度态");
+    assert.equal(afterReset.reason, "counting");
+    assert.equal(afterReset.tasks[0].human_locked, false, "reset 不制造也不清除人工锁");
     sup.send = originalSend;
     clock.advance(31_000);
     await runtime.sweep();
@@ -1433,6 +1446,74 @@ test("g506 B7 能力如实投影：进展读取不等于可干预；interrupt/re
     assert.equal(st.capable.available.progress_read, true, "真实 child session 可读进展");
     const wake = events.find((e) => e.event === "care.inspection");
     assert.ok(wake);
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
+
+test("g506 B9 缺 runMaintenance：不判 capable、零 send/事件/计数、timer 正阈值；补回后只正常提醒一次", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-b9", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-b9", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  host.adapter.hold("CHILD-B9");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-B9" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-b9", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  let sendCount = 0;
+  // 真实公开宿主服务代理：session/status/send 都在，唯独暂时没有 runMaintenance。
+  const proxySup: any = {
+    session: sup.session,
+    id: sup.id,
+    send: (...args: any[]) => { sendCount += 1; return (sup.send as any)(...args); },
+  };
+  Object.defineProperty(proxySup, "status", { get: () => sup.status });
+  const agentsProxy: any = {
+    get: (id: string) => (id === sup.id ? proxySup : host.reg.get(id)),
+    list: (...args: any[]) => (host.reg.list as any)(...args),
+    isOwnedBy: (childId: string, agent: any) => agent === proxySup
+      ? host.reg.isOwnedBy(childId, sup)
+      : host.reg.isOwnedBy(childId, agent),
+  };
+  let configReads = 0;
+  const { runtime, events } = await makeCareRuntime(host, {
+    clock, scheduler, payload, supervisorId: sup.id, agents: agentsProxy,
+    project: { supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } },
+    readProjectConfigFn: () => { configReads += 1; return { supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } }; },
+  });
+  runtime.start();
+  try {
+    const entry = runtime.entryOfRoot(WS);
+    assert.ok(scheduler.timers.size >= 1);
+    for (const t of scheduler.timers.values()) assert.ok(t.at - clock.now() >= 1000, `缺能力时 timer 必须正阈值，实得 ${t.at - clock.now()}ms`);
+    const before = configReads;
+    for (let i = 0; i < 5; i += 1) await scheduler.advanceTo(clock.now() + 31_000);
+    assert.ok(configReads - before >= 4, `长时间模拟必须持续重读配置（实得 ${configReads - before} 次）`);
+    for (const t of scheduler.timers.values()) assert.ok(t.at - clock.now() >= 1000, "每次重排也不得 0ms");
+    assert.equal(sendCount, 0, "缺 runMaintenance 不得调用 send");
+    assert.equal(events.filter((e) => e.event === "care.inspection").length, 0, "缺能力不得写投递事件");
+    assert.equal(events.length, 0, "缺能力不是发送失败，不得写任何 care 事件");
+    assert.equal(entry.transportFailures, 0, "能力缺口不累加发送失败");
+    assert.equal(entry.inspections.size, 0);
+    assert.equal(entry.delivering, false);
+    const st = runtime.statusFor(WS);
+    assert.equal(st.phase, "unavailable");
+    assert.equal(st.reason, "capability_missing");
+    assert.equal(st.capable.minimal, false);
+    assert.ok(st.capable.missing.includes("wake_dispatch"), "必须精确显示 wake_dispatch 缺失");
+    assert.equal(st.capable.available.wake_dispatch, false);
+    // S+ 负向：旧 mutant「只看 send」会判 true；真实断言必须失败，而不是只打印提示。
+    const legacyWakeOnly = typeof proxySup.send === "function";
+    assert.equal(legacyWakeOnly, true);
+    assert.notEqual(legacyWakeOnly, st.capable.available.wake_dispatch, "若去掉 runMaintenance 检查，本断言必红");
+    // 动态补回公开 runMaintenance：原本已 due 的任务只应产生一次正常提醒。
+    proxySup.runMaintenance = sup.runMaintenance.bind(sup);
+    await scheduler.advanceTo(clock.now() + 31_000);
+    assert.equal(sendCount, 1, "能力恢复后只触发一次");
+    assert.equal(events.filter((e) => e.event === "care.inspection").length, 1);
+    assert.equal(runtime.entryOfRoot(WS).transportFailures, 0, "成功路径不误累加失败");
   } finally {
     host.adapter.releaseAll?.();
     runtime.dispose();

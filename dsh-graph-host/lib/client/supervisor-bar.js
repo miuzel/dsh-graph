@@ -111,9 +111,6 @@
       else if (remainingMs === 0) label = dgT("care.dueNow");
       else label = dgT("care.noTasks");
 
-      const noTasks = phase === "idle" || (status?.tasks ?? []).length === 0;
-      const disabledAction = !status || effective === false || noTasks || phase === "unavailable" || !status.supervisor_live;
-      const disabledReset = !status || effective === false || noTasks || !status.supervisor_live;
       const submit = (action) => {
         if (busy) return;
         setBusy(true);
@@ -179,6 +176,24 @@
         global_care_threshold_malformed: "care.warnGlobalThresholdMalformed",
         global_care_recheck_malformed: "care.warnGlobalRecheckMalformed",
       })[w]).filter(Boolean).map((k) => dgT(k));
+      const capLabel = (cap) => dgT("care.cap." + cap);
+      const missingCaps = (status?.capable?.missing ?? []).map(capLabel);
+      const unverifiedCaps = (status?.capable?.unverified ?? []).map(capLabel);
+      const sourceLabel = (src) => (src ? dgT({
+        project_explicit: "care.srcProject",
+        global_explicit: "care.srcGlobal",
+        global_default: "care.srcDefault",
+        project_invalid: "care.srcProjectInvalid",
+        global_invalid: "care.srcGlobalInvalid",
+      }[src] ?? "care.srcUnknown") : null);
+      const transportFailed = phase === "unavailable" && status?.reason === "delivery_failed_limit";
+      const canTransportReset = transportFailed && status?.supervisor_live === true
+        && effective !== false && (status?.tasks ?? []).length > 0;
+      const noTasksForAction = phase === "idle" || (status?.tasks ?? []).length === 0;
+      const disabledAction = !status || effective === false || noTasksForAction || phase === "unavailable" || !status.supervisor_live;
+      // B10：delivery_failed_limit 是唯一可由用户恢复的 unavailable；仅当主管真实在线、
+      // 工作区有效、任务存在时提供 reset，绝不放行 pause/resume，也不伪装成一般不可用。
+      const disabledReset = !canTransportReset || busy;
 
       return h("span", {
         style: { position: "relative", display: "inline-flex", flexShrink: 0 },
@@ -208,10 +223,25 @@
                       + (cfg ? ` · ${dgT("care.threshold").replace("{v}", String(cfg.threshold_seconds))}` : "")
                       + (cfg ? ` · ${dgT("care.recheck").replace("{v}", String(cfg.recheck_seconds))}` : ""))
                 : null,
+              status && cfg
+                ? h("div", { style: { opacity: 0.85, marginTop: 2 } },
+                    dgT("care.timingSource")
+                      .replace("{threshold}", String(cfg.threshold_seconds))
+                      .replace("{tsrc}", sourceLabel(cfg.threshold_source) ?? "-")
+                      .replace("{recheck}", String(cfg.recheck_seconds))
+                      .replace("{rsrc}", sourceLabel(cfg.recheck_source) ?? "-"))
+                : null,
               status
                 ? h("div", { style: { opacity: 0.85, marginTop: 2 } },
-                    dgT("care.tasks").replace("{n}", String((status.tasks ?? []).filter((t) => !t.human_locked).length))
-                    + ((status.capable?.unverified ?? []).length ? " · " + dgT("care.unverifiedIntervention") : ""))
+                    dgT("care.tasks").replace("{n}", String((status.tasks ?? []).filter((t) => !t.human_locked).length)))
+                : null,
+              missingCaps.length
+                ? h("div", { className: "dg-care-missing", style: { opacity: 0.9, marginTop: 2 } },
+                    dgT("care.missingCapabilities") + ": " + missingCaps.join("、"))
+                : null,
+              unverifiedCaps.length
+                ? h("div", { className: "dg-care-unverified", style: { opacity: 0.8, marginTop: 2 } },
+                    dgT("care.unverifiedCapabilities") + ": " + unverifiedCaps.join("、"))
                 : null,
               status && dueAt !== null && remainingMs !== null && phase !== "paused"
                 ? h("div", { style: { opacity: 0.85, marginTop: 2 } }, dgT("care.countdownHint"))
@@ -222,16 +252,24 @@
                 : null,
               warnText.length ? h("div", { style: { color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 4 } }, warnText.join(" · ")) : null,
               disabledAction
-                ? h("div", { style: { opacity: 0.75, marginTop: 4 } },
+                ? h("div", { style: { opacity: 0.8, marginTop: 4 } },
                     !status ? dgT("care.statusUnavailable")
                       : effective === false ? dgT("care.disabled")
-                        : phase === "unavailable" ? dgT("care.unavailable")
-                          : dgT("care.noSupervisor"))
-                : h("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
+                        : noTasksForAction ? dgT("care.noTasks")
+                          : phase === "unavailable" ? (transportFailed ? dgT("care.deliveryFailedHint") : dgT("care.unavailable"))
+                            : dgT("care.noSupervisor"))
+                : null,
+              canTransportReset
+                ? h("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
+                    btn(dgT("care.reset"), "reset", busy || disabledReset))
+                : null,
+              !disabledAction && !canTransportReset
+                ? h("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
                     phase === "paused"
                       ? btn(dgT("care.resume"), "resume", busy)
                       : btn(dgT("care.pause"), "pause", busy),
-                    btn(dgT("care.reset"), "reset", busy)),
+                    btn(dgT("care.reset"), "reset", busy))
+                : null,
               h("div", { style: { opacity: 0.7, marginTop: 6, fontSize: 11 } }, dgT("care.pauseHint")),
               note
                 ? h("div", { style: { marginTop: 6, color: note.kind === "ok" ? "var(--dsw-alias-label-primary, #6ee7a0)" : "var(--dsw-alias-state-error-primary, #f08080)" } }, note.text)

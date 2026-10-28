@@ -2233,7 +2233,9 @@ export function createCareRuntime(options = {}) {
       idle_probe: !!agent && statusOf(agent) !== null,
       children_probe: !!(agents && typeof agents.list === "function" && typeof agents.get === "function" && typeof agents.isOwnedBy === "function"),
       progress_read: progressRead,
-      wake_dispatch: !!agent && typeof agent.send === "function",
+      // B9：可唤醒必须是**完整投递链路** —— `send` 与 `runMaintenance` 缺一不可。
+      // 只有 send 的旧/不完整宿主若被判 capable，会进入 deliverNow 早退且 0ms 反复重排。
+      wake_dispatch: !!agent && typeof agent.send === "function" && typeof agent.runMaintenance === "function",
       interrupt: false,
       resume: false,
     });
@@ -2367,7 +2369,16 @@ export function createCareRuntime(options = {}) {
     if (decision?.deliver && entry.retryNotBefore !== null) {
       delay = Math.max(delay, entry.retryNotBefore - now());
     }
+    // B9：能力缺口（尤其缺 runMaintenance）不得走 0ms 普通路径；即使 nextDueAt 已过，
+    // 也按明确正阈值重采，等待能力恢复/配置变化。单次维护占用不是缺能力。
+    if (computed?.caps && computed.caps.minimal === false) {
+      delay = Math.max(delay, Math.max(1000, configRecheckMs));
+    }
+    if (decision?.reason === "capability_missing") {
+      delay = Math.max(delay, Math.max(1000, configRecheckMs));
+    }
     delay = Math.max(0, Math.min(delay, configRecheckMs));
+    if (computed?.caps && computed.caps.minimal === false) delay = Math.max(delay, Math.min(1000, Math.max(1, configRecheckMs)));
     entry.timerDueAt = now() + delay;
     let handle = null;
     try {
@@ -2466,7 +2477,13 @@ export function createCareRuntime(options = {}) {
 
   const deliverNow = async (entry, computed) => {
     const agent = computed?.agent;
-    if (!agent || typeof agent.send !== "function" || typeof agent.runMaintenance !== "function") return false;
+    if (!agent || typeof agent.send !== "function" || typeof agent.runMaintenance !== "function") {
+      // B9：能力缺失不是「投递失败」，不计 transportFailures、不写事件、不发消息；
+      // 但必须给出非零有界重排，绝不让 scheduleEntry 在普通路径落成 0ms 忙等。
+      entry.lastReason = "capability_missing";
+      entry.retryNotBefore = now() + Math.max(1000, configRecheckMs);
+      return false;
+    }
     const sid = entry.supervisorId;
     if (!sid) return false;
     const revision = entry.group.revision;
