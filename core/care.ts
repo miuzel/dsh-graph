@@ -83,6 +83,11 @@ export const CARE_DEFAULTS = Object.freeze({
   maxStagnantRounds: 3,
 });
 
+/** g-506 返工：同一任务/attempt 连续**无有效结论**时最多自动提醒次数（达到后等待人工，静默）。 */
+export const CARE_MAX_UNANSWERED_REMINDERS = 3;
+/** g-506 返工：无有效结论的连续提醒之间的最小冷却（负责人明确 300 秒）。 */
+export const CARE_NO_RESPONSE_COOLDOWN_MS = 300_000;
+
 /** 阈值的合法范围（秒）：既拒绝「0 秒 = 每个扫描都触发」，也拒绝病态长值。 */
 export const CARE_THRESHOLD_MIN_SECONDS = 30;
 export const CARE_THRESHOLD_MAX_SECONDS = 24 * 60 * 60; // 24h 上界
@@ -357,6 +362,8 @@ export interface CareCapabilityReport {
   missing: CareCapability[];
   /** 是否具备**端到端最小闭环**：采样 + 唤醒 + 证据面（没有它关照不可能有意义）。 */
   minimal: boolean;
+  /** g-506 返工：宿主暴露了 seam、但插件未获授权/未验证其可用性的能力（绝不列 available）。 */
+  unverified?: CareCapability[];
 }
 
 export function assessCareCapabilities(
@@ -505,6 +512,7 @@ export const CARE_PHASES = [
   "waiting_supervisor",
   "paused",
   "awaiting_human",
+  "awaiting_outcome",
   "disabled",
   "unavailable",
 ] as const;
@@ -535,6 +543,12 @@ export interface CareTaskState {
   lastCareAt: number | null;
   /** 暂停时冻结的**本任务**剩余 ms（`null` = 未冻结）；继续时按它恢复各自倒计时。 */
   frozenRemainingMs: number | null;
+  /** g-506 返工：连续**无有效结论**的自动提醒次数（progress/no-progress 有效结论归零；unknown 不归零）。 */
+  remindersSent?: number;
+  /** g-506 返工：最近一次提醒后是否尚未收到任何结论（含 unknown 视为已回复但无有效结论）。 */
+  awaitingReply?: boolean;
+  /** g-506 返工：进入人工裁决的原因（`null` = 未锁定）。 */
+  humanReason?: "no_progress_limit" | "no_response_limit" | null;
 }
 
 /**
@@ -564,6 +578,8 @@ export interface CareGroupState {
   lastControl: "pause" | "resume" | "reset" | null;
   /** 最近一次控制动作时刻（ms epoch）。 */
   lastControlAt: number | null;
+  /** g-506 返工：最近一次 `reset` 的唯一请求 id（重试幂等；不按秒猜重复）。 */
+  lastControlRequestId?: string | null;
 }
 
 export interface CareInputs {
@@ -582,6 +598,8 @@ export interface CareInputs {
   tasks: CareTaskState[];
   /** 本组是否已有**投递中的**调度（防止重复投递）。 */
   delivering?: boolean;
+  /** g-506 返工：本组是否已有**未解决且未过期**的巡检（有则不得再投递，避免重复唤醒）。 */
+  openInspection?: boolean;
 }
 
 /** 单个任务的到期判定结果。 */
@@ -613,6 +631,8 @@ export interface CareDecision {
   tasks: CareTaskSchedule[];
   /** 达到上限、需要人类裁决的任务（非空 ⇒ phase 至少为 awaiting_human）。 */
   escalateTasks: string[];
+  /** g-506 返工：因**未回复/unknown 达 3 次**而需进入等待人工的任务（不得当作 no-progress）。 */
+  noResponseTasks?: string[];
 }
 
 export type CareReason =
@@ -621,6 +641,10 @@ export type CareReason =
   | "no_running_tasks" // 无运行中任务 ⇒ 无倒计时
   | "paused" // 整组暂停（保留剩余时间）
   | "awaiting_human" // 已达巡检上限，等待人类裁决
+  | "no_progress_limit" // 连续 no-progress 达上限，等待人类裁决
+  | "no_response_limit" // 连续未回复/unknown 达 3 次，停止自动提醒，等待人类
+  | "inspection_open" // 已投递巡检，等待主管回传结论（不重发）
+  | "delivery_failed_limit" // 连续投递失败达上限，等待宿主恢复/人工重置
   | "supervisor_busy" // 到期但主管忙 ⇒ 延后，不打断当前轮次
   | "delivering" // 已有投递在途 ⇒ 去重
   | "counting" // 倒计时进行中，未到期
@@ -659,7 +683,9 @@ export function careTaskDueAt(task: CareTaskState, timing: {
   const thresholdMs = Math.max(1, Math.floor(timing.thresholdSeconds)) * 1000;
   const recheckMs = Math.max(1, Math.floor(timing.recheckSeconds)) * 1000;
   const base = task.lastCareAt === null ? task.startedAt : task.lastCareAt;
-  const interval = task.lastCareAt === null ? thresholdMs : recheckMs;
+  // 连续无有效结论的提醒至少间隔 300s（即使项目阈值更短）——避免「短阈值 + 未回复」高频唤醒。
+  const unanswered = (task.remindersSent ?? 0) > 0 || task.awaitingReply === true;
+  const interval = task.lastCareAt === null ? thresholdMs : Math.max(recheckMs, unanswered ? CARE_NO_RESPONSE_COOLDOWN_MS : 0);
   const resetAt = timing.resetAt;
   return resetAt !== null && resetAt > base ? resetAt + interval : base + interval;
 }
@@ -694,8 +720,16 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
   const dueAtOf = (task: CareTaskState): number =>
     careTaskDueAt(task, { thresholdSeconds: inputs.thresholdSeconds, recheckSeconds: inputs.recheckSeconds, resetAt: group.resetAt });
 
+  const noResponseLimitReached = (task: CareTaskState): boolean => {
+    if ((task.remindersSent ?? 0) < CARE_MAX_UNANSWERED_REMINDERS) return false;
+    // 第三次提醒刚发出时仍在等回复；只有「已回复但无有效结论（unknown）」或至少一个 300s 冷却
+    // 过去仍无结论，才判定「连续无有效结论」达上限。绝不把刚发出的第 3 次算成第 4 次。
+    if (task.awaitingReply !== true) return true;
+    return task.lastCareAt !== null && inputs.now >= task.lastCareAt + CARE_NO_RESPONSE_COOLDOWN_MS;
+  };
   const schedules: CareTaskSchedule[] = tasks.map((task) => {
-    const escalated = (task.stagnantRounds ?? 0) >= inputs.maxStagnantRounds || task.humanLocked === true;
+    const limit = noResponseLimitReached(task);
+    const escalated = (task.stagnantRounds ?? 0) >= inputs.maxStagnantRounds || task.humanLocked === true || limit;
     const dueAt = dueAtOf(task);
     return {
       child: task.child,
@@ -706,6 +740,7 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
       escalated,
     };
   });
+  const noResponseTasks = tasks.filter((t) => noResponseLimitReached(t)).map((t) => t.child);
 
   // ── 2. 整组暂停 ⇒ 保留剩余时间（无倒计时推进）───────────────────────────
   if (group.paused === true) {
@@ -732,11 +767,12 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
     return {
       phase: "awaiting_human",
       deliver: false,
-      reason: "awaiting_human",
+      reason: noResponseTasks.length > 0 ? "no_response_limit" : "no_progress_limit",
       nextDueAt: null,
       nextDueInMs: null,
       tasks: schedules,
       escalateTasks,
+      noResponseTasks,
     };
   }
 
@@ -744,6 +780,20 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
   const dueAts = liveSchedules.map((s) => s.dueAt as number);
   const nextDueAt = Math.min(...dueAts);
   const nextDueInMs = Math.max(0, nextDueAt - inputs.now);
+
+  // ── 4b. 已有未解决巡检 ⇒ 等待结论，不重复唤醒 ─────────────────────────────
+  if (inputs.openInspection === true) {
+    return {
+      phase: "awaiting_outcome",
+      deliver: false,
+      reason: "inspection_open",
+      nextDueAt: null,
+      nextDueInMs: null,
+      tasks: schedules,
+      escalateTasks,
+      noResponseTasks,
+    };
+  }
 
   // ── 5. 未到期 ⇒ 倒计时进行中 ─────────────────────────────────────────────
   if (nextDueInMs > 0) {
@@ -755,6 +805,7 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
       nextDueInMs,
       tasks: schedules,
       escalateTasks,
+      noResponseTasks,
     };
   }
 
@@ -821,7 +872,16 @@ export function applyCareDelivery(group: CareGroupState, tasks: CareTaskState[],
   const keys = targets ? new Set(targets.map((t) => `${t.child}\u0000${t.attempt}`)) : null;
   return {
     group: { ...group, lastDeliveryAt: now },
-    tasks: tasks.map((t) => (keys && !keys.has(`${t.child}\u0000${t.attempt}`) ? t : { ...t, lastCareAt: now })),
+    tasks: tasks.map((t) => {
+      if (keys && !keys.has(`${t.child}\u0000${t.attempt}`)) return t;
+      return {
+        ...t,
+        lastCareAt: now,
+        // 每次实际投递都计入「连续无有效结论」预算；收到 progress/no-progress 有效结论后归零。
+        remindersSent: (t.remindersSent ?? 0) + 1,
+        awaitingReply: true,
+      };
+    }),
   };
 }
 
@@ -867,7 +927,9 @@ export function applyCareOutcome(
   const nextTasks = tasks.map((t) => {
     if (t.child !== target.child || t.attempt !== target.attempt) return t;
     matched = true;
-    if (outcome.kind === "unknown") return t; // 不递增/不归零
+    // 任何回传都表示本轮巡检已有回复（即使 unknown 没有有效结论）；unknown 不递增/不归零无进展计数，
+    // 但保留 remindersSent，供「连续无有效结论」预算在下一轮继续累计。
+    if (outcome.kind === "unknown") return { ...t, awaitingReply: false };
     if (outcome.kind === "progress") {
       counted = true;
       return {
@@ -875,15 +937,21 @@ export function applyCareOutcome(
         lastProgressAt: outcome.now,
         lastProgressFingerprint: outcome.fingerprint ?? t.lastProgressFingerprint,
         stagnantRounds: 0, // 有进展 ⇒ 归零
-        // humanLocked 原样保留：progress 绝不解除已有人工锁
+        remindersSent: 0, // 有效结论 ⇒ 未回复预算归零
+        awaitingReply: false,
+        // humanLocked / humanReason 原样保留：progress 绝不解除已有人工锁
       };
     }
     counted = true;
     const rounds = Math.min(maxRounds, (t.stagnantRounds ?? 0) + 1);
+    const locked = t.humanLocked === true || rounds >= maxRounds;
     return {
       ...t,
       stagnantRounds: rounds,
-      humanLocked: t.humanLocked === true || rounds >= maxRounds,
+      humanLocked: locked,
+      humanReason: locked ? (t.humanReason === "no_response_limit" ? "no_response_limit" : "no_progress_limit") : (t.humanReason ?? null),
+      remindersSent: 0, // no-progress 是有效结论 ⇒ 未回复预算归零（无进展预算独立累计）
+      awaitingReply: false,
     };
   });
   const anyLocked = nextTasks.some((t) => t.humanLocked === true || (t.stagnantRounds ?? 0) >= maxRounds);
@@ -893,6 +961,37 @@ export function applyCareOutcome(
     matched,
     counted,
     humanLocked: anyLocked,
+  };
+}
+
+/**
+ * g-506 返工：把「连续无有效结论达 3 次」的任务置入人工等待（**不是** no-progress 卡死）。
+ *
+ * - `remindersSent >= 3` 且（unknown 已回复无有效结论 或 300s 冷却已过仍无回复）；
+ * - 保持 `stagnantRounds` 不变（绝不伪称卡死），`humanReason="no_response_limit"`；
+ * - 与 no-progress 锁一样 sticky：progress/暂停/重置/过期都不自动解除；
+ * - 返回 `changed`，宿主只在 changed 时事件先行落盘。
+ */
+export function applyNoResponseLimit(
+  group: CareGroupState,
+  tasks: CareTaskState[],
+  now: number,
+): { group: CareGroupState; tasks: CareTaskState[]; changed: boolean; locked: string[] } {
+  let changed = false;
+  const locked: string[] = [];
+  const nextTasks = tasks.map((t) => {
+    if (t.humanLocked === true) return t;
+    if ((t.remindersSent ?? 0) < CARE_MAX_UNANSWERED_REMINDERS) return t;
+    if (t.awaitingReply === true && (t.lastCareAt === null || now < t.lastCareAt + CARE_NO_RESPONSE_COOLDOWN_MS)) return t;
+    changed = true;
+    locked.push(t.child);
+    return { ...t, humanLocked: true, humanReason: "no_response_limit" as const };
+  });
+  return {
+    group: changed ? { ...group, escalated: true } : group,
+    tasks: nextTasks,
+    changed,
+    locked,
   };
 }
 
@@ -1298,6 +1397,9 @@ export interface CareStatusProjection {
     started_at: number;
     stagnant_rounds: number;
     human_locked: boolean;
+    human_reason: "no_progress_limit" | "no_response_limit" | null;
+    reminders_sent: number;
+    awaiting_reply: boolean;
     last_care_at: number | null;
     last_progress_at: number | null;
   }>;
@@ -1341,6 +1443,9 @@ export function careStatusProjection(args: {
       started_at: st?.startedAt ?? args.now,
       stagnant_rounds: st?.stagnantRounds ?? 0,
       human_locked: st?.humanLocked === true,
+      human_reason: st?.humanReason ?? null,
+      reminders_sent: st?.remindersSent ?? 0,
+      awaiting_reply: st?.awaitingReply === true,
       last_care_at: st?.lastCareAt ?? null,
       last_progress_at: st?.lastProgressAt ?? null,
     };
@@ -1401,7 +1506,7 @@ export function formatCareWakeMessage(input: {
 }): string {
   const zh = input.lang !== "en";
   const id = String(input.inspectionId).slice(0, 80);
-  const targets = input.targets.slice(0, 8);
+  const targets = input.targets; // g-506 返工：不得只显示前 8 个而让第 9+ 个任务无法回传
   const lines: string[] = [];
   if (zh) {
     lines.push("【dsh-graph 长任务关照巡检】（计时到期**不是**卡死证据）");
@@ -1420,10 +1525,11 @@ export function formatCareWakeMessage(input: {
     lines.push("- 正常长耗时构建/测试/网络等待、有实质进展的任务不得仅因超时被中断；");
     lines.push("- 证据不足 ⇒ 继续观察或直接询问子代理，不要伪称已发现逻辑死循环；");
     lines.push("- 干预须遵守宿主真实能力与既有人工 gate：" + CARE_PRESERVED_GATES.join(" / ") + "；");
+    lines.push("- 本插件**不会**自动中断/放弃/重启子代理；宿主干预 seam 若未验证，只作提醒，由主管按授权流程处理。");
     lines.push("- 有明确僵局证据才请求暂停并确认停稳；放弃重开须先确认旧 child 不运行并按既有准入与返工授权开新 attempt；");
     lines.push("- 无法安全解决 / 范围或判据冲突 ⇒ 停止相关执行并报告人类裁决，禁止无限自动重试。");
     lines.push(
-      `- **必须**用工具 ${"graph_care_outcome"} 回传本次结论：inspection=${id} + 每个目标的 goal/attempt/child + outcome=progress|no-progress|unknown + 证据。未回复或 unknown 不计数；连续 ${input.maxStagnantRounds} 份新鲜 no-progress 才升级待人。`,
+      `- **必须**用工具 ${"graph_care_outcome"} 回传本次结论：inspection=${id} + 每个目标的 goal/attempt/child + outcome=progress|no-progress|unknown + 证据。未回复/unknown **不增加无进展计数**；同一任务连续 ${CARE_MAX_UNANSWERED_REMINDERS} 次无有效结论（含未回复）即停止自动提醒并等待人工；连续 ${input.maxStagnantRounds} 份新鲜 no-progress 才升级待人。`,
     );
   } else {
     lines.push("[dsh-graph long-task care inspection] (Reaching the timer is NOT evidence of a stall.)");
@@ -1442,10 +1548,11 @@ export function formatCareWakeMessage(input: {
     lines.push("- Long builds/tests/network waits with real progress must not be interrupted merely for taking time;");
     lines.push("- If evidence is insufficient, keep observing or ask the child; never claim a proven infinite loop;");
     lines.push("- Interventions must respect real host capabilities and existing human gates: " + CARE_PRESERVED_GATES.join(" / ") + ";");
+    lines.push("- This plugin NEVER auto-interrupts/abandons/restarts a child; unverified host intervention seams are advisory only and must go through authorized human gates.");
     lines.push("- Request a pause only with clear stall evidence, and confirm the child has stopped; abandoning/restarting requires the existing admission and rework authorization;");
     lines.push("- If it cannot be resolved safely or scope/criteria conflict, stop the execution and report to the human; never retry infinitely.");
     lines.push(
-      `- You MUST report this inspection via the ${"graph_care_outcome"} tool: inspection=${id} + each goal/attempt/child + outcome=progress|no-progress|unknown + evidence. No reply or unknown does not count; only ${input.maxStagnantRounds} fresh no-progress results escalate to the human.`,
+      `- You MUST report this inspection via the ${"graph_care_outcome"} tool: inspection=${id} + each goal/attempt/child + outcome=progress|no-progress|unknown + evidence. No reply/unknown does NOT increase no-progress; ${CARE_MAX_UNANSWERED_REMINDERS} consecutive reminders without a valid conclusion stop automatic reminders and wait for a human; only ${input.maxStagnantRounds} fresh no-progress results escalate.`,
     );
   }
   return lines.join("\n");

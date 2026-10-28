@@ -26,6 +26,7 @@ import { execFileSync } from "node:child_process";
 import {
   CARE_DEFAULTS,
   CARE_OUTCOMES,
+  CARE_MAX_UNANSWERED_REMINDERS,
   applyCareDelivery,
   applyCareInspectionOutcome,
   applyCareOutcome,
@@ -54,6 +55,7 @@ import {
   type CareTaskState,
 } from "../care.ts";
 import { init, readProjectConfig, writeProjectConfig, settingsPostSchema, validateSchema } from "../ops.ts";
+import { appendEvent, readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
 import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
 
@@ -530,7 +532,7 @@ async function makeCareRuntime(host: any, opts: {
     resolveRoot: opts.resolveRoot ?? ((ws: string) => ws),
     readProjectConfigFn: () => opts.project ?? { supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } },
     readSupervisorSessionFn: opts.readSupervisorSessionFn ?? (() => opts.supervisorId),
-    readBoardPayload: () => opts.payload ?? null,
+    readBoardPayload: opts.readBoardPayload ?? (() => opts.payload ?? null),
     now: opts.clock.now,
     setTimeoutFn: opts.scheduler.setTimeoutFn,
     clearTimeoutFn: opts.scheduler.clearTimeoutFn,
@@ -550,6 +552,155 @@ async function waitFor(cond: () => boolean, label: string, timeoutMs = 2000) {
 }
 
 const WS = "/ws";
+const boardPayload = (goals) => ({ versions: [{ slug: "v1", status: "active", goals }], standalone: [], backlog: [] });
+
+/** 写一个真实 board 目标（goal.md + attempts/att-001/attempt.md），供 B1 生产载荷回归。 */
+function writeRealGoal(root: string, layout: { version?: string; standalone?: boolean; backlog?: boolean }, goal: {
+  id: string; status?: string; child?: string; attempt?: string; version?: number; startedAt?: string;
+}) {
+  const attempt = goal.attempt ?? "att-001";
+  const startedAt = goal.startedAt ?? new Date(NOW - 40_000).toISOString();
+  const dir = layout.backlog
+    ? join(root, "backlog")
+    : layout.version
+      ? join(root, "versions", layout.version, "goals", goal.id)
+      : join(root, "goals", goal.id);
+  mkdirSync(layout.backlog ? dir : join(dir, "attempts", attempt), { recursive: true });
+  const goalMd = `---\n${JSON.stringify({
+    id: goal.id,
+    title: `goal ${goal.id}`,
+    status: goal.status ?? "in_progress",
+    type: "task",
+    created_at: startedAt,
+    version: layout.version ?? null,
+    depends_on: [],
+    review: { reviewer: "human", prompt: null },
+    pk: { lanes: 1, sandbox: "directory" },
+    rules_snapshot: null,
+  }, null, 2)}\n---\n\n# goal ${goal.id}\n\n## 目标描述\n\nB1 fixture\n`;
+  if (layout.backlog) {
+    writeFileSync(join(dir, `${goal.id}.md`), goalMd);
+    return;
+  }
+  writeFileSync(join(dir, "goal.md"), goalMd);
+  if (layout.version) {
+    const vdir = join(root, "versions", layout.version);
+    if (!existsSync(join(vdir, "version.md"))) {
+      writeFileSync(join(vdir, "version.md"), `---\n${JSON.stringify({ id: layout.version, name: layout.version, status: "active", created_at: startedAt }, null, 2)}\n---\n`);
+    }
+  }
+  writeFileSync(join(dir, "attempts", attempt, "attempt.md"), `---\n${JSON.stringify({
+    child_id: goal.child ?? "child-x",
+    parent_session_id: "SUP_SESSION",
+    binding_version: goal.version ?? 1,
+    started_at: startedAt,
+    executor: "agent:main",
+    detached: false,
+  }, null, 2)}\n---\n`);
+}
+
+test("g506 B1 真实 boardPayload：版本目标 + 独立目标均采样，backlog 排除，重复绑定只计一次", async () => {
+  const root = makeBoard();
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-b1", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  const childV = (await host.reg.create({ sessionId: "child-v", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  const childS = (await host.reg.create({ sessionId: "child-s", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  host.adapter.hold("CHILD-B1-V");
+  host.adapter.hold("CHILD-B1-S");
+  childV.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-B1-V" }], source: { kind: "user" } }), "next-turn", true);
+  childS.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-B1-S" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => childV.status === "running" && childS.status === "running", "children running");
+
+  writeRealGoal(root, { version: "v1" }, { id: "g-101", child: childV.id, version: 1 });
+  writeRealGoal(root, { standalone: true }, { id: "g-102", child: childS.id, version: 1 });
+  writeRealGoal(root, { backlog: true }, { id: "g-103", child: childS.id, version: 9 });
+  // 重复绑定（同 child+attempt 被另一目标重复投影）⇒ 只应采样一次
+  writeRealGoal(root, { standalone: true }, { id: "g-104", child: childV.id, version: 1 });
+  for (const f of ["versions/v1/goals/g-101/attempts/att-001/attempt.md", "goals/g-102/attempts/att-001/attempt.md", "goals/g-104/attempts/att-001/attempt.md"]) {
+    const abs = join(root, f);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace("SUP_SESSION", sup.id));
+  }
+
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const { runtime: mod } = await import("../../dist/index.js") as any;
+  void mod;
+  const ops: any = await import("../ops.ts");
+  const runtime = (await import("../../dist/index.js") as any).createCareRuntime({
+    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : undefined) },
+    readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false }),
+    resolveRoot: (ws: string) => ws,
+    readProjectConfigFn: () => ({ supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 300 } }),
+    readSupervisorSessionFn: () => sup.id,
+    readBoardPayload: (r: string) => ops.getCachedBoardPayload(r, { lazy: true })?.payload ?? null,
+    now: clock.now, setTimeoutFn: scheduler.setTimeoutFn, clearTimeoutFn: scheduler.clearTimeoutFn,
+    appendEventFn: (_root: string, _ev: any) => {},
+    makeInspectionId: (() => { let i = 0; return () => `b1-${++i}`; })(), log: () => {},
+  });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    await waitFor(() => sup.status === "idle", "supervisor turn");
+    const st = runtime.statusFor(root);
+    assert.deepEqual(st.tasks.map((t: any) => t.goal).sort(), ["g-101", "g-102"], "版本 + 独立目标各一；backlog 与重复绑定不计");
+    const ins = runtime.entryOfRoot(root).inspections.get("b1-1");
+    assert.ok(ins, "投递了真实巡检");
+    assert.deepEqual(ins.targets.map((t: any) => t.goal).sort(), ["g-101", "g-102"]);
+    // 负向：移除 standalone 支持（模拟旧枚举）后，独立目标不再出现——证明该分支真被覆盖。
+    const payload = ops.getCachedBoardPayload(root, { lazy: true }).payload;
+    const onlyVersions = { ...payload, standalone: [] };
+    const tasksOnly = [...(onlyVersions.versions ?? []).flatMap((v: any) => v.goals ?? [])];
+    assert.deepEqual(tasksOnly.map((g: any) => g.id), ["g-101"]);
+    // 运行时负向：把 standalone 从载荷移除（模拟旧实现漏掉独立目标）⇒ 独立目标任务必须消失。
+    const standaloneBackup = payload.standalone;
+    payload.standalone = [];
+    await runtime.sweep();
+    assert.deepEqual(runtime.statusFor(root).tasks.map((t: any) => t.goal), ["g-101"], "移除 standalone 支持后独立目标不得再被采样");
+    payload.standalone = standaloneBackup;
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
+
+test("g506 B2 未回复/unknown：连续 10 个周期最多 3 次实际提醒，未回复计数不增加 no-progress，之后等待人工", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-nr", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-nr", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  host.adapter.hold("CHILD-NR");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-NR" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const makePayload = () => boardPayload([{ id: "goal-nr", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const payload = makePayload();
+  const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
+  runtime.start();
+  try {
+    // 完全不回复：每 301s 超过一次 300s 冷却/巡检新鲜度，10 个周期只允许 3 次实际 care.inspection。
+    for (let cycle = 0; cycle < 10; cycle += 1) {
+      await runtime.sweep();
+      await waitFor(() => sup.status === "idle", `turn ${cycle}`);
+      clock.advance(301_000);
+    }
+    const inspections = events.filter((e) => e.event === "care.inspection");
+    assert.equal(inspections.length, CARE_MAX_UNANSWERED_REMINDERS, "最多 3 次实际提醒（10 个周期也不得更多）");
+    const st = runtime.statusFor(WS);
+    assert.equal(st.phase, "awaiting_human");
+    assert.equal(st.reason, "no_response_limit");
+    assert.equal(st.tasks[0].stagnant_rounds, 0, "未回复绝不算 no-progress");
+    assert.equal(st.tasks[0].reminders_sent, CARE_MAX_UNANSWERED_REMINDERS);
+    assert.equal(st.tasks[0].human_locked, true);
+    assert.equal(st.tasks[0].human_reason, "no_response_limit");
+    assert.ok(events.some((e) => e.event === "care.escalated" && e.details?.no_progress_counted === false), "升级事件明确未计 no-progress");
+    // 再推进 10 个周期也不得产生第 4 次提醒/新巡检
+    for (let cycle = 0; cycle < 10; cycle += 1) { clock.advance(301_000); await runtime.sweep(); }
+    assert.equal(events.filter((e) => e.event === "care.inspection").length, CARE_MAX_UNANSWERED_REMINDERS);
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
 
 test("g506 真实宿主：空闲主管到期唤醒使用真实 send + 独立 care source；send≠处理完成", async () => {
   const host = await makeRealHost();
@@ -561,7 +712,7 @@ test("g506 真实宿主：空闲主管到期唤醒使用真实 send + 独立 car
 
   const clock = fakeClock();
   const scheduler = fakeScheduler(clock);
-  const payload = { goals: [{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1 } }], versions: [] };
+  const payload = boardPayload([{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
   runtime.start();
   try {
@@ -581,7 +732,7 @@ test("g506 真实宿主：空闲主管到期唤醒使用真实 send + 独立 car
     assert.equal(st.pending_inspections.length, 1);
     assert.ok(["delivered", "claimed"].includes(st.pending_inspections[0].status));
     assert.equal(st.tasks[0].stagnant_rounds, 0);
-    assert.equal(st.phase, "counting");
+    assert.equal(st.phase, "awaiting_outcome", "已投递但未回传结论 ⇒ 等待结论，不再重复发送");
     // 真实结论：no-progress +1，重复同结论幂等
     const submit = (outcome: string, evidence: string) => runtime.submitOutcome({
       root: WS, supervisor: sup.id, inspection: "insp-1", goal: "goal-a", attempt: "att-001", child: child.id, outcome, evidence,
@@ -602,6 +753,133 @@ test("g506 真实宿主：空闲主管到期唤醒使用真实 send + 独立 car
   }
 });
 
+test("g506 B2 unknown：每次回传 unknown 也只累计 3 次提醒，不增加 no-progress，之后等待人工", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-un", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-un", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  host.adapter.hold("CHILD-UN");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-UN" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-un", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
+  runtime.start();
+  try {
+    let submitted = 0;
+    for (let cycle = 0; cycle < 10; cycle += 1) {
+      await runtime.sweep();
+      await waitFor(() => sup.status === "idle", `turn ${cycle}`);
+      const open = [...runtime.entryOfRoot(WS).inspections.values()].find((i: any) => i.status !== "resolved" && i.status !== "failed" && i.status !== "expired");
+      if (open) {
+        const res = runtime.submitOutcome({ root: WS, supervisor: sup.id, inspection: open.id, goal: "goal-un", attempt: "att-001", child: child.id, outcome: "unknown", evidence: "cannot tell" });
+        assert.equal(res.ok, true);
+        submitted += 1;
+      }
+      clock.advance(301_000);
+    }
+    assert.ok(submitted <= CARE_MAX_UNANSWERED_REMINDERS, `unknown 回传次数也受 3 次提醒预算约束（实得 ${submitted}）`);
+    assert.equal(events.filter((e) => e.event === "care.inspection").length, CARE_MAX_UNANSWERED_REMINDERS);
+    const st = runtime.statusFor(WS);
+    assert.equal(st.phase, "awaiting_human");
+    assert.equal(st.tasks[0].stagnant_rounds, 0, "unknown 不得增加 no-progress");
+    assert.equal(st.tasks[0].human_reason, "no_response_limit");
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
+
+test("g506 B5 事件真源恢复：dispose+recreate 保留 pause/剩余/无进展/人工锁，不重复发送", async () => {
+  const host = await makeRealHost();
+  const root = makeBoard("");
+  const sup = (await host.reg.create({ sessionId: "sup-persist", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-persist", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  host.adapter.hold("CHILD-PERSIST");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-PERSIST" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-persist", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const options = {
+    clock, scheduler, payload, supervisorId: sup.id,
+    appendEventFn: (r: string, ev: any) => { appendEvent(r, ev); },
+  };
+  const first = await makeCareRuntime(host, options);
+  first.runtime.start();
+  try {
+    // 3 次真实 no-progress ⇒ 人工锁；随后暂停（带剩余）并 dispose。
+    for (let i = 0; i < 3; i += 1) {
+      await first.runtime.sweep();
+      await waitFor(() => sup.status === "idle", `turn ${i}`);
+      const ins = [...first.runtime.entryOfRoot(root).inspections.values()].find((x: any) => x.status !== "resolved" && x.status !== "failed" && x.status !== "expired");
+      assert.ok(ins, "每轮有可回传巡检");
+      const res = first.runtime.submitOutcome({ root, supervisor: sup.id, inspection: ins.id, goal: "goal-persist", attempt: "att-001", child: child.id, outcome: "no-progress", evidence: `same ${i}` });
+      assert.equal(res.ok, true);
+      clock.advance(31_000);
+    }
+    const before = first.runtime.statusFor(root);
+    assert.equal(before.tasks[0].human_locked, true);
+    assert.equal(before.tasks[0].stagnant_rounds, 3);
+    const paused = first.runtime.control(root, "pause", { requestId: "pause-persist" });
+    assert.equal(paused.ok, true);
+    first.runtime.dispose();
+    // 重新创建（模拟 HMR/重启）：只靠 events.jsonl 真源恢复。
+    const second = await makeCareRuntime(host, options);
+    second.runtime.start();
+    try {
+      const restored = second.runtime.statusFor(root);
+      assert.equal(restored.paused, true, "重启不得解除用户 pause");
+      assert.ok((restored.paused_remaining_ms ?? 0) >= 0);
+      assert.equal(restored.tasks[0].human_locked, true, "重启不得解除人工锁");
+      assert.equal(restored.tasks[0].stagnant_rounds, 3);
+      assert.equal(restored.tasks[0].human_reason, "no_progress_limit");
+      const inspectionsBefore = readEvents(root).filter((e: any) => e.event === "care.inspection").length;
+      await second.runtime.sweep();
+      clock.advance(10_000_000);
+      await second.runtime.sweep();
+      assert.equal(readEvents(root).filter((e: any) => e.event === "care.inspection").length, inspectionsBefore, "暂停/人工锁恢复后不得重复发送");
+    } finally { second.runtime.dispose(); }
+  } finally {
+    host.adapter.releaseAll?.();
+    try { await child.whenIdle(); } catch { /* ignore */ }
+  }
+});
+
+test("g506 B5 在途巡检恢复：queued 快照重启后视为已发，绝不重发同一 inspection", async () => {
+  const host = await makeRealHost();
+  const root = makeBoard("");
+  const sup = (await host.reg.create({ sessionId: "sup-inflight", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-inflight", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  host.adapter.hold("CHILD-INFLIGHT");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-INFLIGHT" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-i", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const options = { clock, scheduler, payload, supervisorId: sup.id, appendEventFn: (r: string, ev: any) => { appendEvent(r, ev); } };
+  const first = await makeCareRuntime(host, options);
+  first.runtime.start();
+  await first.runtime.sweep();
+  await waitFor(() => sup.status === "idle", "first turn");
+  const beforeCount = readEvents(root).filter((e: any) => e.event === "care.inspection").length;
+  assert.equal(beforeCount, 1);
+  first.runtime.dispose();
+  const second = await makeCareRuntime(host, options);
+  second.runtime.start();
+  try {
+    await second.runtime.sweep();
+    await second.runtime.sweep();
+    assert.equal(readEvents(root).filter((e: any) => e.event === "care.inspection").length, 1, "重启后不得重发同一巡检");
+    assert.equal(second.runtime.statusFor(root).phase, "awaiting_outcome");
+    // 过期后允许下一次（新 id）提醒；仍受 3 次未回复预算约束。
+    clock.advance(301_000);
+    await second.runtime.sweep();
+    await waitFor(() => sup.status === "idle", "second turn");
+    assert.equal(readEvents(root).filter((e: any) => e.event === "care.inspection").length, 2);
+  } finally { second.runtime.dispose(); host.adapter.releaseAll?.(); }
+});
+
 test("g506 真实宿主：暂停在到期前生效 ⇒ 零投递；继续后按冻结剩余接续并投递", async () => {
   const host = await makeRealHost();
   const sup = (await host.reg.create({ sessionId: "sup-pause", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
@@ -611,7 +889,7 @@ test("g506 真实宿主：暂停在到期前生效 ⇒ 零投递；继续后按�
   await waitFor(() => child.status === "running", "child running");
   const clock = fakeClock();
   const scheduler = fakeScheduler(clock);
-  const payload = { goals: [{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 10_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1 } }], versions: [] };
+  const payload = boardPayload([{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 10_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   const { runtime, events } = await makeCareRuntime(host, {
     clock, scheduler, payload, supervisorId: sup.id,
     readSupervisorSessionFn: (root: string) => (root === WS ? sup.id : null),
@@ -649,7 +927,7 @@ test("g506 真实宿主：主管忙时延后；维护占用时同步拒绝并有
   await waitFor(() => child.status === "running", "child running");
   const clock = fakeClock();
   const scheduler = fakeScheduler(clock);
-  const payload = { goals: [{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1 } }], versions: [] };
+  const payload = boardPayload([{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
   runtime.start();
   try {
@@ -690,7 +968,7 @@ test("g506 真实宿主：3 份新鲜 no-progress 升级待人；unknown 不计�
   await waitFor(() => child.status === "running", "child running");
   const clock = fakeClock();
   const scheduler = fakeScheduler(clock);
-  const payload = { goals: [{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1 } }], versions: [] };
+  const payload = boardPayload([{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
   runtime.start();
   try {
@@ -704,8 +982,8 @@ test("g506 真实宿主：3 份新鲜 no-progress 升级待人；unknown 不计�
     assert.equal(unknown.ok, true);
     assert.equal(unknown.counted, false);
     assert.equal(runtime.statusFor(WS).tasks[0].stagnant_rounds, 0);
-    // 第二/第三轮 no-progress
-    clock.advance(30_000);
+    // 未回复预算至少 300s 冷却后再提醒；收到有效 no-progress 后恢复普通复查间隔
+    clock.advance(300_000);
     await runtime.sweep(); await waitFor(() => sup.status === "idle", "turn 2");
     const n2 = submit("insp-2", "no-progress", "same failure #2");
     assert.equal(n2.stagnant_rounds, 1);
@@ -738,6 +1016,113 @@ test("g506 真实宿主：3 份新鲜 no-progress 升级待人；unknown 不计�
   }
 });
 
+test("g506 B3 send 同步抛错：非零回退、不推进计时、不计投递成功；连续 3 次后停止自动尝试", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-sf", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-sf", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  host.adapter.hold("CHILD-SF");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-SF" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-sf", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
+  const originalSend = sup.send.bind(sup);
+  sup.send = () => { throw new Error("send boom"); };
+  runtime.start();
+  try {
+    await runtime.sweep();
+    const entries = runtime.entryOfRoot(WS);
+    assert.ok(events.some((e) => e.event === "care.delivery_failed"), "失败必须留事件，不得伪装成功");
+    assert.equal(entries.tasks.get(`${child.id}\u0000att-001`).lastCareAt, null, "失败不得推进 lastCareAt");
+    assert.equal(entries.retryNotBefore - clock.now() >= 30_000, true, "失败回退必须非零且可解释（>=30s）");
+    assert.equal(runtime.statusFor(WS).phase !== "awaiting_outcome", true, "失败不得显示为已投递待结论");
+    // 立刻再 sweep 不得忙等（retryNotBefore 未到）
+    const before = events.length;
+    await runtime.sweep();
+    assert.equal(events.length, before, "重试窗口内不得产生新事件");
+    // 连续三次失败后停止自动尝试，进入明确不可用态（reset 可恢复）
+    for (let i = 0; i < 2; i += 1) {
+      clock.advance(31_000);
+      await runtime.sweep();
+    }
+    assert.equal(entries.transportFailures, 3);
+    assert.equal(runtime.statusFor(WS).reason, "delivery_failed_limit");
+    assert.equal(runtime.statusFor(WS).phase, "unavailable");
+    const frozen = events.length;
+    for (let i = 0; i < 3; i += 1) { clock.advance(31_000); await runtime.sweep(); }
+    assert.equal(events.length, frozen, "达上限后不得无限产生事件/尝试");
+    // 用户 reset 清除投递失败预算（不是解除人工锁/暂停）
+    const reset = runtime.control(WS, "reset", { requestId: "reset-sf" });
+    assert.equal(reset.ok, true);
+    sup.send = originalSend;
+    clock.advance(31_000);
+    await runtime.sweep();
+    assert.equal(runtime.entryOfRoot(WS).transportFailures, 0, "reset 后恢复预算");
+  } finally {
+    sup.send = originalSend;
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
+
+test("g506 B4 结论新鲜性：真实 child live/running/owned/parent/workspace 校验，拒绝零事件；同值幂等、异值拒绝", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-fresh", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-fresh", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  host.adapter.hold("CHILD-FRESH");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-FRESH" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-f", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    await waitFor(() => sup.status === "idle", "turn");
+    const submit = (outcome: string, evidence: string, over: any = {}) => runtime.submitOutcome({ root: WS, supervisor: sup.id, inspection: "insp-1", goal: "goal-f", attempt: "att-001", child: child.id, outcome, evidence, ...over });
+    const ok = submit("progress", "new test passed");
+    assert.equal(ok.ok, true);
+    const outcomeEvents = () => events.filter((e) => e.event === "care.outcome").length;
+    assert.equal(outcomeEvents(), 1);
+    const again = submit("progress", "new test passed");
+    assert.equal(again.ok, true);
+    assert.equal(again.idempotent, true);
+    assert.equal(outcomeEvents(), 1, "同值同证据精确幂等，只有一次事件");
+    const opposite = submit("no-progress", "different");
+    assert.equal(opposite.ok, false);
+    assert.equal(opposite.code, "already_resolved");
+    assert.equal(outcomeEvents(), 1, "异值重交拒绝且零事件");
+    // 旧 attempt/绑定变更 ⇒ stale_binding（当前 pending 已变）
+    const rebound = { ...payload, versions: [{ ...payload.versions[0], goals: [{ ...payload.versions[0].goals[0], attempt_binding: { attempt: "att-002", child_id: child.id, binding_version: 2, parent_session_id: sup.id } }] }] };
+    const oldPayload = payload.versions;
+    payload.versions = rebound.versions;
+    const stale = submit("progress", "late");
+    assert.equal(stale.ok, false);
+    assert.equal(stale.code, "stale_binding");
+    assert.equal(outcomeEvents(), 1);
+    payload.versions = oldPayload;
+    // parent session 变 ⇒ stale_parent
+    payload.versions = [{ ...payload.versions[0], goals: [{ ...payload.versions[0].goals[0], attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: "other-parent" } }] }];
+    const parentBad = submit("progress", "late2");
+    assert.equal(parentBad.ok, false);
+    assert.equal(parentBad.code, "stale_parent");
+    assert.equal(outcomeEvents(), 1);
+    // 恢复绑定；child idle ⇒ child_not_running（不再是「有活干」）
+    payload.versions = oldPayload;
+    host.adapter.releaseAll?.();
+    await child.whenIdle();
+    const idleBad = submit("progress", "late3");
+    assert.equal(idleBad.ok, false);
+    assert.equal(idleBad.code, "child_not_running");
+    assert.equal(outcomeEvents(), 1, "拒绝路径零计数零事件");
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
+
 test("g506 真实宿主：事件先行失败 ⇒ 零投递/零记录；旧 attempt 变更 ⇒ 旧提醒失效", async () => {
   const host = await makeRealHost();
   const sup = (await host.reg.create({ sessionId: "sup-ev", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
@@ -747,7 +1132,7 @@ test("g506 真实宿主：事件先行失败 ⇒ 零投递/零记录；旧 attem
   await waitFor(() => child.status === "running", "child running");
   const clock = fakeClock();
   const scheduler = fakeScheduler(clock);
-  const payload = { goals: [{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1 } }], versions: [] };
+  const payload = boardPayload([{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   let failAppend = true;
   const { runtime, events } = await makeCareRuntime(host, {
     clock, scheduler, payload, supervisorId: sup.id,
@@ -760,8 +1145,8 @@ test("g506 真实宿主：事件先行失败 ⇒ 零投递/零记录；旧 attem
     assert.equal(runtime.entryOfRoot(WS).inspections.size, 0, "事件失败不得留下巡检记录");
     assert.equal(runtime.statusFor(WS).tasks[0].last_care_at, null, "事件失败不得推进计时");
     // 旧 attempt 变更：换绑后旧任务/旧提醒失效
-    const changed = { goals: [{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-002", child_id: child.id, binding_version: 2 } }], versions: [] };
-    payload.goals = changed.goals;
+    const changed = boardPayload([{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-002", child_id: child.id, binding_version: 2, parent_session_id: sup.id } }]);
+    payload.versions = changed.versions;
     failAppend = false;
     clock.advance(31_000); // 事件失败按有界重排（30s），到期后再试
     await runtime.sweep();
@@ -780,7 +1165,7 @@ test("g506 控制：暂停/继续/重置有界幂等、revision 竞争、暂停�
   const sup = (await host.reg.create({ sessionId: "sup-ctl", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
   const clock = fakeClock();
   const scheduler = fakeScheduler(clock);
-  const payload = { goals: [], versions: [] };
+  const payload = boardPayload([]);
   const { runtime, events } = await makeCareRuntime(host, {
     clock, scheduler, payload, supervisorId: sup.id,
     readSupervisorSessionFn: (root: string) => (root === WS ? sup.id : null),
@@ -803,9 +1188,17 @@ test("g506 控制：暂停/继续/重置有界幂等、revision 竞争、暂停�
     assert.equal(r1.status.paused, false);
     const resetPaused = runtime.control(WS, "pause");
     assert.equal(resetPaused.ok, true);
-    const reset = runtime.control(WS, "reset");
+    const reset = runtime.control(WS, "reset", { requestId: "click-1" });
     assert.equal(reset.ok, true);
     assert.equal(reset.status.paused, true, "暂停中重置仍保持暂停");
+    const resetRetry = runtime.control(WS, "reset", { requestId: "click-1" });
+    assert.equal(resetRetry.ok, true);
+    assert.equal(resetRetry.idempotent, true, "同一次点击重试按 requestId 幂等");
+    assert.equal(resetRetry.status.revision, reset.status.revision);
+    const resetNewClick = runtime.control(WS, "reset", { requestId: "click-2" });
+    assert.equal(resetNewClick.ok, true);
+    assert.equal(resetNewClick.idempotent, false, "不同真实点击不得按秒猜重复");
+    assert.ok(resetNewClick.status.revision > reset.status.revision);
     // 无 live 主管 ⇒ 不可操作并给出原因
     const noSup = runtime.control("/other-ws", "pause");
     assert.equal(noSup.ok, false);
@@ -860,6 +1253,27 @@ function makeApplyHarness(root: string, opts: { extraGet?: (name: string) => any
   };
   return { ctx, call, cleanups, routes: stub.routes, registered };
 }
+
+test("g506 B5 事件写失败：control 不得半更新（paused/revision/锁保持原状）", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-af", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const { runtime } = await makeCareRuntime(host, {
+    clock, scheduler, payload: boardPayload([]), supervisorId: sup.id,
+    appendEventFn: () => { throw new Error("append broken"); },
+  });
+  runtime.start();
+  try {
+    const before = runtime.statusFor(WS);
+    const res = runtime.control(WS, "pause", { requestId: "af-1" });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, "event_append_failed");
+    const after = runtime.statusFor(WS);
+    assert.equal(after.paused, false, "事件失败不得落地暂停");
+    assert.equal(after.revision, before.revision, "事件失败不得推进 revision");
+  } finally { runtime.dispose(); }
+});
 
 test("g506 REST：g507 门禁 401/403/503 + status/control 语义（无 live 主管如实 409）", async () => {
   const root = makeBoard("supervisor:\n  session: absent-live-supervisor\n  care: true\n");
@@ -955,6 +1369,77 @@ test("g506 REST：有 live 主管时 pause/resume/reset 生效并跨请求保真
 
 // ───────────────────────────── 5. 与 g505 保活的结构性隔离 ─────────────────────────────
 
+test("g506 B7 能力如实投影：进展读取不等于可干预；interrupt/resume seam 只标 unverified，不列 available", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-cap", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-cap", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  host.adapter.hold("CHILD-CAP");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-CAP" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-cap", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  // 模拟宿主暴露了干预 seam（但插件没有授权/验证，绝不能当 available）
+  host.subagents = { interrupt() {}, sendMessage() {} } as any;
+  const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    await waitFor(() => sup.status === "idle", "turn");
+    const st = runtime.statusFor(WS);
+    assert.equal(st.capable.available.interrupt, false, "有 seam ≠ 已授权可用");
+    assert.equal(st.capable.available.resume, false);
+    assert.ok(st.capable.missing.includes("interrupt"));
+    assert.ok(st.capable.missing.includes("resume"));
+    assert.deepEqual(st.capable.unverified.sort(), ["interrupt", "resume"]);
+    assert.equal(st.capable.available.progress_read, true, "真实 child session 可读进展");
+    const wake = events.find((e) => e.event === "care.inspection");
+    assert.ok(wake);
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
+
+test("g506 B7 两 runtime × 两 workspace：各自只采样/提醒自己的主管任务，互不串", async () => {
+  const host = await makeRealHost();
+  const rootA = "/ws-a";
+  const rootB = "/ws-b";
+  const supA = (await host.reg.create({ sessionId: "sup-a", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: rootA } })).agent;
+  const supB = (await host.reg.create({ sessionId: "sup-b", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: rootB } })).agent;
+  const childA = (await host.reg.create({ sessionId: "child-a", parentAgent: supA, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: rootA } })).agent;
+  const childB = (await host.reg.create({ sessionId: "child-b", parentAgent: supB, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: rootB } })).agent;
+  host.adapter.hold("CHILD-A");
+  host.adapter.hold("CHILD-B");
+  childA.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-A" }], source: { kind: "user" } }), "next-turn", true);
+  childB.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-B" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => childA.status === "running" && childB.status === "running", "children running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payloadOf = (root: string) => boardPayload([{ id: root === rootA ? "goal-a" : "goal-b", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: root === rootA ? childA.id : childB.id, binding_version: 1, parent_session_id: root === rootA ? supA.id : supB.id } }]);
+  const mk = (root: string) => makeCareRuntime(host, {
+    clock, scheduler, supervisorId: root === rootA ? supA.id : supB.id,
+    readSupervisorSessionFn: (r: string) => (r === root ? (root === rootA ? supA.id : supB.id) : null),
+    readBoardPayload: (r: string) => (r === root ? payloadOf(root) : null),
+  });
+  const a = await mk(rootA);
+  const b = await mk(rootB);
+  a.runtime.start(); b.runtime.start();
+  try {
+    await a.runtime.sweep();
+    await b.runtime.sweep();
+    await waitFor(() => supA.status === "idle" && supB.status === "idle", "both turns");
+    assert.deepEqual(a.events.filter((e) => e.event === "care.inspection").map((e) => e.details.targets.map((t: any) => t.goal)), [["goal-a"]]);
+    assert.deepEqual(b.events.filter((e) => e.event === "care.inspection").map((e) => e.details.targets.map((t: any) => t.goal)), [["goal-b"]]);
+    assert.equal(a.runtime.statusFor(rootA).tasks.length, 1);
+    assert.equal(b.runtime.statusFor(rootB).tasks.length, 1);
+    assert.equal(a.events.some((e) => e.details?.targets?.some?.((t: any) => t.goal === "goal-b")), false);
+    assert.equal(b.events.some((e) => e.details?.targets?.some?.((t: any) => t.goal === "goal-a")), false);
+  } finally {
+    a.runtime.dispose(); b.runtime.dispose(); host.adapter.releaseAll?.();
+  }
+});
+
 test("g506 与 g505：care source 不被当作 human 活动；保活 ping 不产生关照", async () => {
   const host = await makeRealHost();
   const sup = (await host.reg.create({ sessionId: "sup-mix", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
@@ -964,7 +1449,7 @@ test("g506 与 g505：care source 不被当作 human 活动；保活 ping 不产
   await waitFor(() => child.status === "running", "child running");
   const clock = fakeClock();
   const scheduler = fakeScheduler(clock);
-  const payload = { goals: [{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1 } }], versions: [] };
+  const payload = boardPayload([{ id: "goal-a", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   const careMod: any = await import("../../dist/index.js");
   const events: any[] = [];
   const care = careMod.createCareRuntime({

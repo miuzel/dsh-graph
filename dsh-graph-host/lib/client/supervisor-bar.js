@@ -16,10 +16,12 @@
         return () => { cancelled = true; };
       }, [sessionId, workspace]);
       if (!sessionId || !supervisorSession || sessionId !== supervisorSession) return null;
-      return h("span", {
-        role: "status", title: dgT('supervisor.badgeTooltip'), "aria-label": dgT('supervisor.badgeTooltip'),
-        style: { display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", borderRadius: 6, padding: "2px 7px", fontSize: 12, lineHeight: 1.4, flexShrink: 0, background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))", color: "var(--dsw-alias-label-secondary, inherit)" },
-      }, dgT('supervisor.badge'));
+      return h("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 } },
+        h("span", {
+          role: "status", title: dgT('supervisor.badgeTooltip'), "aria-label": dgT('supervisor.badgeTooltip'),
+          style: { display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", borderRadius: 6, padding: "2px 7px", fontSize: 12, lineHeight: 1.4, flexShrink: 0, background: "var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))", color: "var(--dsw-alias-label-secondary, inherit)" },
+        }, dgT('supervisor.badge')),
+        h(CareCountdown, { sessionId, workspace }));
     }
 
     // g-506：主管会话「GRAPH主管」标签旁的关照倒计时与控制（服务端唯一真源）。
@@ -97,25 +99,36 @@
       let label;
       if (snap.error || !status) label = dgT("care.statusUnavailable");
       else if (effective === false) label = dgT("care.disabled");
+      else if (status.reason === "delivery_failed_limit") label = dgT("care.deliveryFailed");
       else if (phase === "unavailable") label = dgT("care.unavailable");
       else if (phase === "paused") label = dgT("care.pausedRemaining").replace("{t}", fmt(pausedRemaining ?? remainingMs));
+      else if (status.reason === "no_response_limit") label = dgT("care.noResponseLimit");
       else if (status.awaiting_human || phase === "awaiting_human") label = dgT("care.awaitingHuman");
+      else if (phase === "awaiting_outcome") label = dgT("care.awaitingOutcome");
       else if (phase === "waiting_supervisor") label = dgT("care.waitingSupervisor");
       else if (phase === "idle") label = dgT("care.noTasks");
       else if (remainingMs !== null && remainingMs > 0) label = dgT("care.countdown").replace("{t}", fmt(remainingMs));
       else if (remainingMs === 0) label = dgT("care.dueNow");
       else label = dgT("care.noTasks");
 
-      const disabledAction = !status || effective === false || phase === "unavailable" || !status.supervisor_live;
+      const transportFailed = status?.reason === "delivery_failed_limit";
+      const noTasks = phase === "idle" || (status?.tasks ?? []).length === 0;
+      const disabledAction = !status || effective === false || noTasks || (phase === "unavailable" && !transportFailed) || !status.supervisor_live;
+      const disabledReset = !status || effective === false || noTasks || !status.supervisor_live;
       const submit = (action) => {
         if (busy) return;
         setBusy(true);
         setNote(null);
+        // g-506 返工：reset 的本次唯一请求 id 随请求体提交，服务端据此做「同一次点击重试」幂等；
+        // 不同真实点击生成不同 id（绝不按秒猜重复）。
+        const requestId = action === "reset"
+          ? (globalThis.crypto?.randomUUID?.() ?? `reset-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+          : null;
         fetch("/api/dsh-graph/care/control", {
           method: "POST",
           credentials: "same-origin",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ workspace, action, expected_revision: typeof status?.revision === "number" ? status.revision : undefined }),
+          body: JSON.stringify({ workspace, action, request_id: requestId ?? undefined, expected_revision: typeof status?.revision === "number" ? status.revision : undefined }),
         }).then(async (res) => {
           if (res.ok) {
             const data = await res.json();
@@ -198,7 +211,8 @@
                 : null,
               status
                 ? h("div", { style: { opacity: 0.85, marginTop: 2 } },
-                    dgT("care.tasks").replace("{n}", String((status.tasks ?? []).filter((t) => !t.human_locked).length)))
+                    dgT("care.tasks").replace("{n}", String((status.tasks ?? []).filter((t) => !t.human_locked).length))
+                    + ((status.capable?.unverified ?? []).length ? " · " + dgT("care.unverifiedIntervention") : ""))
                 : null,
               status && dueAt !== null && remainingMs !== null && phase !== "paused"
                 ? h("div", { style: { opacity: 0.85, marginTop: 2 } }, dgT("care.countdownHint"))

@@ -148,7 +148,9 @@ test("g506 UI：倒计时由服务端 deadline 派生；忙/关闭/无任务/待
     ["disabled", status({ configured: { ...status().configured, effective: false, source: "project_invalid" }, phase: "disabled", next_due_at: null }), "care.disabled"],
     ["idle", status({ phase: "idle", reason: "no_running_tasks", tasks: [], next_due_at: null, next_due_in_ms: null }), "care.noTasks"],
     ["awaiting", status({ phase: "awaiting_human", reason: "awaiting_human", awaiting_human: true, next_due_at: null }), "care.awaitingHuman"],
-    ["unavailable", status({ phase: "unavailable", reason: "capability_missing", next_due_at: null }), "care.unavailable"],
+    ["awaiting_outcome", status({ phase: "awaiting_outcome", reason: "inspection_open", next_due_at: null, next_due_in_ms: null }), "care.awaitingOutcome"],
+    ["no_response", status({ phase: "awaiting_human", reason: "no_response_limit", awaiting_human: true, next_due_at: null, tasks: [{ child: "c1", attempt: "a1", goal: "g", human_locked: true, human_reason: "no_response_limit", reminders_sent: 3 }] }), "care.noResponseLimit"],
+    ["delivery_failed", status({ phase: "unavailable", reason: "delivery_failed_limit", next_due_at: null }), "care.deliveryFailed"],
   ];
   for (const [label, st, key] of cases) {
     const h = makeHarness({ zh, status: st });
@@ -227,4 +229,130 @@ test("g506 UI：不可操作状态按钮禁用并显示原因；已投递巡检�
   const enKeys = Object.keys(en).filter((k) => k.startsWith("care.") || k.startsWith("settings.care"));
   assert.deepEqual(zhKeys.sort(), enKeys.sort(), "care 文案键 zh/en 必须对称");
   assert.equal(zhKeys.filter((k) => !en[k]).length, 0);
+});
+
+/** g-506 B6：从**真实 dist client bundle 的 plugin.apply** 捕获
+ *  `conversation.session.header.actions` 注册并渲染，而不是只渲染独立 CareCountdown。 */
+test("g506 UI B6：真实 plugin header 注册的 GRAPH主管 旁有倒计时/控制；idle/disabled 明确不可操作", async () => {
+  const { zh } = loadI18n();
+  const bundle = readFileSync(join(ROOT, "dist", "lib", "client.js"), "utf8");
+  let factory: any = null;
+  let dirty = false;
+  let hooks: any[] = [];
+  let effects: Array<{ key: string; cleanup?: any }> = [];
+  let cursor = 0;
+  let effectCursor = 0;
+  let tree: any = null;
+  const pending: Array<() => void> = [];
+  const h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children: children.flat(Infinity) });
+  class Component {
+    props: any; state: any;
+    constructor(props: any) { this.props = props; this.state = {}; }
+    setState(next: any) { this.state = { ...this.state, ...(typeof next === "function" ? next(this.state) : next) }; dirty = true; }
+    render() { return null; }
+  }
+  const React = {
+    Component,
+    PureComponent: Component,
+    Fragment: "fragment",
+    useState(init: any) {
+      const i = cursor++;
+      if (!(i in hooks)) hooks[i] = typeof init === "function" ? init() : init;
+      return [hooks[i], (v: any) => { hooks[i] = typeof v === "function" ? v(hooks[i]) : v; dirty = true; }];
+    },
+    useEffect(fn: any, deps?: any[]) {
+      const i = effectCursor++;
+      const key = JSON.stringify(deps ?? []);
+      if (effects[i] && effects[i].key === key) return;
+      try { effects[i]?.cleanup?.(); } catch { /* ignore */ }
+      effects[i] = { key, cleanup: fn() };
+    },
+    useCallback(fn: any) { return fn; },
+    useRef(v: any) { return { current: v }; },
+    createElement: h,
+  };
+  const sandbox: any = {
+    React,
+    window: {
+      __ModuleLoader__: { load: (d: any) => { factory = d.factory; } },
+      addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
+    },
+    document: { visibilityState: "visible", addEventListener() {}, removeEventListener() {} },
+    setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {},
+    CustomEvent: class { type: string; constructor(type: string) { this.type = type; } },
+    fetch: async (url: string) => ({
+      ok: true,
+      json: async () => String(url).includes("supervisor-session")
+        ? { supervisorSession: "sup-1" }
+        : status({ phase: "counting", next_due_at: NOW + 61_000, server_now: NOW, next_due_in_ms: 61_000 }),
+    }),
+    console: { log() {}, warn() {} },
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.self = sandbox;
+  vm.runInNewContext(bundle, sandbox, { filename: "dist/lib/client.js" });
+  assert.ok(factory, "bundle 通过 __ModuleLoader__.load 注册工厂");
+  const mod = factory((name: string) => {
+    if (name === "react") return React;
+    if (name === "react-dom") return { createPortal: (n: any) => n, render() {}, createRoot: () => ({ render() {}, unmount() {} }) };
+    throw new Error(`module not found: ${name}`);
+  });
+  const registrations: Array<{ def: any; renderer: any }> = [];
+  const slots = {
+    inject: (_n: string, cb: any) => { cb?.(); return () => {}; },
+    register: (def: any, renderer: any) => { registrations.push({ def, renderer }); return () => {}; },
+  };
+  const ctx: any = {
+    sessions: { list: { getSnapshot: () => ({ byId: {}, items: [], subagentsByParent: {} }) } },
+    get: (n: string) => (n === "workspaces" ? { list: { getSnapshot: () => ({ items: [{ path: "/ws", sessionIds: ["sup-1"] }] }) } } : null),
+    slots, on: () => () => {}, effect: (fn: any) => fn(),
+    inject: (_deps: string[], cb: any) => { cb?.({ slots, sidebarRightTabs: { register: () => () => {} } }); return { dispose() {} }; },
+  };
+  mod.apply(ctx);
+  const header = registrations.find((r) => r.def?.name === "conversation.session.header.actions");
+  assert.ok(header, "真实 plugin.apply 注册了 conversation.session.header.actions");
+  const element = header!.renderer({ sessionId: "sup-1", workspace: "/ws" });
+  async function render(): Promise<any> {
+    let out: any = null;
+    for (let p = 0; p < 12; p += 1) {
+      cursor = 0; effectCursor = 0;
+      dirty = false;
+      out = element.type(element.props);
+      for (const e of effects) { /* effects persisted by index; run pending from effect creation */ }
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      if (!dirty) break;
+    }
+    return out;
+  }
+  tree = await render();
+  // 等 supervisor-session/care status 的 promise，然后按真实 setState 重渲染
+  for (let i = 0; i < 5; i += 1) { await new Promise((r) => setImmediate(r)); }
+  for (let i = 0; i < 4; i += 1) {
+    tree = await render();
+    for (let j = 0; j < 3; j += 1) await new Promise((r) => setImmediate(r));
+  }
+  const nodes: any[] = [];
+  const walk = (n: any) => { if (!n || typeof n !== "object") return; nodes.push(n); (n.children ?? []).forEach(walk); };
+  walk(tree);
+  const text = textOf(tree);
+  assert.ok(text.includes(zh["supervisor.badge"]), "真实 header 渲染 GRAPH主管标签");
+  const headerCare = nodes.find((n) => n.type?.name === "CareCountdown");
+  assert.ok(headerCare, "真实 header 注册树内包含 CareCountdown（紧邻 GRAPH主管，而不是只在看板内）");
+  assert.equal(headerCare!.props.workspace, "/ws");
+  // 该 header 内的 CareCountdown 用同一组件行为渲染（真实 server 状态）
+  const headerCountdown = makeHarness({ zh, status: status() });
+  headerCountdown.render(); await headerCountdown.flush();
+  assert.equal(headerCountdown.nodes().filter((n) => n.props?.className === "dg-care-chip").length, 1);
+  // 无任务 ⇒ 不可操作 + 明确原因
+  const idleHarness = makeHarness({ zh, status: status({ phase: "idle", tasks: [], next_due_at: null, next_due_in_ms: null, reason: "no_running_tasks" }) });
+  idleHarness.render();
+  await idleHarness.flush();
+  const idleChip = findAll(idleHarness.nodes(), (n) => n.props?.className === "dg-care-chip")[0];
+  assert.ok(textOf(idleChip).includes(zh["care.noTasks"]));
+  idleChip.props.onClick();
+  await idleHarness.flush();
+  const btns = findAll(idleHarness.nodes(), (n) => n.props?.className?.startsWith?.("dg-btn dg-care-"));
+  assert.equal(btns.length, 0, "idle 无任务时不提供可点击操作（面板明确显示原因）");
+  assert.ok(idleHarness.nodes().some((n) => textOf(n).includes(zh["care.noTasks"])), "idle 面板显示不可操作原因");
 });

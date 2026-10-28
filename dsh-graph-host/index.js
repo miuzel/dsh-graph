@@ -219,6 +219,8 @@ import {
   // 判定唯一真源在 core/care.ts；宿主只做采样、维护临界区投递与窄工具身份/新鲜度校验。
   CARE_MODES,
   CARE_DEFAULTS,
+  CARE_MAX_UNANSWERED_REMINDERS,
+  CARE_NO_RESPONSE_COOLDOWN_MS,
   CARE_OUTCOMES,
   CARE_CAPABILITIES,
   CARE_STALL_SIGNALS,
@@ -232,6 +234,7 @@ import {
   decideCare,
   applyCareDelivery,
   applyCareOutcome,
+  applyNoResponseLimit,
   createCareInspection,
   careInspectionOpen,
   expireCareInspection,
@@ -1890,6 +1893,7 @@ export function createCareRuntime(options = {}) {
     } catch { return null; }
   };
 
+  const CARE_STATE_VERSION = 1;
   const makeEntry = (root) => ({
     root,
     supervisorId: null,
@@ -1906,15 +1910,164 @@ export function createCareRuntime(options = {}) {
     lastDecision: null,
     capabilities: null,
     configError: false,
+    persistenceError: null,
+    transportFailures: 0,
     lastOutcome: null,
     seq: 0,
     lastReason: "disabled_by_config",
   });
+
+  /** g-506 返工 B5：把一组 care 状态压成事件里的快照（只在 care.* 事件 details.care_state）。 */
+  const careStateSnapshot = (entry, opts = {}) => {
+    const group = opts.group ?? entry.group;
+    const tasks = opts.tasks ?? [...entry.tasks.values()];
+    const inspections = opts.inspections ?? [...entry.inspections.values()];
+    const pending = inspections.filter((i) => i.status === "queued" || i.status === "delivered"
+      || i.status === "claimed");
+    const resolved = inspections.filter((i) => i.status === "resolved" || i.status === "expired"
+      || i.status === "failed").slice(-8);
+    return {
+      version: CARE_STATE_VERSION,
+      root: entry.root,
+      supervisor: entry.supervisorId ?? null,
+      group,
+      tasks,
+      inspections: [...pending, ...resolved],
+      transportFailures: entry.transportFailures ?? 0,
+      lastOutcome: entry.lastOutcome ?? null,
+      seq: entry.seq ?? 0,
+    };
+  };
+
+  const numberOr = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const normalizePersistedTask = (raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    const child = String(raw.child ?? "");
+    const attempt = String(raw.attempt ?? "");
+    const goal = String(raw.goal ?? "");
+    if (!child || !attempt || !goal) return null;
+    const reason = raw.humanReason === "no_response_limit" || raw.humanReason === "no_progress_limit"
+      ? raw.humanReason : null;
+    return {
+      child,
+      attempt,
+      goal,
+      bindingVersion: numberOr(raw.bindingVersion, 0),
+      startedAt: numberOr(raw.startedAt, 0),
+      lastProgressAt: raw.lastProgressAt === null || raw.lastProgressAt === undefined ? null : numberOr(raw.lastProgressAt, null),
+      lastProgressFingerprint: typeof raw.lastProgressFingerprint === "string" ? raw.lastProgressFingerprint : null,
+      stagnantRounds: Math.max(0, Math.floor(numberOr(raw.stagnantRounds, 0))),
+      humanLocked: raw.humanLocked === true,
+      lastCareAt: raw.lastCareAt === null || raw.lastCareAt === undefined ? null : numberOr(raw.lastCareAt, null),
+      frozenRemainingMs: raw.frozenRemainingMs === null || raw.frozenRemainingMs === undefined ? null : Math.max(0, numberOr(raw.frozenRemainingMs, 0)),
+      remindersSent: Math.max(0, Math.floor(numberOr(raw.remindersSent, 0))),
+      awaitingReply: raw.awaitingReply === true,
+      humanReason: reason,
+    };
+  };
+  const normalizePersistedInspection = (raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    const id = String(raw.id ?? "");
+    if (!id || !Array.isArray(raw.targets)) return null;
+    const status = ["queued", "delivered", "claimed", "resolved", "expired", "failed"].includes(String(raw.status))
+      ? String(raw.status) : "failed";
+    const targets = raw.targets.map((t) => ({
+      goal: String(t?.goal ?? ""),
+      attempt: String(t?.attempt ?? ""),
+      child: String(t?.child ?? ""),
+      bindingVersion: numberOr(t?.bindingVersion, 0),
+      outcome: ["progress", "no-progress", "unknown"].includes(String(t?.outcome)) ? t.outcome : null,
+      outcomeAt: t?.outcomeAt === null || t?.outcomeAt === undefined ? null : numberOr(t.outcomeAt, null),
+      evidenceDigest: typeof t?.evidenceDigest === "string" ? t.evidenceDigest : null,
+    })).filter((t) => t.goal && t.attempt && t.child);
+    if (!targets.length) return null;
+    return {
+      id,
+      root: String(raw.root ?? ""),
+      supervisor: String(raw.supervisor ?? ""),
+      createdAt: numberOr(raw.createdAt, 0),
+      expiresAt: numberOr(raw.expiresAt, 0),
+      revision: Math.floor(numberOr(raw.revision, 0)),
+      status,
+      messageId: typeof raw.messageId === "string" ? raw.messageId : null,
+      targets,
+      deliveredAt: raw.deliveredAt === null || raw.deliveredAt === undefined ? null : numberOr(raw.deliveredAt, null),
+      claimedAt: raw.claimedAt === null || raw.claimedAt === undefined ? null : numberOr(raw.claimedAt, null),
+      resolvedAt: raw.resolvedAt === null || raw.resolvedAt === undefined ? null : numberOr(raw.resolvedAt, null),
+      lastError: typeof raw.lastError === "string" ? raw.lastError : null,
+    };
+  };
+
+  /** 事件真源恢复（最后一条 care_state 快照）。损坏/越界 ⇒ fail-closed，绝不重建错误的锁。 */
+  const loadCareState = (entry) => {
+    let events;
+    try { events = readEvents(entry.root); } catch { entry.persistenceError = "events_unreadable"; return; }
+    let state = null;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const ev = events[i];
+      if (!ev || !String(ev.event ?? "").startsWith("care.")) continue;
+      const candidate = ev?.details?.care_state;
+      if (!candidate || typeof candidate !== "object") continue;
+      state = candidate;
+      break;
+    }
+    if (!state) return;
+    if (state.version !== CARE_STATE_VERSION || String(state.root ?? "") !== entry.root) {
+      entry.persistenceError = "state_scope_mismatch";
+      return;
+    }
+    const g = state.group && typeof state.group === "object" ? state.group : {};
+    entry.group = {
+      ...newCareGroupState(),
+      paused: g.paused === true,
+      pausedAt: g.pausedAt === null || g.pausedAt === undefined ? null : numberOr(g.pausedAt, null),
+      pausedRemainingMs: g.pausedRemainingMs === null || g.pausedRemainingMs === undefined ? null : Math.max(0, numberOr(g.pausedRemainingMs, 0)),
+      resetAt: g.resetAt === null || g.resetAt === undefined ? null : numberOr(g.resetAt, null),
+      lastDeliveryAt: g.lastDeliveryAt === null || g.lastDeliveryAt === undefined ? null : numberOr(g.lastDeliveryAt, null),
+      escalated: g.escalated === true,
+      revision: Math.max(0, Math.floor(numberOr(g.revision, 0))),
+      lastControl: ["pause", "resume", "reset"].includes(String(g.lastControl)) ? g.lastControl : null,
+      lastControlAt: g.lastControlAt === null || g.lastControlAt === undefined ? null : numberOr(g.lastControlAt, null),
+      lastControlRequestId: typeof g.lastControlRequestId === "string" ? g.lastControlRequestId : null,
+    };
+    entry.tasks = new Map();
+    for (const raw of Array.isArray(state.tasks) ? state.tasks : []) {
+      const t = normalizePersistedTask(raw);
+      if (t) entry.tasks.set(`${t.child}\u0000${t.attempt}`, t);
+    }
+    entry.inspections = new Map();
+    entry.messageIndex = new Map();
+    for (const raw of Array.isArray(state.inspections) ? state.inspections : []) {
+      const ins = normalizePersistedInspection(raw);
+      if (!ins || ins.root !== entry.root) continue;
+      // 重启前已发送但未收到结论：一律按 delivered 恢复，**绝不重发**同一条巡检；
+      // 未解决会自然过期，随后按 3 次未回复预算继续（或进入等待人工）。
+      if (ins.status === "queued") ins.status = "delivered";
+      entry.inspections.set(ins.id, ins);
+      if (ins.messageId) entry.messageIndex.set(ins.messageId, ins.id);
+    }
+    entry.supervisorId = typeof state.supervisor === "string" && state.supervisor ? state.supervisor : null;
+    entry.transportFailures = Math.max(0, Math.floor(numberOr(state.transportFailures, 0)));
+    entry.lastOutcome = state.lastOutcome && typeof state.lastOutcome === "object" ? state.lastOutcome : null;
+    entry.seq = Math.max(0, Math.floor(numberOr(state.seq, 0)));
+  };
+
+  const appendCareEvent = (entry, event, details, state, actor = null) => appendEventFn(entry.root, {
+    actor: actor ?? `supervisor:${entry.supervisorId ?? "unknown"}`,
+    event,
+    details: { ...details, care_state: state ?? careStateSnapshot(entry) },
+  });
+
   const entryOfRoot = (root, create = true) => {
     const key = boardRootKey(root);
     if (!key) return null;
     let entry = entries.get(key);
-    if (!entry && create) { entry = makeEntry(key); entries.set(key, entry); }
+    if (!entry && create) {
+      entry = makeEntry(key);
+      // g-506 返工 B5：事件真源恢复必须发生在任何采样/调度之前；损坏则 fail-closed 不投递。
+      loadCareState(entry);
+      entries.set(key, entry);
+    }
     return entry ?? null;
   };
   const entryOfAgent = (agent) => {
@@ -1956,6 +2109,26 @@ export function createCareRuntime(options = {}) {
   };
 
   /**
+   * g-506 返工 B1：**生产看板载荷的唯一真实目标枚举**。
+   *
+   * `getCachedBoardPayload` 的真实结构是 `versions[].goals` + `standalone` + `backlog`；
+   * 旧实现只看 `payload.goals`（测试虚构字段），生产上版本目标与独立目标都漏采样。
+   * backlog 是未开始排期的目标，**明确排除**，避免把 draft 误计为运行任务。
+   * 两条消费路径（采样、结论绑定）必须同用本函数，禁止各自枚举。
+   */
+  const enumerateBoardGoals = (payload) => {
+    if (!payload || typeof payload !== "object") return null;
+    const out = [];
+    if (Array.isArray(payload.versions)) {
+      for (const v of payload.versions) {
+        if (v && Array.isArray(v.goals)) out.push(...v.goals);
+      }
+    }
+    if (Array.isArray(payload.standalone)) out.push(...payload.standalone);
+    return out;
+  };
+
+  /**
    * 采样当前组的**真实运行中任务**（catalog ∩ live registry ∩ ownership ∩ running）。
    * `ok=false` ⇒ 运行态不可确认（fail-safe：不投递）。
    */
@@ -1968,11 +2141,10 @@ export function createCareRuntime(options = {}) {
     let payload = null;
     try { payload = typeof readBoardPayload === "function" ? readBoardPayload(entry.root) : null; } catch { payload = null; }
     if (!payload || typeof payload !== "object") return { ok: false, reason: "catalog_unavailable", tasks: [] };
-    const goals = [
-      ...(Array.isArray(payload.goals) ? payload.goals : []),
-      ...(Array.isArray(payload.versions) ? payload.versions.flatMap((v) => (Array.isArray(v?.goals) ? v.goals : [])) : []),
-    ];
+    const goals = enumerateBoardGoals(payload);
+    if (!goals) return { ok: false, reason: "catalog_unavailable", tasks: [] };
     const tasks = [];
+    const seenTasks = new Set();
     for (const g of goals) {
       const binding = g?.attempt_binding;
       if (!binding || !binding.child_id) continue;
@@ -1980,6 +2152,11 @@ export function createCareRuntime(options = {}) {
       const childId = String(binding.child_id);
       const attempt = String(binding.attempt ?? "");
       if (!attempt) continue;
+      const supSid = String(agent?.session?.id ?? agent?.id ?? "");
+      if (String(binding.parent_session_id ?? "") !== supSid) continue;
+      const dedupeKey = `${childId}\u0000${attempt}`;
+      if (seenTasks.has(dedupeKey)) continue; // 同一 child/attempt 被重复投影 ⇒ 只计一次
+      seenTasks.add(dedupeKey);
       let childAgent = null;
       try { childAgent = agents.get(childId); } catch { return { ok: false, reason: "registry_error", tasks: [] }; }
       if (!childAgent) continue; // 已结束/不 live ⇒ 陈旧任务不进清单
@@ -1989,6 +2166,7 @@ export function createCareRuntime(options = {}) {
       let owned = false;
       try { owned = agents.isOwnedBy(childId, agent) === true; } catch { return { ok: false, reason: "ownership_unknown", tasks: [] }; }
       if (!owned) continue;
+      if (rootOfAgent(childAgent) !== entry.root) continue;
       const startedRaw = g?.attempt_started_at ? Date.parse(String(g.attempt_started_at)) : NaN;
       const startedAt = Number.isFinite(startedRaw) && startedRaw <= now() ? startedRaw : now();
       tasks.push({
@@ -2034,25 +2212,35 @@ export function createCareRuntime(options = {}) {
     return next;
   };
 
-  const capabilitiesOf = (agent) => {
+  const capabilitiesOf = (agent, tasks = []) => {
     const agents = getService("agents");
     const subagents = getService("subagents");
+    // B7：进展读取必须来自**真实子代理 session**（不是主管自己的 session）。
+    // 只有当前有可枚举的真实 child 且其 session 暴露消息/工具历史时才算可读。
     let progressRead = false;
     try {
-      const session = agent?.session;
-      progressRead = !!session && (typeof session.deriveMessages === "function" || typeof session.toolHistory === "function");
+      progressRead = (Array.isArray(tasks) ? tasks : []).some((t) => {
+        const child = agents && typeof agents.get === "function" ? agents.get(String(t?.child)) : null;
+        const session = child?.session;
+        return !!session && (typeof session.deriveMessages === "function" || typeof session.toolHistory === "function");
+      });
     } catch { progressRead = false; }
+    // B7：`typeof subagents.interrupt === "function"` 只证明 seam **存在**，不等于已授权/已验证可用；
+    // 不调用真实干预、不自动中断/abandon/restart ⇒ 只在 `unverified` 中如实标注，绝不列 available。
+    const seamInterrupt = !!agent && typeof subagents?.interrupt === "function";
+    const seamResume = !!agent && typeof subagents?.sendMessage === "function";
     const report = assessCareCapabilities({
       idle_probe: !!agent && statusOf(agent) !== null,
       children_probe: !!(agents && typeof agents.list === "function" && typeof agents.get === "function" && typeof agents.isOwnedBy === "function"),
       progress_read: progressRead,
       wake_dispatch: !!agent && typeof agent.send === "function",
-      // 真实公开 seam：`subagents.interrupt`（live ancestor authority）+ `sendMessage`（停稳后续轮）。
-      // 只有服务真实暴露才置真；插件不自动执行干预，能力只如实投影给 UI/主管。
-      interrupt: !!agent && typeof subagents?.interrupt === "function",
-      resume: !!agent && typeof subagents?.sendMessage === "function",
+      interrupt: false,
+      resume: false,
     });
-    return report;
+    const unverified = [];
+    if (seamInterrupt) unverified.push("interrupt");
+    if (seamResume) unverified.push("resume");
+    return { ...report, unverified };
   };
 
   /**
@@ -2093,6 +2281,10 @@ export function createCareRuntime(options = {}) {
 
   /** 结算一次决策所需全部采样（无副作用写外部；只更新 entry 的任务表与缓存）。 */
   const decisionOf = (entry) => {
+    if (entry.persistenceError) {
+      entry.lastReason = "state_unreadable";
+      return { error: "state_unreadable", agent: null, caps: null, decision: null };
+    }
     let cfg;
     let global;
     let resolution;
@@ -2105,13 +2297,13 @@ export function createCareRuntime(options = {}) {
     }
     const sup = supervisorOf(entry.root);
     const agent = sup.agent;
-    const caps = capabilitiesOf(agent);
-    entry.capabilities = caps;
     let sampled = { ok: false, tasks: [] };
     if (agent) sampled = sampleTasks(entry, agent);
     if (sampled.ok) reconcileTasks(entry, sampled.tasks, projection.threshold_seconds);
+    const caps = capabilitiesOf(agent, sampled.ok ? sampled.tasks : []);
+    entry.capabilities = caps;
     const idle = agent ? (statusOf(agent) === "idle" ? true : statusOf(agent) === "running" ? false : null) : null;
-    const decision = decideCare({
+    let decision = decideCare({
       now: now(),
       enabled: resolution.enabled,
       thresholdSeconds: projection.threshold_seconds,
@@ -2121,7 +2313,40 @@ export function createCareRuntime(options = {}) {
       group: entry.group,
       tasks: [...entry.tasks.values()],
       delivering: entry.delivering === true,
+      openInspection: [...entry.inspections.values()].some((i) => careInspectionOpen(i, now())),
     }, caps.minimal && sampled.ok !== false && !entry.configError);
+    // g-506 返工 B2：连续 3 次未回复/unknown ⇒ 事件先行置人工等待（不增加 no-progress）。
+    if (Array.isArray(decision.noResponseTasks) && decision.noResponseTasks.length > 0) {
+      const applied = applyNoResponseLimit(entry.group, [...entry.tasks.values()], now());
+      if (applied.changed) {
+        try {
+          appendCareEvent(entry, "care.escalated", {
+            reason: "no_response_limit",
+            supervisor: entry.supervisorId,
+            tasks: applied.locked,
+            max_unanswered_reminders: CARE_MAX_UNANSWERED_REMINDERS,
+            no_progress_counted: false,
+          }, careStateSnapshot(entry, { group: applied.group, tasks: applied.tasks }));
+          entry.group = applied.group;
+          entry.tasks = new Map(applied.tasks.map((t) => [taskKey(t), t]));
+          decision = decideCare({
+            now: now(),
+            enabled: resolution.enabled,
+            thresholdSeconds: projection.threshold_seconds,
+            recheckSeconds: projection.recheck_seconds,
+            maxStagnantRounds: projection.max_stagnant_rounds,
+            idle,
+            group: entry.group,
+            tasks: [...entry.tasks.values()],
+            delivering: entry.delivering === true,
+            openInspection: [...entry.inspections.values()].some((i) => careInspectionOpen(i, now())),
+          }, caps.minimal && sampled.ok !== false && !entry.configError);
+        } catch { /* 事件失败 ⇒ 不落地；下一轮重试，仍是 awaiting_human 显示 */ }
+      }
+    }
+    if ((entry.transportFailures ?? 0) >= CARE_DELIVERY_FAILURE_LIMIT) {
+      decision = { ...decision, phase: "unavailable", deliver: false, reason: "delivery_failed_limit", nextDueAt: null, nextDueInMs: null };
+    }
     entry.lastDecision = decision;
     entry.lastReason = decision.reason;
     return { cfg, global, resolution, projection, agent, caps, sampled, decision, warnings: warningsOf(cfg, global) };
@@ -2185,7 +2410,7 @@ export function createCareRuntime(options = {}) {
     inspectionId: inspection.id,
     workspaceRoot: entry.root,
     supervisorSession: inspection.supervisor,
-    targets: targets.slice(0, 8).map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child })),
+    targets: targets.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child })),
   });
 
   const langOf = () => {
@@ -2193,6 +2418,50 @@ export function createCareRuntime(options = {}) {
       const settings = readGraphSettings();
       return settings.promptLanguage === "en" ? "en" : "zh";
     } catch { return "zh"; }
+  };
+
+  /**
+   * g-506 返工 B3：投递失败必须有非零、可解释的回退；连续失败 3 次停止自动尝试并等待人工
+   * （`reset` 可清除）。维护占用/主管忙**不消耗**真实发送预算，也不写入「已投递」。
+   */
+  const CARE_DELIVERY_FAILURE_LIMIT = 3;
+  const retryForDeliveryOutcome = (reason) => {
+    if (reason === "maintenance_busy" || reason === "not_entered" || reason === "revision_changed"
+      || reason === "identity_changed") return CARE_MAINTENANCE_RETRY_MS;
+    if (reason === "disabled" || reason === "paused" || reason === "capability_missing") return CARE_CONFIG_RECHECK_MS;
+    if (reason === "config_unavailable" || reason === "state_unknown" || reason === "stale_target"
+      || reason === "no_due_target" || reason === "inspection_open") return CARE_RETRY_MS;
+    return CARE_RETRY_MS;
+  };
+  const deliveryFailureCounts = (reason) => reason === "send_failed" || reason === "append_failed" || reason === "not_entered";
+
+  const recordDeliveryFailure = (entry, reason, inspection, priorGroup, priorTasks) => {
+    const nextFailures = (entry.transportFailures ?? 0) + 1;
+    const failed = inspection ? { ...inspection, status: "failed", lastError: reason } : null;
+    const nextInspections = new Map(entry.inspections);
+    if (failed) nextInspections.set(failed.id, failed);
+    const snapshot = careStateSnapshot(entry, {
+      group: priorGroup ?? entry.group,
+      tasks: priorTasks ?? [...entry.tasks.values()],
+      inspections: [...nextInspections.values()],
+    });
+    snapshot.transportFailures = nextFailures;
+    try {
+      appendCareEvent(entry, "care.delivery_failed", {
+        reason,
+        inspection: failed?.id ?? null,
+        transport_failures: nextFailures,
+        failure_limit: CARE_DELIVERY_FAILURE_LIMIT,
+      }, snapshot);
+    } catch { return false; }
+    if (failed) {
+      entry.inspections.set(failed.id, failed);
+      if (failed.messageId) entry.messageIndex.delete(failed.messageId);
+    }
+    entry.transportFailures = nextFailures;
+    if (priorGroup) entry.group = priorGroup;
+    if (priorTasks) entry.tasks = new Map(priorTasks.map((t) => [taskKey(t), t]));
+    return true;
   };
 
   const deliverNow = async (entry, computed) => {
@@ -2203,10 +2472,13 @@ export function createCareRuntime(options = {}) {
     const revision = entry.group.revision;
     const gen = generation;
     let maintenanceEntered = false;
-    let outcome = "not_attempted";
+    let result = "not_entered";
+    let priorGroup = entry.group;
+    let priorTasks = [...entry.tasks.values()];
+    let sentInspection = null;
     entry.delivering = true;
     try {
-      await agent.runMaintenance(() => {
+      const rawResult = await agent.runMaintenance(() => {
         maintenanceEntered = true;
         if (disposed || generation !== gen) return "aborted";
         const supNow = supervisorOf(entry.root);
@@ -2216,12 +2488,13 @@ export function createCareRuntime(options = {}) {
         let nowCfg;
         try { nowCfg = readConfig(entry); } catch { return "config_unavailable"; }
         if (!nowCfg.resolution.enabled) return "disabled";
-        const capsNow = capabilitiesOf(agent);
-        if (!capsNow.minimal) return "capability_missing";
         const sampledNow = sampleTasks(entry, agent);
         if (!sampledNow.ok) return "state_unknown";
+        const capsNow = capabilitiesOf(agent, sampledNow.tasks);
+        if (!capsNow.minimal) return "capability_missing";
         reconcileTasks(entry, sampledNow.tasks, nowCfg.projection.threshold_seconds);
         const idleNow = statusOf(agent) === "idle" ? true : statusOf(agent) === "running" ? false : null;
+        const openNow = [...entry.inspections.values()].some((i) => careInspectionOpen(i, now()));
         const decisionNow = decideCare({
           now: now(),
           enabled: nowCfg.resolution.enabled,
@@ -2232,7 +2505,9 @@ export function createCareRuntime(options = {}) {
           group: entry.group,
           tasks: [...entry.tasks.values()],
           delivering: false,
+          openInspection: openNow,
         }, capsNow.minimal);
+        if (Array.isArray(decisionNow.noResponseTasks) && decisionNow.noResponseTasks.length > 0) return "no_response_limit";
         if (!decisionNow.deliver) return decisionNow.reason;
         const due = dueTargetsOf(entry, decisionNow);
         if (due.length === 0) return "no_due_target";
@@ -2277,76 +2552,100 @@ export function createCareRuntime(options = {}) {
           source: careSourceOf(entry, inspection, due),
         });
         inspection.messageId = message.id;
-        // 事件先行：先落可追溯事件，再登记状态与投递（append 失败 ⇒ 不投递）。
-        appendEventFn(entry.root, {
-          actor: `supervisor:${entry.supervisorId}`,
-          event: "care.inspection",
-          details: {
+        const planned = applyCareDelivery(entry.group, [...entry.tasks.values()], at, due.map((t) => ({ child: t.child, attempt: t.attempt })));
+        const plannedGroup = { ...planned.group, revision: entry.group.revision + 1 };
+        const plannedInspections = new Map(entry.inspections);
+        plannedInspections.set(inspection.id, inspection);
+        // 事件先行：快照（含 pending 巡检与已推进的未答预算）先落盘，再 send。
+        // 崩溃在 send 前：恢复端把 queued 视为已发，绝不重复发送（宁可漏一次，不双发）。
+        try {
+          appendCareEvent(entry, "care.inspection", {
             inspection: inspection.id,
             supervisor: entry.supervisorId,
             targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, binding_version: t.bindingVersion })),
-            revision,
+            revision: plannedGroup.revision,
             max_stagnant_rounds: nowCfg.projection.max_stagnant_rounds,
             wake_kind: "care_inspection",
             message_id: message.id,
-          },
-        });
+          }, careStateSnapshot(entry, { group: plannedGroup, tasks: planned.tasks, inspections: [...plannedInspections.values()] }));
+        } catch { return "append_failed"; }
+        entry.group = plannedGroup;
+        entry.tasks = new Map(planned.tasks.map((t) => [taskKey(t), t]));
         entry.inspections.set(inspection.id, inspection);
         entry.messageIndex.set(message.id, inspection.id);
+        sentInspection = inspection;
+        let sent;
         try {
-          agent.send(message, "next-turn", true);
-        } catch (e) {
-          inspection.status = "failed";
-          inspection.lastError = String(e?.message ?? e).slice(0, 120);
-          try {
-            appendEventFn(entry.root, {
-              actor: `supervisor:${entry.supervisorId}`,
-              event: "care.inspection.failed",
-              details: { inspection: inspection.id, reason: inspection.lastError },
-            });
-          } catch { /* 事件失败不掩盖投递失败 */ }
-          return "send_failed";
-        }
-        // send 返回 void ⇒ 只推进计时与审计，**不**标记 delivered/answered。
-        const applied = applyCareDelivery(entry.group, [...entry.tasks.values()], at, due.map((t) => ({ child: t.child, attempt: t.attempt })));
-        entry.group = { ...applied.group, revision: entry.group.revision + 1 };
-        entry.tasks = new Map(applied.tasks.map((t) => [taskKey(t), t]));
+          sent = agent.send(message, "next-turn", true);
+        } catch { return "send_failed"; }
+        // 公开契约：send 返回 void；只有显式 false 才判失败（绝不把 queued 当 answered）。
+        if (sent === false) return "send_failed";
         entry.seq += 1;
-        entry.lastDecision = { ...decisionNow, phase: "counting", deliver: false, reason: "delivering" };
-        entry.lastReason = "delivering";
+        entry.lastDecision = { ...decisionNow, phase: "awaiting_outcome", deliver: false, reason: "inspection_open" };
+        entry.lastReason = "queued";
         emitAudit(makeCareAuditEntry(entry.seq, decisionNow, entry.supervisorId, at));
-        outcome = "queued";
         return "queued";
       });
+      result = typeof rawResult === "string" ? rawResult : "not_entered";
     } catch (e) {
-      outcome = maintenanceEntered ? "send_failed" : "maintenance_busy";
-      entry.retryNotBefore = now() + (maintenanceEntered ? retryMs : maintenanceRetryMs);
+      result = maintenanceEntered ? "send_failed" : "maintenance_busy";
       try {
-        process.stderr.write(`[dsh-graph-host] 关照投递跳过（${outcome}）：${String(e?.message ?? e).slice(0, 120)}\n`);
+        process.stderr.write(`[dsh-graph-host] 关照投递失败（${result}）：${String(e?.message ?? e).slice(0, 120)}\n`);
       } catch { /* 忽略 */ }
     } finally {
       entry.delivering = false;
     }
-    return outcome === "queued";
+
+    if (result === "queued") {
+      entry.transportFailures = 0;
+      entry.retryNotBefore = null;
+      return true;
+    }
+    if (deliveryFailureCounts(result)) {
+      // send/append/未进入维护：先恢复投递前状态（绝不推进计时/未答预算），再计数。
+      const recorded = recordDeliveryFailure(entry, result, sentInspection, priorGroup, priorTasks);
+      if (!recorded) {
+        // 事件写失败：内存也保持投递前状态；下一轮仍按失败重试（不半更新）。
+        entry.group = priorGroup;
+        entry.tasks = new Map(priorTasks.map((t) => [taskKey(t), t]));
+        if (sentInspection) {
+          entry.inspections.delete(sentInspection.id);
+          if (sentInspection.messageId) entry.messageIndex.delete(sentInspection.messageId);
+        }
+      }
+      if ((entry.transportFailures ?? 0) >= CARE_DELIVERY_FAILURE_LIMIT) {
+        entry.lastReason = "delivery_failed_limit";
+      }
+    } else {
+      entry.lastReason = result;
+    }
+    entry.retryNotBefore = now() + Math.max(1000, retryForDeliveryOutcome(result));
+    return false;
   };
 
   const syncIdentity = (entry) => {
     const sup = supervisorOf(entry.root);
     if (sup.sid !== entry.supervisorId) {
-      // 主管切换：整组调度与暂停状态都属于「旧主管」，新主管从干净组开始；
-      // 旧 pending 巡检保留在记录里（身份不匹配的结论会被拒绝）。
-      entry.group = { ...newCareGroupState(), revision: entry.group.revision + 1 };
-      entry.tasks = new Map();
+      // g-506 返工 B5：主管切换不得把旧 attempt 的锁错绑到新任务，也**不得**因重启/换主管
+      // 丢掉用户 pause/人工锁/未答计数。保留组与逐任务状态（任务键含 child+attempt+binding），
+      // 下一次采样会按真实绑定剔除/保留；旧 pending 巡检标 expired（身份不匹配的结论必被拒绝）。
+      entry.group = { ...entry.group, revision: entry.group.revision + 1 };
       entry.retryNotBefore = null;
+      for (const [id, ins] of entry.inspections) {
+        if (ins.status !== "resolved" && ins.status !== "failed") {
+          entry.inspections.set(id, { ...ins, status: "expired", lastError: "supervisor_changed" });
+        }
+      }
       entry.supervisorId = sup.sid;
       entry.supervisorAgent = sup.agent;
       return true;
     }
     if (sup.agent !== entry.supervisorAgent) {
+      const firstAttach = entry.supervisorAgent === null || entry.supervisorAgent === undefined;
       entry.supervisorAgent = sup.agent;
-      if (sup.agent) {
+      if (sup.agent && !firstAttach) {
         entry.group = { ...entry.group, revision: entry.group.revision + 1 };
-        // Agent 实例替换：旧巡检不再可信（同一 session 也不假称可续）。
+        // Agent 实例替换（不是重启后的首次附着）：旧巡检不再可信。
         for (const [id, ins] of entry.inspections) {
           if (ins.status !== "resolved" && ins.status !== "failed") {
             entry.inspections.set(id, { ...ins, status: "expired", lastError: "agent_replaced" });
@@ -2523,6 +2822,13 @@ export function createCareRuntime(options = {}) {
     if (typeof opts.expectedRevision === "number" && opts.expectedRevision !== entry.group.revision) {
       return { ok: false, code: "revision_conflict", revision: entry.group.revision };
     }
+    // g-506 返工：reset 的**同一次点击重试**用调用方唯一 requestId 幂等；不同真实点击（id 不同）
+    // 必须真的重新计时——绝不按秒级时间猜重复而吞掉用户点击。
+    const requestId = typeof opts.requestId === "string" && opts.requestId.trim()
+      ? opts.requestId.trim().slice(0, 100) : null;
+    if (action === "reset" && requestId !== null && entry.group.lastControlRequestId === requestId) {
+      return { ok: true, idempotent: true, status: statusFor(root) };
+    }
     // 首次控制可能早于第一次状态查询：先做一次纯采样，保证暂停冻结的是真实任务的剩余，
     // 而不是「空组暂停 → 继续后立刻到期」。采样不投递、不写事件、不改 revision。
     try { decisionOf(entry); } catch { /* 采样失败按空组处理（下方 readConfig 仍会如实拒绝） */ }
@@ -2542,25 +2848,27 @@ export function createCareRuntime(options = {}) {
       nextGroup = r.group; nextTasks = r.tasks;
     } else {
       const r = resetCare(entry.group, tasks, timing);
-      nextGroup = r.group; nextTasks = r.tasks;
+      nextGroup = { ...r.group, lastControlRequestId: requestId };
+      nextTasks = r.tasks;
     }
+    // g-506 返工 B5：事件先行 + 完整状态快照（paused/剩余/reset/未答计数/人工锁/inflight）。
+    const controlState = careStateSnapshot(entry, { group: nextGroup, tasks: nextTasks });
+    if (action === "reset") controlState.transportFailures = 0;
     try {
-      appendEventFn(root, {
-        actor: `human:${opts.actor ?? "ui"}`,
-        event: "care.control",
-        details: {
-          action,
-          supervisor: entry.supervisorId,
-          revision: nextGroup.revision,
-          paused: nextGroup.paused,
-          paused_remaining_ms: nextGroup.pausedRemainingMs,
-        },
-      });
+      appendCareEvent(entry, "care.control", {
+        action,
+        supervisor: entry.supervisorId,
+        revision: nextGroup.revision,
+        paused: nextGroup.paused,
+        paused_remaining_ms: nextGroup.pausedRemainingMs,
+        request_id: requestId,
+      }, controlState, `human:${opts.actor ?? "ui"}`);
     } catch (e) {
       return { ok: false, code: "event_append_failed", detail: String(e?.message ?? e).slice(0, 120) };
     }
     entry.group = nextGroup;
     entry.tasks = new Map(nextTasks.map((t) => [taskKey(t), t]));
+    if (action === "reset") entry.transportFailures = 0;
     scheduleEntry(entry);
     return { ok: true, idempotent: false, status: statusFor(root) };
   };
@@ -2586,20 +2894,32 @@ export function createCareRuntime(options = {}) {
     // 当前 catalog 绑定（服务端真源）：goal/attempt/child/版本必须与结论完全一致。
     let payload = null;
     try { payload = typeof readBoardPayload === "function" ? readBoardPayload(root) : null; } catch { payload = null; }
-    const goals = payload && typeof payload === "object"
-      ? [
-          ...(Array.isArray(payload.goals) ? payload.goals : []),
-          ...(Array.isArray(payload.versions) ? payload.versions.flatMap((v) => (Array.isArray(v?.goals) ? v.goals : [])) : []),
-        ]
-      : [];
+    const goals = enumerateBoardGoals(payload) ?? [];
     const goal = goals.find((g) => String(g?.id) === String(input?.goal));
     const binding = goal?.attempt_binding ?? null;
     const bindingVersion = Number(binding?.binding_version) || 0;
     if (!goal || !binding
+      || String(goal?.status) !== "in_progress"
       || String(binding.attempt) !== String(input?.attempt)
       || String(binding.child_id) !== String(input?.child)) {
       return { ok: false, code: "stale_binding" };
     }
+    // g-506 返工 B4：结论新鲜性必须核对**真实 live 子代理**，不能只信 catalog 绑定。
+    // 顺序：registry 可用 → child live/running/owned → canonical workspace → parent session 仍匹配。
+    // 任一失败都在写事件/计数之前返回（0 事件/0 计数）。
+    const agents = getService("agents");
+    if (!agents || typeof agents.get !== "function" || typeof agents.isOwnedBy !== "function") {
+      return { ok: false, code: "registry_unavailable" };
+    }
+    let childAgent = null;
+    try { childAgent = agents.get(String(input.child)); } catch { return { ok: false, code: "registry_unavailable" }; }
+    if (!childAgent) return { ok: false, code: "child_not_live" };
+    if (statusOf(childAgent) !== "running") return { ok: false, code: "child_not_running" };
+    let ownedNow = false;
+    try { ownedNow = agents.isOwnedBy(String(input.child), sup.agent) === true; } catch { return { ok: false, code: "ownership_unknown" }; }
+    if (!ownedNow) return { ok: false, code: "child_not_owned" };
+    if (rootOfAgent(childAgent) !== root) return { ok: false, code: "wrong_workspace" };
+    if (String(binding.parent_session_id ?? "") !== sup.sid) return { ok: false, code: "stale_parent" };
     const digest = createHash("sha256").update(evidence).digest("hex").slice(0, 16);
     const validated = validateCareOutcome({
       inspection,
@@ -2652,35 +2972,30 @@ export function createCareRuntime(options = {}) {
     const newlyLocked = targetTask?.humanLocked === true && preTask?.humanLocked !== true;
     // 事件先行：先写 care.outcome（必要时再写 care.escalated），再更新巡检记录与计数。
     try {
-      appendEventFn(root, {
-        actor: `supervisor:${sup.sid}`,
-        event: "care.outcome",
-        details: {
+      const nextInspections = new Map(entry.inspections);
+      nextInspections.set(inspection.id, nextInspection);
+      const state = careStateSnapshot(entry, { group: applied.group, tasks: applied.tasks, inspections: [...nextInspections.values()] });
+      appendCareEvent(entry, "care.outcome", {
+        inspection: inspection.id,
+        supervisor: sup.sid,
+        goal: String(input.goal),
+        attempt: String(input.attempt),
+        child: String(input.child),
+        outcome,
+        evidence_digest: digest,
+        binding_version: bindingVersion,
+      }, state, `supervisor:${sup.sid}`);
+      if (newlyLocked) {
+        appendCareEvent(entry, "care.escalated", {
           inspection: inspection.id,
           supervisor: sup.sid,
           goal: String(input.goal),
           attempt: String(input.attempt),
           child: String(input.child),
-          outcome,
-          evidence_digest: digest,
-          binding_version: bindingVersion,
-        },
-      });
-      if (newlyLocked) {
-        appendEventFn(root, {
-          actor: `supervisor:${sup.sid}`,
-          event: "care.escalated",
-          details: {
-            inspection: inspection.id,
-            supervisor: sup.sid,
-            goal: String(input.goal),
-            attempt: String(input.attempt),
-            child: String(input.child),
-            stagnant_rounds: targetTask?.stagnantRounds ?? maxRounds,
-            max_stagnant_rounds: maxRounds,
-            reason: "fresh_no_progress_limit",
-          },
-        });
+          stagnant_rounds: targetTask?.stagnantRounds ?? maxRounds,
+          max_stagnant_rounds: maxRounds,
+          reason: "fresh_no_progress_limit",
+        }, state, `supervisor:${sup.sid}`);
       }
     } catch (e) {
       return { ok: false, code: "event_append_failed", detail: String(e?.message ?? e).slice(0, 120) };
@@ -7596,6 +7911,7 @@ export function apply(ctx, config) {
           const canonical = resolveCanonicalRoot(config, resolve(workspace));
           const result = careRuntime.control(canonical.root, action, {
             expectedRevision: typeof body?.expected_revision === "number" ? body.expected_revision : undefined,
+            requestId: typeof body?.request_id === "string" ? body.request_id : undefined,
             actor: "web-ui",
           });
           if (result?.ok !== true) {
