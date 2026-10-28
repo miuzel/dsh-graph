@@ -1183,7 +1183,7 @@ export function createKeepAliveRuntime(options = {}) {
       await attemptPing({ board, agent, decision, channel: caps.channel, llm: caps.llm });
     } catch (e) {
       board.lastReason = "state_unknown";
-      try { process.stderr.write(`[dsh-graph-host] g-505 保活调度跳过: ${String(e?.message ?? e).slice(0, 120)}\n`); } catch { /* 忽略 */ }
+      try { process.stderr.write(`[dsh-graph-host] 主管上下文缓存保活调度跳过: ${String(e?.message ?? e).slice(0, 120)}\n`); } catch { /* 忽略 */ }
     } finally {
       board.sweeping = false;
     }
@@ -7878,7 +7878,7 @@ export function apply(ctx, config) {
     } catch (e) {
       // 能力/依赖异常绝不影响工具、看板与既有生命周期事件；如实留痕。
       keepAliveRuntime = null;
-      try { process.stderr.write(`[dsh-graph-host] g-505 保活运行时未启动（已降级，不影响看板与工具）：${String(e?.message ?? e).slice(0, 160)}\n`); } catch { /* 忽略 */ }
+      try { process.stderr.write(`[dsh-graph-host] 主管上下文缓存保活运行时未启动（已降级，不影响看板与工具）：${String(e?.message ?? e).slice(0, 160)}\n`); } catch { /* 忽略 */ }
     }
 
     // ==== g-480：模块开关的**工具面真裁剪** ====
