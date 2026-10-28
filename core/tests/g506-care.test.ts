@@ -36,6 +36,7 @@ import {
   careStatusProjection,
   careTaskDueAt,
   careTaskIntervalMs,
+  carePausedRemainingMs,
   createCareInspection,
   decideCare,
   expireCareInspection,
@@ -329,6 +330,116 @@ test("g506 B11 单一 effective interval：暂停/继续/重置与 decision 同�
     task({ child: "c", attempt: "1", lastCareAt: 100_000, remindersSent: 1 }),
   ], { now: 101_000, ...timing });
   assert.equal(multi.group.pausedRemainingMs, 59_000, "未回答任务 300s 不应被误选；取未锁最小值");
+});
+
+test("g506 B15 补充：已投递巡检目标结束/换绑自动 expire，不阻塞仍活任务；旧结果拒绝", async () => {
+  const host = await makeRealHost();
+  const sup = (await host.reg.create({ sessionId: "sup-stale", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const live = (await host.reg.create({ sessionId: "child-live", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  const dead = (await host.reg.create({ sessionId: "child-dead", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;
+  host.adapter.hold("CHILD-LIVE"); host.adapter.hold("CHILD-DEAD");
+  live.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-LIVE" }], source: { kind: "user" } }), "next-turn", true);
+  dead.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-DEAD" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => live.status === "running" && dead.status === "running", "children running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([
+    { id: "goal-live", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: live.id, binding_version: 1, parent_session_id: sup.id } },
+    { id: "goal-dead", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: dead.id, binding_version: 1, parent_session_id: sup.id } },
+  ]);
+  const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
+  runtime.start();
+  try {
+    await runtime.sweep();
+    await waitFor(() => sup.status === "idle", "first turn");
+    assert.equal(events.filter((e) => e.event === "care.inspection").length, 1);
+    host.adapter.release("CHILD-DEAD");
+    await dead.whenIdle();
+    // 目标结束后的第一次状态读取就应过期，不能等 freshness 超时阻塞整组。
+    const st = runtime.statusFor(WS);
+    assert.equal(st.pending_inspections.some((i: any) => i.status !== "expired" && i.status !== "resolved" && i.status !== "failed"), false);
+    assert.ok(events.some((e) => e.event === "care.inspection.expired" && e.details?.reason === "stale_target"));
+    const rejected = runtime.submitOutcome({ root: WS, supervisor: sup.id, inspection: "insp-1", goal: "goal-live", attempt: "att-001", child: live.id, outcome: "progress", evidence: "late after stale" });
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.code, "inspection_not_open");
+    assert.equal(events.filter((e) => e.event === "care.outcome").length, 0);
+    // 已发提醒后未回复 ⇒ 下一次提醒仍受 300s 未回复冷却约束。
+    clock.advance(301_000);
+    await runtime.sweep();
+    await waitFor(() => sup.status === "idle", "second turn");
+    const inspections = events.filter((e) => e.event === "care.inspection");
+    assert.equal(inspections.length, 2, "仍活任务可在过时巡检过期后继续巡检");
+    assert.deepEqual(inspections[1].details.targets.map((t: any) => t.goal), ["goal-live"]);
+  } finally {
+    host.adapter.releaseAll?.();
+    runtime.dispose();
+  }
+});
+
+test("g506 B15 暂停剩余随当前 live 任务派生：dueInMs 冻结不递减，任务移除/加锁/新加入即时反映", () => {
+  const timing = { thresholdSeconds: 60, recheckSeconds: 60 };
+  const a = task({ child: "a", attempt: "1", lastCareAt: 100_000, remindersSent: 0, awaitingReply: false });
+  const b = task({ child: "b", attempt: "1", lastCareAt: 100_000, remindersSent: 0, awaitingReply: false });
+  const paused = pauseCare(newCareGroupState(), [a, b], { now: 101_000, ...timing });
+  const at = (now: number, tasks: any[]) => decideCare({
+    now, enabled: true, thresholdSeconds: 60, recheckSeconds: 60, maxStagnantRounds: 3,
+    idle: true, group: paused.group, tasks, delivering: false,
+  }, true);
+  const first = at(101_000, paused.tasks);
+  assert.equal(first.phase, "paused");
+  assert.equal(first.pausedRemainingMs, 59_000);
+  assert.equal(first.tasks[0].dueInMs, 59_000);
+  const later = at(901_000, paused.tasks);
+  assert.equal(later.pausedRemainingMs, 59_000, "暂停剩余不得随墙钟递减");
+  assert.equal(later.tasks[0].dueInMs, 59_000, "每个暂停任务 dueInMs 冻结");
+  const removed = at(901_000, paused.tasks.slice(1));
+  assert.equal(removed.pausedRemainingMs, 59_000);
+  assert.equal(removed.tasks.length, 1);
+  const allGone = at(901_000, []);
+  assert.equal(allGone.pausedRemainingMs, undefined, "无任务 ⇒ 无剩余");
+  assert.equal(allGone.paused_remaining_ms, undefined);
+  const locked = paused.tasks.map((t) => ({ ...t, humanLocked: true }));
+  assert.equal(at(901_000, locked).pausedRemainingMs, undefined);
+  const newer = [...paused.tasks, task({ child: "c", attempt: "1", lastCareAt: 100_000, frozenRemainingMs: 10_000, humanLocked: false })];
+  assert.equal(at(901_000, newer).pausedRemainingMs, 10_000, "新加入任务参与最小值");
+});
+
+test("g506 B16 续期不伪造事实：resume 只写独立调度锚点，startedAt/lastCareAt 保持真实；delivery/reset 清锚点", () => {
+  const timing = { thresholdSeconds: 300, recheckSeconds: 300 };
+  const t = task({ startedAt: 0, lastCareAt: null, remindersSent: 0, awaitingReply: false });
+  const paused = pauseCare(newCareGroupState(), [t], { now: 100_000, ...timing });
+  assert.equal(paused.group.pausedRemainingMs, 200_000);
+  const resumed = resumeCare(paused.group, paused.tasks, { now: 1_000_000, ...timing });
+  const r = resumed.tasks[0];
+  assert.equal(r.startedAt, 0, "真实 startedAt 不得被续期反推");
+  assert.equal(r.lastCareAt, null, "真实 lastCareAt 不得被续期反推");
+  assert.equal(r.scheduleDueAt, 1_200_000);
+  assert.equal(careTaskDueAt(r, { ...timing, resetAt: null }), 1_200_000);
+  assert.equal(1_200_000 - r.startedAt, 1_200_000, "wake elapsed 应为真实 20min");
+  // lastCareAt 事实保持，且续期锚点独立
+  const t2 = task({ startedAt: 0, lastCareAt: 100_000, remindersSent: 0, awaitingReply: false });
+  const paused2 = pauseCare(newCareGroupState(), [t2], { now: 100_000, ...timing });
+  const resumed2 = resumeCare(paused2.group, paused2.tasks, { now: 1_000_000, ...timing });
+  assert.equal(resumed2.tasks[0].lastCareAt, 100_000, "lastCareAt 事实不得被续期覆盖");
+  assert.equal(resumed2.tasks[0].scheduleDueAt, 1_300_000);
+  // 投递 / 有效结果 / reset 清除续期锚点（回到真实事实派生）
+  const delivered = applyCareDelivery(newCareGroupState(), [r], 1_500_000);
+  assert.equal(delivered.tasks[0].lastCareAt, 1_500_000);
+  assert.equal(delivered.tasks[0].scheduleDueAt, null);
+  assert.equal(careTaskDueAt(delivered.tasks[0], { ...timing, resetAt: null }), 1_800_000);
+  const progressed = applyCareOutcome(newCareGroupState(), [r], { child: r.child, attempt: r.attempt }, { kind: "progress", now: 1_500_000, maxStagnantRounds: 3 });
+  assert.equal(progressed.tasks[0].scheduleDueAt, null);
+  const reset = resetCare(resumed.group, resumed.tasks, { now: 1_500_000, ...timing });
+  assert.equal(reset.tasks[0].scheduleDueAt, null);
+  assert.equal(careTaskDueAt(reset.tasks[0], { ...timing, resetAt: reset.group.resetAt }), 1_800_000);
+  // 未回答 60/300 与 threshold 变化：续期锚点仍以用户冻结剩余为准
+  const un = task({ lastCareAt: 100_000, remindersSent: 1, awaitingReply: true });
+  const pu = pauseCare(newCareGroupState(), [un], { now: 101_000, thresholdSeconds: 60, recheckSeconds: 60 });
+  assert.equal(pu.group.pausedRemainingMs, 299_000);
+  const ru = resumeCare(pu.group, pu.tasks, { now: 201_000, thresholdSeconds: 60, recheckSeconds: 60 });
+  assert.equal(careTaskDueAt(ru.tasks[0], { thresholdSeconds: 300, recheckSeconds: 300, resetAt: null }), 500_000, "续期锚点优先，配置变更不改变已冻结剩余");
+  assert.equal(carePausedRemainingMs([{ humanLocked: true, frozenRemainingMs: 100 }, { humanLocked: false, frozenRemainingMs: 20 }]), 20);
+  assert.equal(carePausedRemainingMs([{ humanLocked: true, frozenRemainingMs: 100 }]), null);
 });
 
 test("g506 B12 无可倒数任务：暂停/暂停中重置保留 paused=true 但 paused_remaining=null，绝不回退阈值", () => {
@@ -792,6 +903,69 @@ test("g506 B12 真实 server：全任务人工锁时暂停/暂停中 reset 保�
   }
 });
 
+test("g506 B15 暂停期间第三次 no-progress 锁人：paused 缓存不得冒充，实际派生 null/无虚假倒计时；重启保持", async () => {
+  const host = await makeRealHost();
+  const root = makeBoard("");
+  const sup = (await host.reg.create({ sessionId: "sup-b15", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-b15", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  host.adapter.hold("CHILD-B15");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-B15" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock(0);
+  const payload = boardPayload([{ id: "goal-b15", status: "in_progress", attempt_started_at: new Date(0).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  const opts = {
+    clock, scheduler: fakeScheduler(clock), payload, supervisorId: sup.id,
+    project: { supervisor: { care: true, care_threshold_seconds: 300, care_recheck_seconds: 200 } },
+    appendEventFn: (r: string, ev: any) => appendEvent(r, ev),
+  };
+  const first = await makeCareRuntime(host, opts);
+  first.runtime.start();
+  const openInspection = () => [...first.runtime.entryOfRoot(root).inspections.values()].find((i: any) => i.status !== "resolved" && i.status !== "failed" && i.status !== "expired");
+  try {
+    // 第三份 no-progress 的巡检已投递后暂停：先让前两份 no-progress 完成。
+    for (let i = 0; i < 2; i += 1) {
+      clock.set(300_000 + i * 200_000);
+      await first.runtime.sweep();
+      await waitFor(() => sup.status === "idle", `deliver ${i}`);
+      const ins = openInspection();
+      assert.ok(ins);
+      assert.equal(first.runtime.submitOutcome({ root, supervisor: sup.id, inspection: ins.id, goal: "goal-b15", attempt: "att-001", child: child.id, outcome: "no-progress", evidence: `third ${i}` }).ok, true);
+    }
+    clock.set(700_000);
+    await first.runtime.sweep();
+    await waitFor(() => sup.status === "idle", "third inspection");
+    const third = openInspection();
+    assert.ok(third);
+    clock.set(800_000);
+    const paused = first.runtime.control(root, "pause", { requestId: "b15-pause" });
+    assert.equal(paused.ok, true);
+    assert.equal(paused.status.paused_remaining_ms, 200_000, "暂停时未回复冷却下的实际可执行剩余 200000");
+    assert.equal(paused.status.tasks[0].dueInMs, 200_000, "暂停中 dueInMs 是冻结值，不随墙钟递减");
+    // 允许已投递巡检在暂停期间回传第三份 no-progress ⇒ 立刻人工锁；缓存 group 的 100000 不得冒充。
+    const res = first.runtime.submitOutcome({ root, supervisor: sup.id, inspection: third.id, goal: "goal-b15", attempt: "att-001", child: child.id, outcome: "no-progress", evidence: "third after pause" });
+    assert.equal(res.ok, true);
+    assert.equal(res.human_locked, true);
+    const locked = first.runtime.statusFor(root);
+    assert.equal(locked.paused, true);
+    assert.equal(locked.tasks[0].human_locked, true);
+    assert.equal(locked.paused_remaining_ms, null, "实际无未锁任务 ⇒ 必须 null，绝不能读缓存 200000");
+    assert.equal(locked.tasks[0].dueInMs, null);
+    first.runtime.dispose();
+    const second = await makeCareRuntime(host, opts);
+    second.runtime.start();
+    try {
+      const restored = second.runtime.statusFor(root);
+      assert.equal(restored.paused, true);
+      assert.equal(restored.paused_remaining_ms, null, "重启 replay 也不得恢复缓存假剩余");
+      assert.equal(restored.tasks[0].human_locked, true);
+      const resumed = second.runtime.control(root, "resume", { requestId: "b15-resume" });
+      assert.equal(resumed.ok, true);
+      assert.equal(second.runtime.statusFor(root).phase, "awaiting_human");
+      assert.equal(second.runtime.statusFor(root).tasks[0].human_locked, true);
+    } finally { second.runtime.dispose(); }
+  } finally { host.adapter.releaseAll?.(); }
+});
+
 test("g506 B11 真实 server control：pause(101000)/resume(201000)+重启恢复精确剩余，按当前时刻而非旧绝对时钟", async () => {
   const host = await makeRealHost();
   const root = makeBoard("");
@@ -832,6 +1006,17 @@ test("g506 B11 真实 server control：pause(101000)/resume(201000)+重启恢复
       const st = second.runtime.statusFor(root);
       assert.equal(st.phase, "counting");
       assert.equal(st.next_due_at, 500_000, "resumeAt(201000)+frozen(299000)，不得漂移");
+      assert.equal(st.tasks[0].started_at, 0, "续期不得反推真实 started_at");
+      assert.equal(st.tasks[0].last_care_at, 100_000, "续期不得反推真实 last_care_at");
+      // 续期锚点必须持久化：再次重启仍 due 500000，而不是重新按旧事实算。
+      second.runtime.dispose();
+      const third = await makeCareRuntime(host, opts);
+      third.runtime.start();
+      try {
+        const afterRestart = third.runtime.statusFor(root);
+        assert.equal(afterRestart.next_due_at, 500_000, "续期锚点跨 restart 保持");
+        assert.equal(afterRestart.tasks[0].started_at, 0);
+      } finally { third.runtime.dispose(); }
     } finally { second.runtime.dispose(); }
   } finally {
     host.adapter.releaseAll?.();
@@ -1574,6 +1759,40 @@ test("g506 REST：有 live 主管时 pause/resume/reset 生效并跨请求保真
     const again = await h.call("GET", `/api/dsh-graph/care/status?workspace=${encodeURIComponent(root)}`);
     assert.equal(again.body.paused, false);
     assert.equal(again.body.revision, r.body.status.revision);
+  } finally {
+    for (const fn of h.cleanups) { try { fn(); } catch { /* ignore */ } }
+  }
+});
+
+test("g506 复审：pause/resume 同 expectedRevision 的 HTTP 网络重试也真正幂等（无副作用）", async () => {
+  const host = await makeRealHost();
+  const root = makeBoard("");
+  const sup = (await host.reg.create({ sessionId: "sup-pr", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${sup.id}\n  care: "true"\n`);
+  const h = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+  try {
+    const pre = await h.call("GET", `/api/dsh-graph/care/status?workspace=${encodeURIComponent(root)}`);
+    const rev0 = pre.body.revision;
+    const pauseBody = { workspace: root, action: "pause", expected_revision: rev0 };
+    const p1 = await h.call("POST", "/api/dsh-graph/care/control", pauseBody);
+    assert.equal(p1.code, 200);
+    assert.equal(p1.body.status.paused, true);
+    const revPaused = p1.body.status.revision;
+    const p2 = await h.call("POST", "/api/dsh-graph/care/control", pauseBody);
+    assert.equal(p2.code, 200, "同 pause 网络重试不得因 revision 过期 409");
+    assert.equal(p2.body.idempotent, true);
+    assert.equal(p2.body.status.revision, revPaused, "重试不得递增 revision");
+    const resumeBody = { workspace: root, action: "resume", expected_revision: revPaused };
+    const r1 = await h.call("POST", "/api/dsh-graph/care/control", resumeBody);
+    assert.equal(r1.code, 200);
+    assert.equal(r1.body.status.paused, false);
+    const revResumed = r1.body.status.revision;
+    const r2 = await h.call("POST", "/api/dsh-graph/care/control", resumeBody);
+    assert.equal(r2.code, 200, "同 resume 网络重试不得因 revision 过期 409");
+    assert.equal(r2.body.idempotent, true);
+    assert.equal(r2.body.status.revision, revResumed);
+    const staleReset = await h.call("POST", "/api/dsh-graph/care/control", { workspace: root, action: "reset", request_id: "new-click", expected_revision: rev0 });
+    assert.equal(staleReset.code, 409, "不同新动作仍须遵守 revision");
   } finally {
     for (const fn of h.cleanups) { try { fn(); } catch { /* ignore */ } }
   }

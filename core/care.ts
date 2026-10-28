@@ -545,6 +545,8 @@ export interface CareTaskState {
   lastCareAt: number | null;
   /** 暂停时冻结的**本任务**剩余 ms（`null` = 未冻结）；继续时按它恢复各自倒计时。 */
   frozenRemainingMs: number | null;
+  /** g-506 返工 B16：续期后的**绝对调度锚点**（不覆盖真实 startedAt/lastCareAt 事实）。 */
+  scheduleDueAt?: number | null;
   /** g-506 返工：连续**无有效结论**的自动提醒次数（progress/no-progress 有效结论归零；unknown 不归零）。 */
   remindersSent?: number;
   /** g-506 返工：最近一次提醒后是否尚未收到任何结论（含 unknown 视为已回复但无有效结论）。 */
@@ -691,14 +693,29 @@ export function careTaskIntervalMs(task: CareTaskState, timing: {
   return Math.max(recheckMs, unanswered ? CARE_NO_RESPONSE_COOLDOWN_MS : 0);
 }
 
+/** 当前实际可执行（未人类锁）任务的冻结剩余最小值；没有 ⇒ `null`（绝不回退阈值）。 */
+export function carePausedRemainingMs(tasks: Array<Pick<CareTaskState, "humanLocked" | "frozenRemainingMs">>): number | null {
+  const frozen = tasks
+    .filter((t) => t.humanLocked !== true && typeof t.frozenRemainingMs === "number")
+    .map((t) => t.frozenRemainingMs as number);
+  return frozen.length > 0 ? Math.min(...frozen) : null;
+}
+
 export function careTaskDueAt(task: CareTaskState, timing: {
   thresholdSeconds: number;
   recheckSeconds: number;
   resetAt: number | null;
 }): number {
+  const resetAt = timing.resetAt;
+  // B16：续期使用独立绝对锚点，绝不反推真实 startedAt/lastCareAt（避免工作耗时/cooldown 事实被篡改）。
+  if (typeof task.scheduleDueAt === "number" && Number.isFinite(task.scheduleDueAt)) {
+    if (resetAt !== null && resetAt > task.scheduleDueAt) {
+      return resetAt + careTaskIntervalMs(task, timing);
+    }
+    return task.scheduleDueAt;
+  }
   const base = task.lastCareAt === null ? task.startedAt : task.lastCareAt;
   const interval = careTaskIntervalMs(task, timing);
-  const resetAt = timing.resetAt;
   return resetAt !== null && resetAt > base ? resetAt + interval : base + interval;
 }
 
@@ -756,18 +773,23 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
 
   // ── 2. 整组暂停 ⇒ 保留剩余时间（无倒计时推进）───────────────────────────
   if (group.paused === true) {
-    const remaining = group.pausedRemainingMs;
+    // B15：暂停剩余的唯一真源是**当前实际任务**的冻结值（任务结束/新加/锁变化立刻反映），
+    // 不读 group 缓存。暂停中逐任务 dueInMs 是冻结值或 null，绝不随墙钟递减。
+    const remaining = carePausedRemainingMs(tasks);
+    const pausedSchedules = schedules.map((s) => {
+      const t = tasks.find((x) => x.child === s.child && x.attempt === s.attempt);
+      const frozen = t && t.humanLocked !== true && typeof t.frozenRemainingMs === "number" ? t.frozenRemainingMs : null;
+      return { ...s, dueAt: null, dueInMs: frozen };
+    });
     return {
       phase: "paused",
       deliver: false,
       reason: "paused",
-      // 暂停**保留剩余时间**：继续时从剩余时间计时 ⇒ UI 仍可显示冻结的剩余值，
-      // 但它**不是**一个会推进的「下一次到期」时刻。为使 UI 不显示虚假倒计时，
-      // `nextDueAt` 如实给 `null`，冻结剩余量单列在 `tasks[].dueInMs`。
       nextDueAt: null,
       nextDueInMs: null,
-      tasks: schedules,
+      tasks: pausedSchedules,
       escalateTasks: schedules.filter((s) => s.escalated).map((s) => s.child),
+      noResponseTasks,
       ...(remaining !== null ? { pausedRemainingMs: remaining } : {}),
     };
   }
@@ -889,6 +911,7 @@ export function applyCareDelivery(group: CareGroupState, tasks: CareTaskState[],
       return {
         ...t,
         lastCareAt: now,
+        scheduleDueAt: null, // 真实投递后由 lastCareAt + 有效区间重新计时
         // 每次实际投递都计入「连续无有效结论」预算；收到 progress/no-progress 有效结论后归零。
         remindersSent: (t.remindersSent ?? 0) + 1,
         awaitingReply: true,
@@ -941,7 +964,7 @@ export function applyCareOutcome(
     matched = true;
     // 任何回传都表示本轮巡检已有回复（即使 unknown 没有有效结论）；unknown 不递增/不归零无进展计数，
     // 但保留 remindersSent，供「连续无有效结论」预算在下一轮继续累计。
-    if (outcome.kind === "unknown") return { ...t, awaitingReply: false };
+    if (outcome.kind === "unknown") return { ...t, awaitingReply: false, scheduleDueAt: null };
     if (outcome.kind === "progress") {
       counted = true;
       return {
@@ -951,6 +974,7 @@ export function applyCareOutcome(
         stagnantRounds: 0, // 有进展 ⇒ 归零
         remindersSent: 0, // 有效结论 ⇒ 未回复预算归零
         awaitingReply: false,
+        scheduleDueAt: null,
         // humanLocked / humanReason 原样保留：progress 绝不解除已有人工锁
       };
     }
@@ -964,6 +988,7 @@ export function applyCareOutcome(
       humanReason: locked ? (t.humanReason === "no_response_limit" ? "no_response_limit" : "no_progress_limit") : (t.humanReason ?? null),
       remindersSent: 0, // no-progress 是有效结论 ⇒ 未回复预算归零（无进展预算独立累计）
       awaitingReply: false,
+      scheduleDueAt: null,
     };
   });
   const anyLocked = nextTasks.some((t) => t.humanLocked === true || (t.stagnantRounds ?? 0) >= maxRounds);
@@ -1033,13 +1058,10 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
       recheckSeconds: inputs.recheckSeconds,
       resetAt: group.resetAt,
     });
-    return { ...t, frozenRemainingMs: Math.max(0, due - inputs.now) };
+    return { ...t, frozenRemainingMs: Math.max(0, due - inputs.now), scheduleDueAt: null };
   });
-  const remainings = nextTasks
-    .filter((t) => t.humanLocked !== true && typeof t.frozenRemainingMs === "number")
-    .map((t) => t.frozenRemainingMs as number);
   // 没有任何可执行（未锁）任务 ⇒ 如实无倒计时，绝不回退 threshold 伪造数字。
-  const remaining = remainings.length > 0 ? Math.min(...remainings) : null;
+  const remaining = carePausedRemainingMs(nextTasks);
   return {
     group: {
       ...group,
@@ -1048,7 +1070,6 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
       pausedRemainingMs: remaining,
       revision: group.revision + 1,
       lastControl: "pause",
-      lastControlAction: "pause",
       lastControlAt: inputs.now,
     },
     tasks: nextTasks,
@@ -1058,9 +1079,9 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
 /**
  * **继续**：从**各自冻结的剩余时间**计时（不是重新计满）。
  *
- * 实现：把每个任务的上次关照基准反推到「使 dueAt = now + frozenRemaining」的位置，
- * 从而 `decideCare` 无需特判暂停即有正确倒计时。重置（暂停中发生）已被冻结进
- * `frozenRemainingMs`，故继续后 `resetAt` 归零（避免二次叠加）。
+ * 实现：写独立每任务 `scheduleDueAt = now + frozenRemaining` 绝对锚点，**不修改**
+ * `startedAt`/`lastCareAt` 真实事实（工作耗时、未回复 cooldown、REST 投影保持真实）。
+ * 重置（暂停中发生）已被冻结进 `frozenRemainingMs`，故继续后 `resetAt` 归零（避免二次叠加）。
  */
 export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs: {
   now: number;
@@ -1071,12 +1092,10 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
     return { group: { ...group }, tasks: tasks.map((t) => ({ ...t })) }; // 幂等
   }
   const nextTasks = tasks.map((t) => {
-    const interval = careTaskIntervalMs(t, inputs);
     const frozen = t.frozenRemainingMs;
-    if (frozen === null || t.humanLocked === true) return { ...t, frozenRemainingMs: null };
-    const base = inputs.now + frozen - interval;
-    if (t.lastCareAt === null) return { ...t, startedAt: base, frozenRemainingMs: null };
-    return { ...t, lastCareAt: base, frozenRemainingMs: null };
+    if (frozen === null || t.humanLocked === true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
+    // B16：只写独立调度锚点，真实 startedAt/lastCareAt 永不反推。
+    return { ...t, frozenRemainingMs: null, scheduleDueAt: inputs.now + frozen };
   });
   return {
     group: {
@@ -1087,7 +1106,6 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
       resetAt: null,
       revision: group.revision + 1,
       lastControl: "resume",
-      lastControlAction: "resume",
       lastControlAt: inputs.now,
     },
     tasks: nextTasks,
@@ -1109,18 +1127,11 @@ export function resetCare(group: CareGroupState, tasks: CareTaskState[], inputs:
   recheckSeconds: number;
 }): { group: CareGroupState; tasks: CareTaskState[] } {
   const nextTasks = tasks.map((t) => {
-    if (group.paused !== true) return { ...t, frozenRemainingMs: null };
-    if (t.humanLocked === true) return { ...t, frozenRemainingMs: null };
-    return { ...t, frozenRemainingMs: careTaskIntervalMs(t, inputs) };
+    if (group.paused !== true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
+    if (t.humanLocked === true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
+    return { ...t, frozenRemainingMs: careTaskIntervalMs(t, inputs), scheduleDueAt: null };
   });
-  const remaining = group.paused === true
-    ? (() => {
-        const frozen = nextTasks
-          .filter((t) => t.humanLocked !== true && typeof t.frozenRemainingMs === "number")
-          .map((t) => t.frozenRemainingMs as number);
-        return frozen.length > 0 ? Math.min(...frozen) : null;
-      })()
-    : group.pausedRemainingMs;
+  const remaining = group.paused === true ? carePausedRemainingMs(nextTasks) : group.pausedRemainingMs;
   return {
     group: {
       ...group,
@@ -1473,7 +1484,7 @@ export function careStatusProjection(args: {
     next_due_in_ms: args.decision.nextDueInMs,
     server_now: args.now,
     paused: args.group.paused === true,
-    paused_remaining_ms: args.group.pausedRemainingMs,
+    paused_remaining_ms: args.group.paused === true ? carePausedRemainingMs(args.tasks) : args.group.pausedRemainingMs,
     revision: args.group.revision,
     tasks,
     escalate_tasks: args.decision.escalateTasks,

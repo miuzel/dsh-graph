@@ -1960,6 +1960,7 @@ export function createCareRuntime(options = {}) {
       humanLocked: raw.humanLocked === true,
       lastCareAt: raw.lastCareAt === null || raw.lastCareAt === undefined ? null : numberOr(raw.lastCareAt, null),
       frozenRemainingMs: raw.frozenRemainingMs === null || raw.frozenRemainingMs === undefined ? null : Math.max(0, numberOr(raw.frozenRemainingMs, 0)),
+      scheduleDueAt: raw.scheduleDueAt === null || raw.scheduleDueAt === undefined ? null : numberOr(raw.scheduleDueAt, null),
       remindersSent: Math.max(0, Math.floor(numberOr(raw.remindersSent, 0))),
       awaitingReply: raw.awaitingReply === true,
       humanReason: reason,
@@ -2183,8 +2184,37 @@ export function createCareRuntime(options = {}) {
 
   const taskKey = (t) => `${t.child}\u0000${t.attempt}`;
 
+  /** B15 补充：已投递巡检的目标结束/换绑 ⇒ 自动 expire，不阻塞其他仍活任务；
+   *  不撤回已发消息，过期后的真实结果仍按 inspection_not_open 拒绝。 */
+  const expireStaleInspections = (entry, sampled) => {
+    const live = new Map(sampled.map((t) => [taskKey(t), Number(t.bindingVersion) || 0]));
+    const next = new Map(entry.inspections);
+    const expired = [];
+    for (const ins of entry.inspections.values()) {
+      if (ins.status === "resolved" || ins.status === "failed" || ins.status === "expired") continue;
+      const stale = ins.targets.some((t) => live.get(`${t.child}\u0000${t.attempt}`) !== (Number(t.bindingVersion) || 0));
+      if (!stale) continue;
+      const nextIns = { ...ins, status: "expired", lastError: "stale_target" };
+      next.set(ins.id, nextIns);
+      expired.push(nextIns);
+    }
+    if (expired.length === 0) return false;
+    const snapshot = careStateSnapshot(entry, { inspections: [...next.values()] });
+    try {
+      appendCareEvent(entry, "care.inspection.expired", {
+        inspections: expired.map((i) => i.id),
+        reason: "stale_target",
+      }, snapshot);
+    } catch { /* 事件失败仍要在内存解阻，避免整组被过时巡检卡死到过期 */ }
+    entry.inspections = next;
+    for (const ins of expired) {
+      if (ins.messageId) entry.messageIndex.delete(ins.messageId);
+    }
+    return true;
+  };
+
   /** 用最新采样对账任务表：结束/换 attempt ⇒ 移除；绑定换代 ⇒ 重置计数（新任务语义）。 */
-  const reconcileTasks = (entry, sampled, thresholdSeconds) => {
+  const reconcileTasks = (entry, sampled, thresholdSeconds, at = now()) => {
     const next = new Map();
     for (const s of sampled) {
       const key = taskKey(s);
@@ -2204,8 +2234,9 @@ export function createCareRuntime(options = {}) {
           humanLocked: false,
           lastCareAt: null,
           frozenRemainingMs: entry.group.paused === true
-            ? Math.max(1, Math.floor(thresholdSeconds)) * 1000
+            ? Math.max(0, s.startedAt + Math.max(1, Math.floor(thresholdSeconds)) * 1000 - at)
             : null,
+          scheduleDueAt: null,
         });
       }
     }
@@ -2302,7 +2333,10 @@ export function createCareRuntime(options = {}) {
     const agent = sup.agent;
     let sampled = { ok: false, tasks: [] };
     if (agent) sampled = sampleTasks(entry, agent);
-    if (sampled.ok) reconcileTasks(entry, sampled.tasks, projection.threshold_seconds);
+    if (sampled.ok) {
+      reconcileTasks(entry, sampled.tasks, projection.threshold_seconds);
+      expireStaleInspections(entry, sampled.tasks);
+    }
     const caps = capabilitiesOf(agent, sampled.ok ? sampled.tasks : []);
     entry.capabilities = caps;
     const idle = agent ? (statusOf(agent) === "idle" ? true : statusOf(agent) === "running" ? false : null) : null;
@@ -2510,7 +2544,8 @@ export function createCareRuntime(options = {}) {
         if (!sampledNow.ok) return "state_unknown";
         const capsNow = capabilitiesOf(agent, sampledNow.tasks);
         if (!capsNow.minimal) return "capability_missing";
-        reconcileTasks(entry, sampledNow.tasks, nowCfg.projection.threshold_seconds);
+        reconcileTasks(entry, sampledNow.tasks, nowCfg.projection.threshold_seconds, now());
+        expireStaleInspections(entry, sampledNow.tasks);
         const idleNow = statusOf(agent) === "idle" ? true : statusOf(agent) === "running" ? false : null;
         const openNow = [...entry.inspections.values()].some((i) => careInspectionOpen(i, now()));
         const decisionNow = decideCare({
@@ -2847,6 +2882,14 @@ export function createCareRuntime(options = {}) {
       }
       return { ok: true, idempotent: true, status: statusFor(root) };
     }
+    // pause/resume 的目标状态已达成 ⇒ 同一次网络重试（携带旧 expectedRevision）也应幂等；
+    // 无副作用，不应以 revision 过期误报 409。reset 仍必须靠 requestId 识别重放。
+    if (action === "pause" && entry.group.paused === true) {
+      return { ok: true, idempotent: true, status: statusFor(root) };
+    }
+    if (action === "resume" && entry.group.paused !== true) {
+      return { ok: true, idempotent: true, status: statusFor(root) };
+    }
     if (typeof opts.expectedRevision === "number" && opts.expectedRevision !== entry.group.revision) {
       return { ok: false, code: "revision_conflict", revision: entry.group.revision };
     }
@@ -2862,11 +2905,11 @@ export function createCareRuntime(options = {}) {
     if (action === "pause") {
       if (entry.group.paused === true) return { ok: true, idempotent: true, status: statusFor(root) };
       const r = pauseCare(entry.group, tasks, timing);
-      nextGroup = { ...r.group, lastControlAction: "pause" }; nextTasks = r.tasks;
+      nextGroup = r.group; nextTasks = r.tasks;
     } else if (action === "resume") {
       if (entry.group.paused !== true) return { ok: true, idempotent: true, status: statusFor(root) };
       const r = resumeCare(entry.group, tasks, timing);
-      nextGroup = { ...r.group, lastControlAction: "resume" }; nextTasks = r.tasks;
+      nextGroup = r.group; nextTasks = r.tasks;
     } else {
       const r = resetCare(entry.group, tasks, timing);
       nextGroup = { ...r.group, lastControlRequestId: requestId, lastControlAction: "reset" };

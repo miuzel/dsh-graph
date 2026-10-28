@@ -324,6 +324,7 @@ export {
   careDedupeKey,
   careTaskDueAt,
   careTaskIntervalMs,
+  carePausedRemainingMs,
   decideCare,
   applyCareDelivery,
   applyCareOutcome,
