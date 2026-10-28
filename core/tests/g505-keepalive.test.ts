@@ -1916,6 +1916,10 @@ test("g505 GUI 契约：客户端三态写入点/生效读数与 zh/en 文案键
     "settings.keepAliveLabel", "settings.keepAliveHint", "settings.keepAliveAria",
     "settings.keepAliveInherit", "settings.keepAliveOn", "settings.keepAliveOff",
     "settings.keepAliveEffective", "settings.keepAliveMalformed", "settings.keepAliveTtlUnknown",
+    // 生效读数中性开关键 + 畸形告警分层键（review rev-att-003-01 注记 1/2 的渲染层断言在专用 UI 套件，
+    // 这里只钉住 zh/en 两语成对存在，避免键漏一侧）
+    "settings.keepAliveEffectiveOn", "settings.keepAliveEffectiveOff",
+    "settings.keepAliveMalformedOverridden", "settings.keepAliveMalformedUnknown",
     "settings.keepAliveTtlExplicit", "settings.keepAliveTtlMatched", "settings.keepAliveTtlUnmatched",
     "settings.keepAliveTtlMalformed", "settings.keepAliveTtlHint",
     "settings.keepAliveCapability", "settings.keepAliveUnavailable",

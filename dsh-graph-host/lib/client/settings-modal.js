@@ -111,6 +111,24 @@
       project_invalid: "settings.keepAliveSrcProjectInvalid",
       global_invalid: "settings.keepAliveSrcGlobalInvalid",
     };
+    /** **生效读数**用中性开关键（开启/关闭）。下拉选项文案「强制开启/强制关闭」只描述**写入意图**，
+     *  不能当生效读数用 —— 否则「跟随全局 + 内置默认」会渲染成「当前生效：强制开启 · 来源：内置默认」，
+     *  与「继承」自相矛盾（负责人 2026-10-28 现场困惑点）。 */
+    const KEEP_ALIVE_EFFECTIVE_LABEL_KEYS = {
+      on: "settings.keepAliveEffectiveOn",
+      off: "settings.keepAliveEffectiveOff",
+    };
+    /** 畸形告警分两层（绝不用一句「已按关闭」覆盖所有组合）：
+     *   · `project_invalid` / `global_invalid`：非法值 fail-closed ⇒ 实际确实按关闭，明确说「按关闭处理」；
+     *   · `project_explicit` + 全局畸形：项目显式值照常生效（可能开着）⇒ 只报「全局无效、项目覆盖生效」，
+     *     **不得**谎称已关闭，也不得把畸形全局静默吞掉；
+     *   · 其余未知/欠字段组合：不伪装生效，只指向**当前生效**读数自行判断（保守兜底）。 */
+    const keepAliveMalformedKey = (eff) => {
+      if (!eff || eff.malformed !== true) return null;
+      if (eff.source === "project_invalid" || eff.source === "global_invalid") return "settings.keepAliveMalformed";
+      if (eff.source === "project_explicit") return "settings.keepAliveMalformedOverridden";
+      return "settings.keepAliveMalformedUnknown";
+    };
     // ===== g-333：override + 空文本 ≡ disable =====
     // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
     // 读回即 disable；「空 override」在存储层不可表示）。这里把同一语义前移到**草稿归一化**与
@@ -1269,6 +1287,8 @@
               const status = form.supervisor?.keep_alive_status;
               const draft = normalizeKeepAliveDraft(form.supervisor?.keep_alive);
               const srcKey = eff ? KEEP_ALIVE_SOURCE_KEYS[eff.source] : null;
+              // 畸形告警的**唯一判定点**（按来源分层；渲染处只消费结果，避免两处各判一次漂移）
+              const malformedKey = keepAliveMalformedKey(eff);
               const unavailable = status && status.capable && status.capable.host_channel === false;
               return h("div", { style: { minWidth: 0 } },
                 h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
@@ -1283,9 +1303,11 @@
                 },
                   ...KEEP_ALIVE_MODES.map((m) => h("option", { key: m, value: m, style: policyOptionStyle }, dgT(KEEP_ALIVE_LABEL_KEYS[m])))),
                 // 生效值读数：必须有（否则用户无法判断 inherit 最终落到了开还是关）。
+                // 读数用**中性开关键**（开启/关闭），绝不复用选项文案「强制开启/强制关闭」。
                 eff
                   ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } },
-                      dgT("settings.keepAliveEffective").replace("{v}", eff.effective ? dgT("settings.keepAliveOn") : dgT("settings.keepAliveOff"))
+                      dgT("settings.keepAliveEffective").replace("{v}",
+                        eff.effective ? dgT(KEEP_ALIVE_EFFECTIVE_LABEL_KEYS.on) : dgT(KEEP_ALIVE_EFFECTIVE_LABEL_KEYS.off))
                         + (srcKey ? " · " + dgT(srcKey) : ""))
                   : null,
                 // 能力/缺口读数：TTL 未知是**已知限制**，必须如实显示（不按模型名猜长 TTL）。
@@ -1315,9 +1337,9 @@
                           ? ": " + status.capable.missing.join(", ")
                           : ""))
                   : null,
-                // 畸形取值：fail-closed 警示（服务端判为非法 ⇒ 实际按关闭处理，绝不猜开）
-                eff?.malformed
-                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT("settings.keepAliveMalformed"))
+                // 畸形取值：按**来源分层**警示（非法来源确按关闭；项目覆盖畸形全局时只报覆盖，不谎称关闭）
+                malformedKey
+                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT(malformedKey))
                   : null);
             })(),
 
