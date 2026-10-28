@@ -1321,17 +1321,19 @@ export function validateCareOutcome(input: {
   if (inspection.status === "failed" || inspection.status === "expired") {
     return { ok: false, code: "inspection_not_open" };
   }
-  if (input.now > inspection.expiresAt) return { ok: false, code: "expired" };
   const target = inspection.targets.find(
     (t) => t.goal === input.goal && t.attempt === input.attempt && t.child === input.child,
   );
   if (!target) return { ok: false, code: "target_not_in_inspection" };
   if (target.bindingVersion !== input.bindingVersion) return { ok: false, code: "stale_binding" };
   if (!input.outcome) return { ok: false, code: "invalid_outcome" };
+  // B17：已 resolved 的同值重试必须幂等（即使巡检 freshness 已过期）；只有**新的**结果
+  // 才受 expiresAt 约束，过期后不得再接受。
   if (target.outcome !== null) {
     const same = target.outcome === input.outcome && target.evidenceDigest === input.evidenceDigest;
     return same ? { ok: true, target, idempotent: true } : { ok: false, code: "already_resolved" };
   }
+  if (input.now > inspection.expiresAt) return { ok: false, code: "expired" };
   return { ok: true, target, idempotent: false };
 }
 

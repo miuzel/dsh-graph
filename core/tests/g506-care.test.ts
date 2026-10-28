@@ -332,6 +332,134 @@ test("g506 B11 单一 effective interval：暂停/继续/重置与 decision 同�
   assert.equal(multi.group.pausedRemainingMs, 59_000, "未回答任务 300s 不应被误选；取未锁最小值");
 });
 
+test("g506 B17 原子提交：care.outcome 成功后 escalated 单次写失败不半更新/不回滚，锁跨 reset/pause/重启保持", async () => {
+  const host = await makeRealHost();
+  const root = makeBoard("");
+  const sup = (await host.reg.create({ sessionId: "sup-atomic", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  const child = (await host.reg.create({ sessionId: "child-atomic", parentAgent: sup, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
+  host.adapter.hold("CHILD-ATOMIC");
+  child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-ATOMIC" }], source: { kind: "user" } }), "next-turn", true);
+  await waitFor(() => child.status === "running", "child running");
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const payload = boardPayload([{ id: "goal-atomic", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
+  let failEscalated = false;
+  let failedEscalated = 0;
+  const opts = {
+    clock, scheduler, payload, supervisorId: sup.id,
+    appendEventFn: (r: string, ev: any) => {
+      if (failEscalated && ev.event === "care.escalated") {
+        failEscalated = false;
+        failedEscalated += 1;
+        throw new Error("injected escalated append failure");
+      }
+      appendEvent(r, ev);
+    },
+  };
+  const first = await makeCareRuntime(host, opts);
+  first.runtime.start();
+  const submit = (inspection: string, outcome: string, evidence: string) => first.runtime.submitOutcome({
+    root, supervisor: sup.id, inspection, goal: "goal-atomic", attempt: "att-001", child: child.id, outcome, evidence,
+  });
+  const open = () => [...first.runtime.entryOfRoot(root).inspections.values()].find((i: any) => i.status !== "resolved" && i.status !== "failed" && i.status !== "expired");
+  try {
+    let ids: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      await first.runtime.sweep();
+      await waitFor(() => sup.status === "idle", `turn ${i}`);
+      const ins = open();
+      assert.ok(ins, `inspection ${i}`);
+      ids.push(ins.id);
+      if (i === 2) failEscalated = true;
+      const res = submit(ins.id, "no-progress", `p${i}`);
+      assert.equal(res.ok, true, JSON.stringify(res));
+      if (i < 2) assert.equal(res.stagnant_rounds, i + 1);
+      if (i === 2) {
+        assert.equal(res.human_locked, true);
+        assert.equal(res.stagnant_rounds, 3);
+        assert.equal(res.warning, "escalation_event_failed", "升级事件失败须如实以 warning 返回，但结果已提交");
+      }
+      clock.advance(31_000);
+    }
+    assert.equal(failedEscalated, 1);
+    const disk = readEvents(root).filter((e) => String(e.event).startsWith("care."));
+    assert.equal(disk.filter((e) => e.event === "care.outcome").length, 3);
+    assert.equal(disk.filter((e) => e.event === "care.escalated").length, 0);
+    const lastOutcome = disk.filter((e) => e.event === "care.outcome").pop()!;
+    assert.equal(lastOutcome.details.escalated, true);
+    assert.equal(lastOutcome.details.stagnation ?? lastOutcome.details.stagnant_rounds, 3);
+    assert.equal(lastOutcome.details.care_state.tasks[0].humanLocked, true);
+    assert.equal(lastOutcome.details.care_state.tasks[0].stagnantRounds, 3);
+    assert.equal(lastOutcome.actor, `supervisor:${sup.id}`);
+    const st = first.runtime.statusFor(root);
+    assert.equal(st.tasks[0].human_locked, true, "提交后内存必须立即与磁盘一致");
+    assert.equal(st.tasks[0].stagnant_rounds, 3);
+    assert.equal(st.phase, "awaiting_human");
+    assert.equal(st.pending_inspections.some((i: any) => i.id === ids[2] && i.status !== "resolved" && i.status !== "expired"), false);
+    // 后续 timer 不得重发第 4 次；reset/pause 也不能清锁。
+    clock.advance(400_000);
+    await scheduler.advanceTo(clock.now());
+    assert.equal(readEvents(root).filter((e) => e.event === "care.inspection").length, 3, "锁已提交，不得再发第 4 次");
+    const reset = first.runtime.control(root, "reset", { requestId: "atomic-reset" });
+    assert.equal(reset.ok, true);
+    assert.equal(first.runtime.statusFor(root).tasks[0].human_locked, true);
+    assert.equal(first.runtime.statusFor(root).tasks[0].stagnant_rounds, 3);
+    const paused = first.runtime.control(root, "pause", { requestId: "atomic-pause" });
+    assert.equal(paused.ok, true);
+    first.runtime.dispose();
+    const second = await makeCareRuntime(host, opts);
+    second.runtime.start();
+    try {
+      const restored = second.runtime.statusFor(root);
+      assert.equal(restored.tasks[0].human_locked, true, "重启不得从旧内存/旧快照回滚锁");
+      assert.equal(restored.tasks[0].stagnant_rounds, 3);
+      assert.equal(restored.phase, "paused", "已提交锁 + 用户 pause 保持暂停态");
+      assert.equal(restored.awaiting_human, true);
+      // 同 inspection 同 evidence 重试：幂等、不再写 care.outcome；不同结果冲突、0 新事件。
+      const before = readEvents(root).filter((e) => e.event === "care.outcome").length;
+      const retry = second.runtime.submitOutcome({ root, supervisor: sup.id, inspection: ids[2], goal: "goal-atomic", attempt: "att-001", child: child.id, outcome: "no-progress", evidence: "p2" });
+      assert.equal(retry.ok, true);
+      assert.equal(retry.idempotent, true);
+      assert.equal(readEvents(root).filter((e) => e.event === "care.outcome").length, before);
+      const conflict = second.runtime.submitOutcome({ root, supervisor: sup.id, inspection: ids[2], goal: "goal-atomic", attempt: "att-001", child: child.id, outcome: "progress", evidence: "different" });
+      assert.equal(conflict.ok, false);
+      assert.equal(conflict.code, "already_resolved");
+      assert.equal(readEvents(root).filter((e) => e.event === "care.outcome").length, before);
+    } finally { second.runtime.dispose(); }
+    // 首事件失败：0 内存改变、无计数，安全重试。
+    const root2 = makeBoard("");
+    const sup2 = (await host.reg.create({ sessionId: "sup-atomic2", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root2 } })).agent;
+    const child2 = (await host.reg.create({ sessionId: "child-atomic2", parentAgent: sup2, agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root2 } })).agent;
+    host.adapter.hold("CHILD-ATOMIC2");
+    child2.send(host.llm.createUserMessage({ content: [{ type: "text", text: "CHILD-ATOMIC2" }], source: { kind: "user" } }), "next-turn", true);
+    await waitFor(() => child2.status === "running", "child2 running");
+    const payload2 = boardPayload([{ id: "goal-a2", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child2.id, binding_version: 1, parent_session_id: sup2.id } }]);
+    let failOutcome = true;
+    const third = await makeCareRuntime(host, { clock, scheduler, payload: payload2, supervisorId: sup2.id, appendEventFn: (r: string, ev: any) => { if (failOutcome && ev.event === "care.outcome") { failOutcome = false; throw new Error("injected outcome append failure"); } appendEvent(r, ev); } });
+    third.runtime.start();
+    try {
+      await third.runtime.sweep();
+      await waitFor(() => sup2.status === "idle", "a2 turn");
+      const ins2 = [...third.runtime.entryOfRoot(root2).inspections.values()].find((i: any) => i.status !== "resolved" && i.status !== "failed");
+      assert.ok(ins2);
+      const bad = third.runtime.submitOutcome({ root: root2, supervisor: sup2.id, inspection: ins2.id, goal: "goal-a2", attempt: "att-001", child: child2.id, outcome: "no-progress", evidence: "first fails" });
+      assert.equal(bad.ok, false);
+      assert.equal(bad.code, "event_append_failed");
+      const afterBad = third.runtime.statusFor(root2);
+      assert.equal(afterBad.tasks[0].human_locked, false);
+      assert.equal(afterBad.tasks[0].stagnant_rounds, 0);
+      assert.equal(afterBad.pending_inspections.find((i: any) => i.id === ins2.id).targets[0].outcome, null);
+      const retry = third.runtime.submitOutcome({ root: root2, supervisor: sup2.id, inspection: ins2.id, goal: "goal-a2", attempt: "att-001", child: child2.id, outcome: "no-progress", evidence: "retry" });
+      assert.equal(retry.ok, true);
+      assert.equal(retry.stagnant_rounds, 1);
+      assert.equal(readEvents(root2).filter((e) => e.event === "care.outcome").length, 1);
+    } finally { third.runtime.dispose(); }
+  } finally {
+    host.adapter.releaseAll?.();
+    first.runtime.dispose();
+  }
+});
+
 test("g506 B15 补充：已投递巡检目标结束/换绑自动 expire，不阻塞仍活任务；旧结果拒绝", async () => {
   const host = await makeRealHost();
   const sup = (await host.reg.create({ sessionId: "sup-stale", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: WS } })).agent;

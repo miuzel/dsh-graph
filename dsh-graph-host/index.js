@@ -3034,40 +3034,12 @@ export function createCareRuntime(options = {}) {
     });
     const targetTask = applied.tasks.find((t) => t.child === String(input.child) && t.attempt === String(input.attempt)) ?? null;
     const newlyLocked = targetTask?.humanLocked === true && preTask?.humanLocked !== true;
-    // 事件先行：先写 care.outcome（必要时再写 care.escalated），再更新巡检记录与计数。
-    try {
-      const nextInspections = new Map(entry.inspections);
-      nextInspections.set(inspection.id, nextInspection);
-      const state = careStateSnapshot(entry, { group: applied.group, tasks: applied.tasks, inspections: [...nextInspections.values()] });
-      appendCareEvent(entry, "care.outcome", {
-        inspection: inspection.id,
-        supervisor: sup.sid,
-        goal: String(input.goal),
-        attempt: String(input.attempt),
-        child: String(input.child),
-        outcome,
-        evidence_digest: digest,
-        binding_version: bindingVersion,
-      }, state, `supervisor:${sup.sid}`);
-      if (newlyLocked) {
-        appendCareEvent(entry, "care.escalated", {
-          inspection: inspection.id,
-          supervisor: sup.sid,
-          goal: String(input.goal),
-          attempt: String(input.attempt),
-          child: String(input.child),
-          stagnant_rounds: targetTask?.stagnantRounds ?? maxRounds,
-          max_stagnant_rounds: maxRounds,
-          reason: "fresh_no_progress_limit",
-        }, state, `supervisor:${sup.sid}`);
-      }
-    } catch (e) {
-      return { ok: false, code: "event_append_failed", detail: String(e?.message ?? e).slice(0, 120) };
-    }
-    entry.inspections.set(inspection.id, nextInspection);
-    entry.group = applied.group;
-    entry.tasks = new Map(applied.tasks.map((t) => [taskKey(t), t]));
-    entry.lastOutcome = {
+    // B15/B16 commit point：`care.outcome` append 成功即视为提交；之后**立即、不可回滚**应用
+    // nextInspection/group/tasks/lastOutcome。升级事件只做 best-effort，失败也不能把已提交结果
+    // 报成失败、更不能让后续 timer/reset/pause 用旧内存覆盖已落盘锁。
+    const nextInspections = new Map(entry.inspections);
+    nextInspections.set(inspection.id, nextInspection);
+    const lastOutcomeRecord = {
       inspection: inspection.id,
       goal: String(input.goal),
       attempt: String(input.attempt),
@@ -3079,6 +3051,53 @@ export function createCareRuntime(options = {}) {
       stagnant_rounds: targetTask?.stagnantRounds ?? 0,
       human_locked: targetTask?.humanLocked === true,
     };
+    const state = careStateSnapshot(entry, { group: applied.group, tasks: applied.tasks, inspections: [...nextInspections.values()] });
+    state.lastOutcome = lastOutcomeRecord;
+    try {
+      appendCareEvent(entry, "care.outcome", {
+        inspection: inspection.id,
+        supervisor: sup.sid,
+        goal: String(input.goal),
+        attempt: String(input.attempt),
+        child: String(input.child),
+        outcome,
+        evidence_digest: digest,
+        binding_version: bindingVersion,
+        // B16：升级信息随同一 commit point 持久化，避免依赖第二个事件是否存在。
+        escalated: newlyLocked,
+        escalation_reason: newlyLocked ? "fresh_no_progress_limit" : null,
+        stagnant_rounds: targetTask?.stagnantRounds ?? 0,
+        max_stagnant_rounds: maxRounds,
+        human_locked: targetTask?.humanLocked === true,
+        human_reason: targetTask?.humanReason ?? null,
+      }, state, `supervisor:${sup.sid}`);
+    } catch (e) {
+      return { ok: false, code: "event_append_failed", detail: String(e?.message ?? e).slice(0, 120) };
+    }
+    // 提交成功：内存立即与落盘一致（不可等下一事件/下一次采样）。
+    entry.inspections.set(inspection.id, nextInspection);
+    entry.group = applied.group;
+    entry.tasks = new Map(applied.tasks.map((t) => [taskKey(t), t]));
+    entry.lastOutcome = lastOutcomeRecord;
+    let escalationWarning = null;
+    if (newlyLocked) {
+      try {
+        appendCareEvent(entry, "care.escalated", {
+          inspection: inspection.id,
+          supervisor: sup.sid,
+          goal: String(input.goal),
+          attempt: String(input.attempt),
+          child: String(input.child),
+          stagnant_rounds: targetTask?.stagnantRounds ?? maxRounds,
+          max_stagnant_rounds: maxRounds,
+          reason: "fresh_no_progress_limit",
+          human_reason: targetTask?.humanReason ?? "no_progress_limit",
+        }, state, `supervisor:${sup.sid}`);
+      } catch (e) {
+        escalationWarning = "escalation_event_failed";
+        try { process.stderr.write(`[dsh-graph-host] care.escalated 审计事件写失败（care.outcome 已提交，锁保持）：${String(e?.message ?? e).slice(0, 120)}\n`); } catch { /* 忽略 */ }
+      }
+    }
     scheduleEntry(entry);
     return {
       ok: true,
@@ -3093,6 +3112,7 @@ export function createCareRuntime(options = {}) {
       max_stagnant_rounds: maxRounds,
       human_locked: targetTask?.humanLocked === true,
       awaiting_human: applied.humanLocked,
+      ...(escalationWarning ? { warning: escalationWarning, escalation_logged: false } : {}),
     };
   };
 
