@@ -111,9 +111,8 @@
       else if (remainingMs === 0) label = dgT("care.dueNow");
       else label = dgT("care.noTasks");
 
-      const transportFailed = status?.reason === "delivery_failed_limit";
       const noTasks = phase === "idle" || (status?.tasks ?? []).length === 0;
-      const disabledAction = !status || effective === false || noTasks || (phase === "unavailable" && !transportFailed) || !status.supervisor_live;
+      const disabledAction = !status || effective === false || noTasks || phase === "unavailable" || !status.supervisor_live;
       const disabledReset = !status || effective === false || noTasks || !status.supervisor_live;
       const submit = (action) => {
         if (busy) return;
