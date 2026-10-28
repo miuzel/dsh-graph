@@ -159,6 +159,8 @@ import {
   reconcileMachineReportWithGitTruth,
   type ReviewPolicy,
 } from "./review-policy.ts";
+// g-505：主管上下文缓存保活的配置解析（两级三态）与只读投影（纯函数模块 keepalive.ts）。
+import { KEEP_ALIVE_EXEMPT_TTL_MS, normalizeKeepAliveMode, isKeepAliveModeMalformed, type KeepAliveMode } from "./keepalive.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
 export {
@@ -224,6 +226,57 @@ export type {
   GitTruthFacts,
 } from "./review-policy.ts";
 export type { AttemptGitTruth, AttemptGitTruthResult, AttemptGitTruthTree } from "./worktree.ts";
+// g-505：主管上下文缓存保活（纯函数模块 keepalive.ts）经 ops 统一 re-export，
+// host 半边只需从 ./core/ops.js 取用（与 review-policy / worktree 系列同款）。
+export {
+  KEEP_ALIVE_MODES,
+  KEEP_ALIVE_DEFAULT_ENABLED,
+  KEEP_ALIVE_STAGE1_DEFAULTS,
+  KEEP_ALIVE_STAGE2_DEFAULTS,
+  KEEP_ALIVE_SHORT_TTL_MS,
+  KEEP_ALIVE_PING_TIMEOUT_MS,
+  KEEP_ALIVE_EXEMPT_TTL_MS,
+  KEEP_ALIVE_CHANNELS,
+  KEEP_ALIVE_PHASES,
+  normalizeKeepAliveMode,
+  isKeepAliveModeMalformed,
+  normalizeKeepAliveGlobal,
+  isKeepAliveGlobalMalformed,
+  resolveKeepAlive,
+  keepAliveEffectiveProjection,
+  keepAliveResolutionOf,
+  keepAliveEffectiveOf,
+  resolveKeepAliveGlobalRaw,
+  resolveKeepAliveChannel,
+  decideKeepAlive,
+  defaultKeepAliveConfig,
+  makeKeepAliveAuditEntry,
+  formatKeepAliveAudit,
+  keepAliveStatusProjection,
+} from "./keepalive.ts";
+export type {
+  KeepAliveMode,
+  KeepAliveConfigValue,
+  KeepAliveSource,
+  KeepAliveProjectConfig,
+  KeepAliveGlobalConfig,
+  KeepAliveResolution,
+  KeepAliveEffectiveProjection,
+  KeepAliveChannel,
+  KeepAliveChannelReason,
+  KeepAliveCapabilities,
+  KeepAliveTtlProfile,
+  KeepAliveChannelDecision,
+  KeepAlivePhase,
+  KeepAliveConfig,
+  KeepAliveInputs,
+  KeepAliveDecision,
+  KeepAliveReason,
+  KeepAliveOutcome,
+  KeepAliveAuditEntry,
+  KeepAliveSnapshotUnavailable,
+  KeepAliveStatusProjection,
+} from "./keepalive.ts";
 export { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } from "./model.ts";
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
@@ -1696,6 +1749,30 @@ export interface ProjectConfig {
     automation: Record<string, string | null>;
     /** g-440：Agent Teams 最小契约开关（负责人资格判定）。null/未配置 = off。 */
     agent_teams: boolean | null;
+    /**
+     * g-505：主管上下文缓存保活的项目级三态（归一读值）。`null`/缺失 = 未配置 = `inherit`。
+     * 写侧 schema 只接受 `inherit`/`true`/`false`/null（拒绝隐式形态）。
+     */
+    keep_alive?: KeepAliveMode | null;
+    /**
+     * g-505 B5：**显式可信长 TTL**（可选，默认 null = 未知 ⇒ 短缓存有界策略）。
+     * 只接受同时给出完整 provider+model+ttl_ms 的条目；ttl_ms 必须 ≥
+     * `KEEP_ALIVE_EXEMPT_TTL_MS` 且 ≤ 24h。只有与**当前观察到的正常 loop route** 精确匹配时才豁免；
+     * 绝不按 provider/model 名字猜。
+     */
+    keep_alive_ttl?: { provider: string; model: string; ttl_ms: number } | null;
+    /** 读侧元信息：keep_alive_ttl 存在但形态非法（按未知 TTL 处理，不豁免）。 */
+    keep_alive_ttl_malformed?: boolean;
+    /** 读侧元信息：非法条目的 JSON 安全投影（仅展示）。 */
+    keep_alive_ttl_raw?: unknown;
+    /**
+     * g-505 **仅读侧元信息**（写侧 schema 明确拒绝）：`supervisor.keep_alive` 原始值存在但
+     * 无法判定为三态之一。宿主与调度器据此 **fail-closed 按关闭处理**，绝不把坏值归一
+     * `inherit` 后默认启用。
+     */
+    keep_alive_malformed?: boolean;
+    /** g-505 **仅读侧元信息**：畸形原始值的 JSON 安全投影（仅用于展示/诊断，绝不回写）。 */
+    keep_alive_raw?: unknown;
   };
   prompt_overrides: { subagent: PromptOverride };
   /**
@@ -2025,7 +2102,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     return {
       executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
-      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false },
       prompt_overrides: { subagent: { state: "default", value: null } },
       // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
       modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
@@ -2141,6 +2218,84 @@ export function readProjectConfig(root: string): ProjectConfig {
   const nonProductRead = list(["review", "non_product_prefixes"]);
   const policyResult = policyRead();
 
+  /**
+   * g-505：`supervisor.keep_alive` 的读侧装配（**原始值判畸形**，不拿归一后的形态判）。
+   *
+   * - 合法形态（真布尔 / `"inherit"`/`"true"`/`"false"` / 缺失 / null）⇒ 归一三态；
+   *   未配置保持 `null`（与显式 `inherit` 语义相同，但读回形状可区分）。
+   * - 畸形形态（数字、映射、数组、`"yes"`、`"on"`…）⇒ `keep_alive` 归一为 `inherit` 以保持
+   *   既有读回类型，但 **`keep_alive_malformed = true`** 且原值以 JSON 安全形态透出。
+   *   宿主/调度器必须据此 **fail-closed 关闭**，绝不「归一 inherit ⇒ 默认开启」。
+   * - 整档 YAML 不可解析 ⇒ 无法确认任何 supervisor 配置 ⇒ 同样 fail-closed。
+   */
+  const keepAliveRead = (): Pick<ProjectConfig["supervisor"], "keep_alive" | "keep_alive_malformed" | "keep_alive_raw"> => {
+    if (documentMalformed) {
+      return { keep_alive: null, keep_alive_malformed: true, keep_alive_raw: null };
+    }
+    let raw: unknown;
+    let present = false;
+    if (isPlainObject(parsedDoc) && "supervisor" in parsedDoc) {
+      const sv = (parsedDoc as any).supervisor;
+      if (isPlainObject(sv) && "keep_alive" in sv) {
+        raw = sv.keep_alive;
+        present = true;
+      }
+    } else {
+      const lineValue = readScalarByPath(lines, ["supervisor", "keep_alive"]);
+      if (lineValue !== null) {
+        raw = lineValue;
+        present = true;
+      }
+    }
+    if (!present || raw === null || raw === undefined) {
+      return { keep_alive: null, keep_alive_malformed: false };
+    }
+    if (isKeepAliveModeMalformed(raw)) {
+      // 原值只做 JSON 安全投影（标量/数组/映射都会被 JSON 序列化截断），不参与写回。
+      let safeRaw: unknown = null;
+      try { safeRaw = JSON.parse(JSON.stringify(raw)); } catch { safeRaw = null; }
+      return { keep_alive: normalizeKeepAliveMode(raw), keep_alive_malformed: true, keep_alive_raw: safeRaw };
+    }
+    return { keep_alive: normalizeKeepAliveMode(raw), keep_alive_malformed: false };
+  };
+  const keepAliveConfig = keepAliveRead();
+
+  /**
+   * g-505 B5：`supervisor.keep_alive_ttl` 的读侧装配（可选显式可信长 TTL）。
+   * 只认完整 `{provider, model, ttl_ms}` 映射；provider/model 非空字符串（≤128），
+   * ttl_ms 为 [KEEP_ALIVE_EXEMPT_TTL_MS, 24h] 的整数。缺失/null ⇒ null（未知）。
+   * 形态非法 ⇒ `keep_alive_ttl_malformed=true` + safe raw，但**不**关闭保活（回落未知 TTL 策略）。
+   */
+  const keepAliveTtlRead = (): Pick<ProjectConfig["supervisor"], "keep_alive_ttl" | "keep_alive_ttl_malformed" | "keep_alive_ttl_raw"> => {
+    if (documentMalformed) return { keep_alive_ttl: null, keep_alive_ttl_malformed: true, keep_alive_ttl_raw: null };
+    let raw: unknown;
+    let present = false;
+    if (isPlainObject(parsedDoc) && "supervisor" in parsedDoc) {
+      const sv = (parsedDoc as any).supervisor;
+      if (isPlainObject(sv) && "keep_alive_ttl" in sv) { raw = sv.keep_alive_ttl; present = true; }
+    }
+    if (!present || raw === null || raw === undefined) return { keep_alive_ttl: null, keep_alive_ttl_malformed: false };
+    const malformed = (safeRaw: unknown = raw) => {
+      let safe: unknown = null;
+      try { safe = JSON.parse(JSON.stringify(safeRaw)); } catch { safe = null; }
+      return { keep_alive_ttl: null, keep_alive_ttl_malformed: true, keep_alive_ttl_raw: safe };
+    };
+    if (!isPlainObject(raw)) return malformed();
+    const keys = Object.keys(raw);
+    if (keys.some((k) => !["provider", "model", "ttl_ms"].includes(k))) return malformed();
+    const provider = raw.provider;
+    const model = raw.model;
+    const ttl = raw.ttl_ms;
+    if (typeof provider !== "string" || provider.trim() === "" || provider.length > 128) return malformed();
+    if (typeof model !== "string" || model.trim() === "" || model.length > 128) return malformed();
+    if (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < KEEP_ALIVE_EXEMPT_TTL_MS || ttl > 86_400_000) return malformed();
+    return {
+      keep_alive_ttl: { provider: provider.trim(), model: model.trim(), ttl_ms: ttl },
+      keep_alive_ttl_malformed: false,
+    };
+  };
+  const keepAliveTtlConfig = keepAliveTtlRead();
+
   // 读侧元信息：逐字段标注「存在但不可用」的原因（指向 project.yaml），绝不把内部哨兵当配置条目暴露。
   const invalidFields: Record<string, string> = {};
   if (documentMalformed) {
@@ -2191,7 +2346,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
     },
-    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]) },
+    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]), ...keepAliveConfig, ...keepAliveTtlConfig },
     // g-480：五个模块开关（真布尔或 null=未配置）；旧键 `memory.tools_enabled` 只作为 **memory 模块
     // 的读侧默认**保留一次，并在 `modules.memory` 落盘时被删除（见 writeProjectConfig）⇒ 同一时刻
     // 只有一个生效真源，且旧值不会被静默丢弃（判据 5）。
@@ -2577,6 +2732,45 @@ function deleteLegacyMemoryToolsKey(lines: string[]): boolean {
   return true;
 }
 
+/**
+ * g-505：删除块映射里的一级标量子键（`parent:\n  child: ...`），用于把项目三态恢复成
+ * 「未配置 = inherit」（不把 `keep_alive: ` 空壳留在 project.yaml 里）。
+ * 只处理行级可编辑的块映射；父块本身保留（它可能还有 `session:` 等其它键）。
+ */
+function deleteScalarChild(lines: string[], parentPath: string[], childKey: string): boolean {
+  if (parentPath.length !== 1) return false;
+  const head = findKeyLine(lines, parentPath[0], 0, 0, lines.length);
+  if (head < 0) return false;
+  const after = lines[head].slice(lineIndent(lines[head]) + parentPath[0].length + 1);
+  if (splitValueComment(after).value.trim() !== "") return false; // 非块映射头 ⇒ 行级不可编辑
+  const childIdx = findKeyLine(lines, childKey, lineIndent(lines[head]) + 2, head + 1, blockChildrenEnd(lines, head, lineIndent(lines[head])));
+  if (childIdx < 0) return false;
+  lines.splice(childIdx, 1);
+  return true;
+}
+
+/** 删除 `parentPath.key` 的整个行级块（key 行 + 其缩进子块）。仅支持单层父块。 */
+function deleteMappingChild(lines: string[], parentPath: string[], key: string): boolean {
+  if (parentPath.length !== 1) return false;
+  const head = findKeyLine(lines, parentPath[0], 0, 0, lines.length);
+  if (head < 0) return false;
+  const after = lines[head].slice(lineIndent(lines[head]) + parentPath[0].length + 1);
+  if (splitValueComment(after).value.trim() !== "") return false;
+  const indent = lineIndent(lines[head]);
+  const childIdx = findKeyLine(lines, key, indent + 2, head + 1, blockChildrenEnd(lines, head, indent));
+  if (childIdx < 0) return false;
+  const childIndent = lineIndent(lines[childIdx]);
+  let end = childIdx + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (line.trim() === "") { end += 1; continue; }
+    if (lineIndent(line) <= childIndent) break;
+    end += 1;
+  }
+  lines.splice(childIdx, end - childIdx);
+  return true;
+}
+
 export function writeProjectConfig(root: string, patch: any, actor: string): void {
   // g-207：schema 严格校验（拒绝未知字段、类型不匹配、隐式 coercion）
   const schemaResult = validateSchema(patch, settingsPostSchema);
@@ -2623,6 +2817,28 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
   if (patch.supervisor && "agent_teams" in patch.supervisor) {
     const v = patch.supervisor.agent_teams;
     setScalar(["supervisor", "agent_teams"], v === true ? "true" : v === false ? "false" : "");
+  }
+  // g-505：保活三态落盘——`true`/`false` 写布尔字面量；`inherit`/null 清空该叶子（= 跟随全局，
+  // 也是默认态）。「清空」而非写字符串 "inherit"：未配置与显式 inherit 语义完全相同。
+  // 写侧不接受除此之外的形态（schema 已先拒绝），故这里不存在「坏值被归一后落盘」的路径。
+  if (patch.supervisor && "keep_alive" in patch.supervisor) {
+    const mode = normalizeKeepAliveMode(patch.supervisor.keep_alive);
+    if (mode === "inherit") {
+      deleteScalarChild(lines, ["supervisor"], "keep_alive");
+    } else {
+      setScalar(["supervisor", "keep_alive"], mode);
+    }
+  }
+  // g-505 B5：显式可信长 TTL 条目（完整 provider+model+ttl_ms）。null/缺省 ⇒ 删除整块（未知）。
+  if (patch.supervisor && "keep_alive_ttl" in patch.supervisor) {
+    const ttl = patch.supervisor.keep_alive_ttl;
+    if (!ttl) {
+      deleteMappingChild(lines, ["supervisor"], "keep_alive_ttl");
+    } else {
+      setScalar(["supervisor", "keep_alive_ttl", "provider"], ttl.provider);
+      setScalar(["supervisor", "keep_alive_ttl", "model"], ttl.model);
+      setScalar(["supervisor", "keep_alive_ttl", "ttl_ms"], String(ttl.ttl_ms));
+    }
   }
   if (patch.prompt_overrides) {
     for (const key of PROMPT_OVERRIDE_KEYS) {

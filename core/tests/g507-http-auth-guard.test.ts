@@ -193,6 +193,7 @@ const MIGRATED_SUITES = [
   "g450-flow-parent-write-guard.test.ts",
   "g462-board-design-modal.test.ts",
   "g481-help-modal.test.ts",
+  "g505-keepalive.test.ts",
   "inject-cards.test.ts",
   "inject-handoffs.test.ts",
   "lazy-loading.test.ts",

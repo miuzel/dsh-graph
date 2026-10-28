@@ -84,6 +84,8 @@ const KEY_ANCHORS: Record<string, string> = {
   "review.contract_paths": REVIEW_LIST_ANCHOR,
   "review.non_product_prefixes": REVIEW_LIST_ANCHOR,
   "supervisor.agent_teams": 'set(["supervisor", "agent_teams"], e.target.checked)',
+  // g-505：保活三态下拉的唯一写入点（「高级设置」页签；与 supervisor.automation 同页签同类）。
+  "supervisor.keep_alive": 'set(["supervisor", "keep_alive"], e.target.value === "inherit" ? null : e.target.value)',
   "local.refresh_interval": "onChange: (e) => handleIntervalChange(e.target.value)",
   "local.live_display": "setLiveDisplay(e.target.checked)",
   // g-488：`defaults.review.reviewer` / `defaults.review.prompt` / `defaults.pk.lanes` /

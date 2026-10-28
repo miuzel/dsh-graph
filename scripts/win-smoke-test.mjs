@@ -761,7 +761,7 @@ const OS_SITE_ROWS = [
   ["dsh-graph-host/index.js", "realpathSync", 4, ["resolveSchemastery", "discoverAttemptWorktrees"],
    "workspace canonical key / worktree 真实路径",
    "exempt:宿主 workspace 归一由 T4/T5 间接覆盖；软链拒绝见 pg:P2"],
-  ["dsh-graph-host/index.js", "statSync", 1, ["apply"],
+  ["dsh-graph-host/index.js", "statSync", 2, ["apply"],
    "文件 mtime 探测（REST 载荷）",
    "exempt:只读探测；REST 读路径由 T5 覆盖"],
 // 台账规模**不写死**：行数与命中数由 buildLedgerRow 汇总后运行时打印（`台账=<rows>项/<hits>处命中`），
