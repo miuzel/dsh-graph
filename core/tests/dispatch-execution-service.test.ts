@@ -53,12 +53,15 @@ function createHarness({
   providerHasPrepareContinuable = true,
   spawnError = null,
   gitRepo = false,
+  catalogChildren = [],
 }: {
   customWorkspace?: string;
   providers?: string[];
   providerHasPrepareContinuable?: boolean;
   spawnError?: string | null;
   gitRepo?: boolean;
+  // g-610：公开 durable 子代理目录桩（listChildren）。默认空目录 = 无可证明的 child。
+  catalogChildren?: any[];
 } = {}) {
   const ws = customWorkspace ?? mkdtempSync(join(tmpdir(), "dsh-graph-g241-ws-"));
   // g-283：worktree=true 会真实 `git worktree add`，需要真实 Git 仓库作为代码工作区。
@@ -74,7 +77,10 @@ function createHarness({
   }
   const root = join(ws, ".dsh-graph");
   init(root);
-
+  // g-610：spawn 错误可变（用于验证「失败被拦截 → 授权处理 → 重试成功」的恢复链）；
+  // catalog 是公开 durable 子代理目录的测试替身。
+  const spawnState = { error: spawnError as string | null };
+  const catalog = [...catalogChildren];
   let capturedRequests: any[] = [];
   const registeredTools: any[] = [];
   const registeredRoutes = new Map<string, any>();
@@ -95,9 +101,10 @@ function createHarness({
             }
             return {};
           },
+          listChildren: async () => catalog,
           startContinuable: async (opts: any) => {
             capturedRequests.push(opts);
-            if (spawnError) throw new Error(spawnError);
+            if (spawnState.error) throw new Error(spawnState.error);
             return { childId: "child-" + Math.random().toString(36).slice(2, 8), parentSessionId: "sess-super" };
           },
         };
@@ -126,6 +133,8 @@ function createHarness({
     registeredRoutes,
     execContext,
     capturedRequests,
+    spawnState,
+    catalog,
   };
 }
 
@@ -158,10 +167,13 @@ test("g-241 判据 1：工具与 HTTP 均注入 targetContext 且语义等价，
   const toolAttemptDoc = loadGoal(join(root, "versions", "v1.0", "goals", goalId, "attempts", toolRes.attempt, "attempt.md"));
   assert.equal(toolAttemptDoc.meta.parent_session_id, "sess-exec", "工具入口保留调用者会话作为 parent_session_id");
 
-  // 2. HTTP 入口执行
+  // 2. HTTP 入口执行（g-610：同 goal 已绑定 tool child ⇒ 必须换一个目标才能验证入口等价性；
+  //    严格单活门禁下同 goal 第二次派发应被拒绝，见 g610 专项用例）
+  const httpGoalId = createGoal(root, { title: "统一派发目标（HTTP）", version: "v1.0", actor: "human:gui" });
+  setCriteria(root, httpGoalId, ["判据 A：实现统一服务", "判据 B：测试通过"], "human:gui");
   const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
-    goal: goalId,
+    goal: httpGoalId,
     attempt_brief: "HTTP 派发 action",
   });
   const res = fakeRes();
@@ -180,9 +192,9 @@ test("g-241 判据 1：工具与 HTTP 均注入 targetContext 且语义等价，
   assert.ok(httpPrompt.includes("HTTP 派发 action"), "HTTP 入口 prompt 包含 brief");
 
   // HTTP 绑定的父会话来源为 supervisor.session
-  const httpAttemptDoc = loadGoal(join(root, "versions", "v1.0", "goals", goalId, "attempts", res._body.attempt, "attempt.md"));
+  const httpAttemptDoc = loadGoal(join(root, "versions", "v1.0", "goals", httpGoalId, "attempts", res._body.attempt, "attempt.md"));
   assert.equal(httpAttemptDoc.meta.parent_session_id, "sess-super", "HTTP 入口保留 supervisor 作为 parent_session_id");
-  const httpStartEv = readEvents(root).find((e) => e.event === "attempt.started" && e.details.attempt === res._body.attempt);
+  const httpStartEv = readEvents(root).find((e) => e.event === "attempt.started" && e.goal === httpGoalId && e.details.attempt === res._body.attempt);
   assert.equal(httpStartEv?.actor, "human:gui", "HTTP 入口保留 human:gui 身份");
 });
 
@@ -410,13 +422,16 @@ executor:
   mode: standard
 `, "utf8");
 
-  const goalId = createGoal(root, { title: "路由测试目标", version: "v1.0", actor: "human:gui" });
-  setCriteria(root, goalId, ["判据"], "human:gui");
+  // g-610：每个 case 独立 goal（同 goal 连续派发在严格单活门禁下会被拒绝）
+  const goal1 = createGoal(root, { title: "路由测试目标 1", version: "v1.0", actor: "human:gui" });
+  setCriteria(root, goal1, ["判据"], "human:gui");
+  const goal2 = createGoal(root, { title: "路由测试目标 2", version: "v1.0", actor: "human:gui" });
+  setCriteria(root, goal2, ["判据"], "human:gui");
 
   // Case 1: 显式 override 优先于 project.yaml
   const res1 = await toolsByName.get("graph_start_attempt")!.execute(
     {
-      goal: goalId,
+      goal: goal1,
       provider: "override-provider",
       model: "override-model",
       reasoning_effort: "low",
@@ -429,7 +444,7 @@ executor:
   assert.equal(res1.mode, "minimal");
   assert.equal(res1.mode_source, "override");
 
-  const doc1 = loadGoal(join(root, "versions", "v1.0", "goals", goalId, "attempts", res1.attempt, "attempt.md"));
+  const doc1 = loadGoal(join(root, "versions", "v1.0", "goals", goal1, "attempts", res1.attempt, "attempt.md"));
   assert.equal(doc1.meta.provider, "override-provider");
   assert.equal(doc1.meta.model, "override-model");
   assert.equal(doc1.meta.reasoning_effort, "low");
@@ -438,14 +453,14 @@ executor:
 
   // Case 2: 无 override 时回退 project.yaml
   const res2 = await toolsByName.get("graph_start_attempt")!.execute(
-    { goal: goalId, attempt_brief: "回退 project" },
+    { goal: goal2, attempt_brief: "回退 project" },
     execContext,
   );
   assert.equal(res2.model_route, "proj-provider/proj-model");
   assert.equal(res2.mode, "standard");
   assert.equal(res2.mode_source, "project");
 
-  const doc2 = loadGoal(join(root, "versions", "v1.0", "goals", goalId, "attempts", res2.attempt, "attempt.md"));
+  const doc2 = loadGoal(join(root, "versions", "v1.0", "goals", goal2, "attempts", res2.attempt, "attempt.md"));
   assert.equal(doc2.meta.provider, "proj-provider");
   assert.equal(doc2.meta.model, "proj-model");
   assert.equal(doc2.meta.mode, "standard");
@@ -458,11 +473,14 @@ executor:
 
 test("g-241 判据 5：空 action 协同回归（g-236 语义）——缺失 brief 与 directive 时自动规范化为默认 action，纯空白 brief 按空回退", async () => {
   const { ws, root, toolsByName, execContext, capturedRequests } = createHarness();
-  const goalId = createGoal(root, { title: "自动补全Action目标", version: "v1.0", actor: "human:gui" });
-  setCriteria(root, goalId, ["判据"], "human:gui");
+  // g-610：两次派发分别用独立 goal（严格单活门禁下同 goal 第二次会被拒绝）
+  const goal1 = createGoal(root, { title: "自动补全Action目标 1", version: "v1.0", actor: "human:gui" });
+  setCriteria(root, goal1, ["判据"], "human:gui");
+  const goal2 = createGoal(root, { title: "自动补全Action目标 2", version: "v1.0", actor: "human:gui" });
+  setCriteria(root, goal2, ["判据"], "human:gui");
 
   // 1. 未传 brief 且无 directive 时，生成基于目标意图的默认 action（fallback）
-  const res1 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goalId }, execContext);
+  const res1 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goal1 }, execContext);
   assert.equal(res1.brief, "执行目标描述和质量判据中的任务");
   assert.equal(res1.brief_source, "fallback");
   const prompt1 = capturedRequests[0].request.prompt[0].text;
@@ -470,7 +488,7 @@ test("g-241 判据 5：空 action 协同回归（g-236 语义）——缺失 bri
   assert.ok(!prompt1.includes("（未提供）\n> 未提供原因：本次请求未传 attempt_brief"));
 
   // 2. 显式传纯空白 brief 时，按 g-236 语义视为空并走回退（不抛错）
-  const res2 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goalId, attempt_brief: "   " }, execContext);
+  const res2 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goal2, attempt_brief: "   " }, execContext);
   assert.equal(res2.brief, "执行目标描述和质量判据中的任务");
   assert.equal(res2.brief_source, "fallback");
 });
@@ -531,12 +549,17 @@ test("g-241 判据 5：准入门禁失败协同回归——未规划/阻塞/已�
 test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——patch/chore 在 worktree=true 时仍强制隔离", async () => {
   // g-283：worktree=true 现在会真实建树，需真实 Git 仓库，否则按「非 git 仓库失败即停」拒绝派发。
   const { root, toolsByName, execContext, capturedRequests } = createHarness({ gitRepo: true });
-  const patchGoal = createGoal(root, { title: "补丁目标", version: "v1.0", type: "patch", actor: "human:gui" });
-  setCriteria(root, patchGoal, ["判据"], "human:gui");
+  // g-610：三个 case 分别用独立 goal（同 goal 连续派发在严格单活门禁下会被拒绝）
+  const patchGoal1 = createGoal(root, { title: "补丁目标 1", version: "v1.0", type: "patch", actor: "human:gui" });
+  setCriteria(root, patchGoal1, ["判据"], "human:gui");
+  const patchGoal2 = createGoal(root, { title: "补丁目标 2", version: "v1.0", type: "patch", actor: "human:gui" });
+  setCriteria(root, patchGoal2, ["判据"], "human:gui");
+  const patchGoal3 = createGoal(root, { title: "补丁目标 3", version: "v1.0", type: "patch", actor: "human:gui" });
+  setCriteria(root, patchGoal3, ["判据"], "human:gui");
 
   // 1. patch 目标显式 worktree=true → 必须包含【强制 worktree 隔离】
   await toolsByName.get("graph_start_attempt")!.execute(
-    { goal: patchGoal, worktree: true, attempt_brief: "强制隔离补丁" },
+    { goal: patchGoal1, worktree: true, attempt_brief: "强制隔离补丁" },
     execContext,
   );
   const prompt1 = capturedRequests[0].request.prompt[0].text;
@@ -545,7 +568,7 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
 
   // 2. patch 目标省略 worktree → 默认轻量通道【微小改动/轻量任务快速通道】
   await toolsByName.get("graph_start_attempt")!.execute(
-    { goal: patchGoal, attempt_brief: "轻量通道补丁" },
+    { goal: patchGoal2, attempt_brief: "轻量通道补丁" },
     execContext,
   );
   const prompt2 = capturedRequests[1].request.prompt[0].text;
@@ -554,7 +577,7 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
 
   // 3. patch 目标显式 worktree=false → 仍走 minor-task 豁免指引（不强制隔离）
   await toolsByName.get("graph_start_attempt")!.execute(
-    { goal: patchGoal, worktree: false, attempt_brief: "完全豁免" },
+    { goal: patchGoal3, worktree: false, attempt_brief: "完全豁免" },
     execContext,
   );
   const prompt3 = capturedRequests[2].request.prompt[0].text;
@@ -562,16 +585,15 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
   assert.ok(prompt3.includes("【微小改动/轻量任务快速通道】"), "patch 显式 worktree=false → minor-task 豁免指引");
 });
 
-test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时 attempt 成功审计，child_error 明确上报，无无主运行 child", async () => {
-  const { ws, root, toolsByName, registeredRoutes, execContext } = createHarness({
-    spawnError: "LLM quota exceeded or model overloaded",
-  });
+test("g-610/g-241 判据 5：spawn 异常先被严格门禁拦截，经授权 abandon + 公开目录证据后才可重试（无无主运行 child）", async () => {
+  const h = createHarness({ spawnError: "LLM quota exceeded or model overloaded" });
+  const { ws, root, toolsByName, registeredRoutes, execContext, capturedRequests } = h;
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
 
   const goalId = createGoal(root, { title: "派发失败测试", version: "v1.0", actor: "human:gui" });
   setCriteria(root, goalId, ["判据"], "human:gui");
 
-  // 1. 工具入口派发失败
+  // 1. 工具入口派发失败：attempt 审计保留、child_error 明确、无 child
   const toolRes = await toolsByName.get("graph_start_attempt")!.execute(
     { goal: goalId, attempt_brief: "测试失败处理" },
     execContext,
@@ -580,9 +602,18 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   assert.equal(toolRes.child_id, null);
   assert.ok(toolRes.child_error?.includes("LLM quota exceeded"));
   assert.ok(toolRes.note?.includes("subagent 派发失败（attempt 已本地创建）"));
+  // g-610：spawn 抛出无法证明未创建 child ⇒ 记录 spawn_unknown（fail-closed），不是「安全失败」
+  const firstAttFile = join(root, "versions", "v1.0", "goals", goalId, "attempts", toolRes.attempt, "attempt.md");
+  const firstMeta = loadGoal(firstAttFile).meta;
+  assert.equal(firstMeta.dispatch_state, "spawn_unknown");
+  assert.equal(firstMeta.dispatch_call_settled, true, "已观察到 spawn Promise 结算");
+  assert.equal(firstMeta.child_id, null);
+  const ev = readEvents(root).find((e) => e.event === "attempt.dispatch_failed" && e.details.attempt === toolRes.attempt);
+  assert.equal(ev?.details.state, "spawn_unknown");
 
-  // 2. HTTP 入口派发失败
-  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
+  // 2. HTTP 入口对同一 goal 的第二次派发：必须 409 拒绝，零新 spawn/attempt/worktree
+  const spawnsBefore = capturedRequests.length;
+  const handler = handlerFor(routeDefs);
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
     attempt_brief: "HTTP 失败测试",
@@ -591,17 +622,41 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   const p = handler(req, res);
   req._emit();
   await p;
+  assert.equal(res._code, 409, "旧 spawn_unknown 未处理前必须拒绝，而不是再派发一次");
+  assert.equal(res._body.code, "EXECUTION_STATE_UNKNOWN");
+  assert.equal(res._body.child_id, undefined);
+  assert.equal(capturedRequests.length, spawnsBefore, "被拒绝的派发不得 spawn");
+  assert.equal(goalDetail(root, goalId).attempts.length, 1, "被拒绝的派发不得创建 attempt");
 
-  assert.equal(res._code, 200);
-  assert.ok(res._body.attempt.startsWith("att-"));
-  assert.equal(res._body.child_id, null);
-  assert.ok(res._body.child_error?.includes("LLM quota exceeded"));
+  // 3. 授权 owner 经真实 REST abandon 处理旧 attempt：公开 durable 目录无该 child + spawn 已结算 ⇒ 允许
+  const abandonReq = fakeReq("POST", "/api/dsh-graph/abandon-attempt?workspace=" + encodeURIComponent(ws), {
+    goal: goalId,
+    attempt: toolRes.attempt,
+    reason: "spawn 抛错且公开目录无该 child：确认无在途 child 后放弃旧 attempt",
+  });
+  const abandonRes = fakeRes();
+  const ap = handler(abandonReq, abandonRes);
+  abandonReq._emit();
+  await ap;
+  assert.equal(abandonRes._code, 200, "公开目录可证明 + 调用已结算时应允许授权 abandon");
+  const afterAbandon = loadGoal(firstAttFile).meta;
+  assert.equal(afterAbandon.result, "cancelled");
+  assert.equal(afterAbandon.detached, true);
+  const abandonEv = readEvents(root).find((e) => e.event === "attempt.abandoned" && e.details.attempt === toolRes.attempt);
+  assert.equal(abandonEv?.details.spawn_evidence?.supported, true);
+  assert.deepEqual(abandonEv?.details.spawn_evidence?.matched, []);
 
-  // 审计：两个 attempt 均在本地磁盘正确记录，且 child_id 均为 null，无悬空绑定
+  // 4. 旧 attempt 已显式处理 + spawn 恢复正常 ⇒ 合法重试成功（只产生一个 child 绑定）
+  h.spawnState.error = null;
+  const retry = await toolsByName.get("graph_start_attempt")!.execute(
+    { goal: goalId, attempt_brief: "恢复后重试" },
+    execContext,
+  );
+  assert.ok(retry.child_id, "恢复后应正常启动 child");
   const detail = goalDetail(root, goalId);
   assert.equal(detail.attempts.length, 2);
-  assert.equal(detail.attempts[0].child_id, null);
-  assert.equal(detail.attempts[1].child_id, null);
+  assert.equal(detail.attempts[0].child_id, null, "失败 attempt 无悬空绑定");
+  assert.equal(detail.attempts[1].child_id, retry.child_id, "仅新 attempt 持有唯一 child");
 });
 
 test("g-270: 目标描述含闭合围栏内 ## 伪标题时，prompt 目标描述不截断且质量判据完整", async () => {

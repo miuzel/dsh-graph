@@ -7,6 +7,29 @@ export class GraphError extends Error {}
 /** g-170：并发冲突（乐观 base_items 不一致）专用错误——REST 层映射为 409。 */
 export class GraphConflictError extends GraphError {}
 
+/** g-610：同一 workspace+goal 已存在活动/启动中/状态未知的执行 attempt 时的**稳定拒绝错误**。
+ *
+ *  与 GraphConflictError 一样由 REST 层映射为 409（工具入口在 message 前缀写 `[code]`，保证
+ *  harness 只显示文本时也可机读）。`activity` 只含 attempt/child/dispatch 的可公开身份，
+ *  **绝不**包含 binding token；`recovery` 是给有权限的人类/主管的可执行恢复指引（不含凭据）。 */
+export class GraphExecutionBusyError extends GraphConflictError {
+  code: string;
+  activity: Array<Record<string, unknown>>;
+  recovery: string;
+  constructor(
+    code: string,
+    message: string,
+    activity: Array<Record<string, unknown>> = [],
+    recovery = "",
+  ) {
+    super(`[${code}] ${message}`);
+    this.name = "GraphExecutionBusyError";
+    this.code = code;
+    this.activity = activity;
+    this.recovery = recovery;
+  }
+}
+
 export const STATUSES = [
   "draft",
   "planning",

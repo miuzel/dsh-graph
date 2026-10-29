@@ -251,6 +251,8 @@ test("g-507 S5：迁移清单上的旧套件全部经唯一门禁入口驱动（
     "g507-http-auth-surface.test.ts",
     "g507-http-auth-real-host.test.ts",
     "g251-brief-source-contract.test.ts",
+    // g-610：新增套件（非迁移对象，但同样装配插件并驱动唯一门禁入口）。
+    "g610-single-active-dispatch.test.ts",
   ]);
   // 清单不得漏（有端点引用 + 装配入口 + 已适配）的套件
   const missingFromList = outsideList.filter(

@@ -59,6 +59,11 @@ export class TxCasError extends TxError {
   }
 }
 
+/** g-610：**仅锁获取失败**（超时/同进程嵌套）的错误类型。
+ *  与调度回调内部抛出的 TxError（事件/持久化失败）区分开——宿主只能把前者映射为
+ *  「派发忙，请重试」，绝不能把事件写失败误报成锁竞争。 */
+export class TxLockTimeoutError extends TxError {}
+
 /** 事务上下文：携带诊断信息，不吞错。 */
 export interface TxContext {
   root: string;
@@ -439,6 +444,40 @@ export function withTx<T>(
       return { ok: false, phase: e.phase, error: e.message, recoverable: e.recoverable };
     }
     return { ok: false, phase, error: String((e as Error)?.message ?? e), recoverable: false };
+  }
+}
+
+/** g-610：同步短锁——把一段**同步**临界区串行化，绝不跨 await 持有。
+ *
+ *  复用 {@link acquireLock}/{@link releaseLock} 的同一套 O_EXCL+PID+陈旧锁语义；
+ *  与 withTx 的区别只有两点：①不提供 event/persist 契约（调用方自己组织，但**不得**在
+ *  `fn` 里 await）；②`fn` 抛错也保证在 finally 释放本次确实取得的锁。
+ *
+ *  用途（唯一生产调用点 = 宿主派发 `dispatchExecutionAttempt`）：同一 workspace+goal 的
+ *  「门禁重查 → attempt ID 预测 → 建树 → 状态迁移 → 落盘 attempt」必须对第二个派发者
+ *  原子可见，否则两个进程都能在各自的门禁与 startAttempt 之间穿过。锁名按 root+goal
+ *  天然隔离（不同 goal/workspace 不互锁）。
+ *
+ *  ⚠️ `fn` 必须是同步函数：锁基于阻塞式 `Atomics.wait` 轮询，跨 await 持锁会让同一进程的
+ *  长任务（子代理）把别的 goal 的派发/解绑全部卡住。子代理启动必须在本函数返回之后。
+ */
+export function withLocalLock<T>(
+  root: string,
+  name: string,
+  fn: () => T,
+  opts: { lockTimeoutMs?: number } = {},
+): T {
+  const lockPath = lockFilePath(root, name);
+  try {
+    acquireLock(lockPath, opts.lockTimeoutMs ?? 5000);
+  } catch (e) {
+    if (e instanceof TxError) throw new TxLockTimeoutError(e.message, e.phase, true);
+    throw e;
+  }
+  try {
+    return fn();
+  } finally {
+    releaseLock(lockPath);
   }
 }
 

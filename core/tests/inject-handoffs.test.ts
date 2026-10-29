@@ -31,6 +31,7 @@ import {
   recordAttemptHandoff,
   harvestReviewedAttemptHandoffs,
   formatReviewedAttemptHandoffsSection,
+  saveGoal,
 } from "../ops.ts";
 import { serializeDoc } from "../model.ts";
 import { readEvents } from "../events.ts";
@@ -353,12 +354,24 @@ function execCtx(ws: string) {
   return { agent: { session: { id: "sess-exec", header: { cwd: ws } } }, signal: new AbortController().signal };
 }
 
+/** g-610：把 fixture 里用于「历史来源」的 attempt 标记为显式终结（detached + completed）。
+ *  严格单活门禁只放行「没有任何 pending 未 detached 执行 attempt」的目标；历史 attempt 若不写
+ *  终结态会被视为状态未知而被拦截（这正是新门禁的语义，不能靠放松门禁来迁就 fixture）。 */
+function markAttemptHistorical(root: string, goal: string, att: string): void {
+  const file = join(dirname(findGoalFile(root, goal)), "attempts", att, "attempt.md");
+  const doc = loadGoal(file);
+  doc.meta.result = "completed";
+  doc.meta.detached = true;
+  saveGoal(file, doc);
+}
+
 /** 创建带一个已确认 handoff 的目标（用于 host 测试）。
  *  g-237：派发前有执行准入门禁，fixture 需先登记判据（否则 planning 无判据会被拒绝）。 */
 function goalWithHandoff(root: string): { goal: string; att: string } {
   const goal = createGoal(root, { title: "handoff目标", version: "v-t", actor: "test" });
   setCriteria(root, goal, ["判据：handoff 注入行为正确"], "test");
   const att = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
+  markAttemptHistorical(root, goal, att);
   recordAttemptHandoff(root, goal, {
     source_attempts: [att],
     failures: "模块 X 崩溃于 L42",
@@ -604,6 +617,8 @@ test("g-150：attempt 的 status_line、执行笔记等未复核内容不被注�
   const dir = goalFile.replace(/goal\.md$/, "");
   const attDoc = loadGoal(join(dir, "attempts", att1, "attempt.md"));
   attDoc.meta.status_line = "我发现模块 X 有问题";
+  attDoc.meta.result = "completed";
+  attDoc.meta.detached = true;
   writeFileSync(join(dir, "attempts", att1, "attempt.md"), serializeDoc(attDoc), "utf8");
 
   const captured: { prompt?: string } = {};
@@ -623,6 +638,7 @@ test("g-150：新登记覆盖旧内容，prompt 只含最新 handoff", async () 
   const goal = createGoal(root, { title: "覆盖prompt", version: "v-t", actor: "test" });
   setCriteria(root, goal, ["判据：覆盖语义正确"], "test");
   const att1 = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
+  markAttemptHistorical(root, goal, att1);
   recordAttemptHandoff(root, goal, {
     source_attempts: [att1],
     failures: "旧失败内容",
@@ -633,6 +649,7 @@ test("g-150：新登记覆盖旧内容，prompt 只含最新 handoff", async () 
     actor: "supervisor:s1",
   });
   const att2 = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
+  markAttemptHistorical(root, goal, att2);
   recordAttemptHandoff(root, goal, {
     source_attempts: [att2],
     failures: "新失败内容",
@@ -685,6 +702,7 @@ test("g-150：handoff 段与 cards 段独立注入，互不干扰", async () => 
   const c1 = addCard(root, goal, { title: "研究卡", kind: "text", actor: "test", scope: "goal" });
   fillCard(root, goal, c1, { text: "研究内容", summary: "摘要", by: "human:a", actor: "test" });
   const att1 = startAttempt(root, goal, { executor: "agent:t", actor: "test" });
+  markAttemptHistorical(root, goal, att1);
   recordAttemptHandoff(root, goal, {
     source_attempts: [att1],
     failures: "handoff 失败",

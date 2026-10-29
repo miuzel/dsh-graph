@@ -110,8 +110,8 @@ import {
   type MemoryKind,
   type MemoryScope,
 } from "./events.ts";
-import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
-import { withTx, TxError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
+import { GraphError, GraphConflictError, GraphExecutionBusyError, STATUSES, assertTransition } from "./machine.ts";
+import { withTx, withLocalLock, TxError, TxLockTimeoutError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
 import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, assertVersionSlug, isVersionSlug, type ObjectSchema } from "./schema.ts";
 
 import {
@@ -281,7 +281,8 @@ export { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } fr
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
 export type { ObjectSchema };
-export { TxError };
+export { TxError, TxLockTimeoutError, withLocalLock };
+export { GraphExecutionBusyError };
 import { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, getCachedBoardPayload as getCachedBoardPayloadCore, _inspectBoardCache, closeWatchers } from "./cache.ts";
 import { invalidate as invalidateGeneration } from "./cache-state.ts";
 export { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, _inspectBoardCache, closeWatchers };
@@ -8701,6 +8702,158 @@ function attemptWorktreeEvidence(root: string, goalId: string, attemptId: string
 export const DESCRIPTION_GATE_STATUSES: ReadonlySet<string> = new Set(["collecting", "ready"]);
 
 /**
+ * g-610：attempt 的派发状态（落盘到 attempt.md `meta.dispatch_state`）。
+ *
+ * 为什么必须有这个字段：attempt 在 spawn **之前**就落盘（否则并发派发看不到任何门禁），
+ * 而 bind 之前 `child_id` 仍为空——单看 `child_id` 无法区分「正在异步启动」「spawn 已抛错但
+ * 无法证明无 child」「创建了 child 但绑定失败」与「旧数据残留」。缺少状态就只能靠 idle/gone/
+ * mtime 猜，正是本目标要消灭的不安全推断。
+ *
+ * 旧记录没有该字段：一律按「未知」参与派发门禁（fail-closed），恢复仍走既有 owner/主管
+ * abandon 通道，绝不按年龄/目录存在自动放行。
+ */
+export const ATTEMPT_DISPATCH_STATES = ["spawning", "bound", "not_spawned", "spawn_unknown", "bind_failed"] as const;
+export type AttemptDispatchState = (typeof ATTEMPT_DISPATCH_STATES)[number];
+
+export function normalizeAttemptDispatchState(value: unknown): AttemptDispatchState | null {
+  return typeof value === "string" && (ATTEMPT_DISPATCH_STATES as readonly string[]).includes(value)
+    ? (value as AttemptDispatchState)
+    : null;
+}
+
+/** 门禁命中的原因闭集（与错误 code 一一对应；`child_bound` 优先于其它）。 */
+export type ActiveExecutionReason = "child_bound" | "spawning" | "bind_failed" | "unknown";
+
+export interface ActiveExecutionAttempt {
+  attempt: string;
+  child_id: string | null;
+  orphan_child_id: string | null;
+  result: string;
+  dispatch_state: AttemptDispatchState | null;
+  dispatch_owner_pid: number | null;
+  started_at: string | null;
+  executor: string | null;
+  reason: ActiveExecutionReason;
+}
+
+/**
+ * g-610：枚举该目标**所有**仍可能占用一次执行派发的 attempt（不是只看最新一个）。
+ *
+ * 判定（严格拒绝策略，负责人已裁定）：
+ *  - `detached === true` / `result !== "pending"` / `executor === "agent:collect"` ⇒ 不占执行绑定；
+ *  - `result === "pending"` 且 `child_id` 非空 ⇒ `child_bound`（**不论 live registry 是否 gone/idle**）；
+ *  - 无 child：`dispatch_state === "spawning"` ⇒ `spawning`；
+ *                `bind_failed` 或遗留 `orphan_child_id` ⇒ `bind_failed`；
+ *                `spawn_unknown` 或**旧数据缺少 dispatch_state**（以及其它未知/矛盾值）⇒ `unknown`；
+ *                `not_spawned` ⇒ 证明未发生 spawn（无 provider/subagents 的前置失败），不占；
+ *                `bound` 但无 child（矛盾记录）⇒ `unknown`。
+ *
+ * 读不出的坏 attempt 文件跳过（与既有 readGoalBinding 同口径）——否则一个坏文件就能永久
+ * 锁死目标且没有可执行的恢复入口。
+ */
+export function listActiveExecutionAttempts(root: string, goalId: string): ActiveExecutionAttempt[] {
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") return [];
+  const attDir = join(goalDirOf(goalFile), "attempts");
+  if (!existsSync(attDir)) return [];
+  const out: ActiveExecutionAttempt[] = [];
+  for (const a of readdirSync(attDir).filter((d) => d.startsWith("att-")).sort()) {
+    const f = join(attDir, a, "attempt.md");
+    if (!existsSync(f)) continue;
+    let doc: GoalDoc;
+    try {
+      doc = loadGoal(f);
+    } catch {
+      continue; // 坏 attempt 文件：跳过（与 readGoalBinding 旧口径一致，避免无恢复入口的永久锁）
+    }
+    if (doc.meta.id !== a || doc.meta.goal !== goalId) continue; // 归属校验
+    if (doc.meta.detached === true) continue;
+    if (doc.meta.executor === "agent:collect") continue;
+    const result = String(doc.meta.result ?? "pending");
+    if (result !== "pending") continue; // 已显式终结的记录不占执行绑定
+    const childId = doc.meta.child_id ? String(doc.meta.child_id) : null;
+    const orphanId = doc.meta.orphan_child_id ? String(doc.meta.orphan_child_id) : null;
+    const state = normalizeAttemptDispatchState(doc.meta.dispatch_state);
+    let reason: ActiveExecutionReason | null = null;
+    if (childId) reason = "child_bound";
+    else if (state === "spawning") reason = "spawning";
+    else if (state === "bind_failed" || orphanId) reason = "bind_failed";
+    else if (state === "not_spawned") reason = null; // 证明未 spawn 的前置失败：允许重试
+    else reason = "unknown"; // spawn_unknown / bound 但无 child / 旧数据缺字段
+    if (!reason) continue;
+    out.push({
+      attempt: a,
+      child_id: childId,
+      orphan_child_id: orphanId,
+      result,
+      dispatch_state: state,
+      dispatch_owner_pid: Number.isFinite(Number(doc.meta.dispatch_owner_pid)) ? Number(doc.meta.dispatch_owner_pid) : null,
+      started_at: doc.meta.started_at ? String(doc.meta.started_at) : null,
+      executor: doc.meta.executor ? String(doc.meta.executor) : null,
+      reason,
+    });
+  }
+  return out;
+}
+
+/** g-610：同一 workspace+goal 的派发门禁（工具与 HTTP 共用；零副作用、force 不绕过）。 */
+export function assertNoActiveExecutionAttempt(root: string, goalId: string): void {
+  const active = listActiveExecutionAttempts(root, goalId);
+  if (!active.length) return;
+  const publicActivity = active.map((a) => ({
+    attempt: a.attempt,
+    child_id: a.child_id,
+    orphan_child_id: a.orphan_child_id,
+    result: a.result,
+    dispatch_state: a.dispatch_state,
+    started_at: a.started_at,
+    executor: a.executor,
+    reason: a.reason,
+  }));
+  const list = active.map((a) => `${a.attempt}（${a.reason}${a.child_id ? `，child=${a.child_id}` : ""}${a.orphan_child_id ? `，orphan_child=${a.orphan_child_id}` : ""}）`).join("、");
+  const busy = "同一 workspace + goal 已存在未处理的执行 attempt：" + list + "。";
+  const recovery =
+    "请先确认旧执行已停稳，再由目标 owner/主管按既有授权显式处理旧 attempt：" +
+    "已绑定 child 用 graph_unbind_goal_child(goal, attempt, token)（token 见 graph_get_goal 的 attempt_binding，不在本错误中输出）；" +
+    "无 child 的启动中/未知记录用 graph_abandon_attempt(goal, attempt, reason)。本门禁不接受 force 绕过。";
+  if (active.some((a) => a.reason === "child_bound")) {
+    throw new GraphExecutionBusyError(
+      "EXECUTION_ALREADY_ACTIVE",
+      busy + "同一目标不允许并行派发第二个执行子代理（旧 child 即使显示 idle/gone 也不自动视为已停稳）。" + recovery,
+      publicActivity,
+      recovery,
+    );
+  }
+  if (active.some((a) => a.reason === "spawning")) {
+    throw new GraphExecutionBusyError(
+      "EXECUTION_STARTING",
+      busy + "该 attempt 的异步 spawn 尚未结算（已建 attempt、尚未绑定 child），不能据此判定安全。" +
+        "请等待其完成绑定或失败结算；【已知限制】若宿主已重启、spawn 从未结算且公开 durable 子代理目录中也没有" +
+        "该 attempt 的 child，本引擎**无法从公开证据证明其已停稳**，将持续 fail-closed，需人工处理/负责人裁定，" +
+        "禁止按 PID/年龄/时间或未经验证的签字自行放行（本限制如实登记，不宣称所有重启都能自动恢复）。",
+      publicActivity,
+      recovery,
+    );
+  }
+  if (active.some((a) => a.reason === "bind_failed")) {
+    throw new GraphExecutionBusyError(
+      "EXECUTION_BIND_FAILED",
+      busy + "该 attempt 的 child 已启动但绑定失败（或存在孤儿 child），请求中断不等于已停稳。" +
+        "请先确认该 child 真正不运行，再按既有授权处理旧 attempt。",
+      publicActivity,
+      recovery,
+    );
+  }
+  throw new GraphExecutionBusyError(
+    "EXECUTION_STATE_UNKNOWN",
+    busy + "无法判定该 attempt 是否仍可能创建/持有 child（spawn 结果未知或旧数据缺少 dispatch 状态）。" +
+      "按 fail-closed 拒绝新派发；不会按 idle/gone/年龄自动放行。",
+    publicActivity,
+    recovery,
+  );
+}
+
+/**
  * g-237/g-241：执行准入门禁校验（工具/HTTP 共享，零副作用）。
  * 在派发 attempt / 启动子代理之前完成完整准入核验：
  * - 位置与状态：backlog/draft/blocked/delivered 直接拒绝；
@@ -8747,9 +8900,10 @@ export function assertExecutionAdmission(
       `请先用 graph_set_description 补写目标描述（写清要做什么、边界与验收），再重试 graph_start_attempt`,
     );
   };
-  // 已在执行：幂等放行，无需再次迁移
+  // 已在执行：仍需通过「同目标单活」门禁（g-610）——状态幂等 ≠ 允许并行第二个 child。
   if (status === "in_progress") {
     assertDescription();
+    assertNoActiveExecutionAttempt(root, goalId);
     return { goalFile, doc, status, needsTransition: false };
   }
   // g-237：启动 child 前的完整准入——用状态机不变式预演 in_progress 迁移（不写盘、不启动子代理）
@@ -8770,6 +8924,7 @@ export function assertExecutionAdmission(
     throw new GraphError(`执行准入拒绝（未创建 attempt、未启动子代理）：${reason}`);
   }
   assertDescription();
+  assertNoActiveExecutionAttempt(root, goalId);
   return { goalFile, doc, status, needsTransition: true };
 }
 
@@ -8842,6 +8997,14 @@ export function startAttempt(
     worktreeReason?: string | null;
     /** g-289：探测状态摘要（clean/dirty/unknown），落盘到 attempt.md 和事件 */
     worktreeProbe?: { state: "clean" | "dirty" | "unknown"; error?: string } | null;
+    /** g-610：派发状态（宿主在 spawn 前落盘 spawning；直连旧调用省略 = 旧行为）。 */
+    dispatchState?: AttemptDispatchState | null;
+    /** g-610：本次派发进程 PID（仅用于诊断/跨进程锁语义，**不作为停稳依据**）。 */
+    dispatchOwnerPid?: number | null;
+    /** g-610：spawn 开始时刻（审计）。 */
+    dispatchStartedAt?: string | null;
+    /** g-610：派发该 attempt 的父会话（bind CAS 校验同一父会话；空 = 未知）。 */
+    parentSessionId?: string | null;
   },
 ): string {
   // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
@@ -8910,6 +9073,12 @@ export function startAttempt(
     // g-289：落盘探测状态摘要（clean/dirty/unknown），与 worktree_reason 互补实现完整可观测性。
     // 仅在有探测结果时写入；显式覆盖时 probeState 可选附带。
     ...(opts.worktreeProbe ? { worktree_probe: opts.worktreeProbe } : {}),
+    // g-610：派发状态在 spawn **之前**落盘，使同一 goal 的第二个派发者（含另一进程）
+    // 在门禁重查时必然看到「已建 attempt、尚未绑定」的窗口，而不是只看到 child_id=null。
+    ...(opts.dispatchState ? { dispatch_state: opts.dispatchState } : {}),
+    ...(opts.dispatchOwnerPid != null ? { dispatch_owner_pid: opts.dispatchOwnerPid } : {}),
+    ...(opts.dispatchStartedAt ? { dispatch_started_at: opts.dispatchStartedAt } : {}),
+    ...(opts.parentSessionId ? { parent_session_id: opts.parentSessionId } : {}),
   };
   if (opts.provider && opts.provider.trim()) {
     meta.provider = opts.provider.trim();
@@ -8979,6 +9148,11 @@ export function startAttempt(
     ...(opts.worktreeReason != null && String(opts.worktreeReason).trim() ? { worktree_reason: String(opts.worktreeReason).trim() } : {}),
     // g-289：事件中也落盘探测状态，保持 attempt.md 与 events.jsonl 对齐。
     ...(opts.worktreeProbe ? { worktree_probe: opts.worktreeProbe } : {}),
+    // g-610：attempt.started 事件同步记录派发状态（审计闭环；未传时不出现该键）。
+    ...(opts.dispatchState ? { dispatch_state: opts.dispatchState } : {}),
+    ...(opts.dispatchOwnerPid != null ? { dispatch_owner_pid: opts.dispatchOwnerPid } : {}),
+    ...(opts.dispatchStartedAt ? { dispatch_started_at: opts.dispatchStartedAt } : {}),
+    ...(opts.parentSessionId ? { parent_session_id: opts.parentSessionId } : {}),
     ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
     ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
     ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),
@@ -9352,8 +9526,25 @@ export function reportStatus(
   observeOversize(root, goalId, actor, "status", line.trim().length, OVERSIZE_STATUS_CHARS, { attempt: attemptId });
 }
 
+/** g-610：宿主派发绑定时要 CAS 的期望状态（不传 = 旧调用方的兼容路径）。 */
+export interface BindAttemptChildExpect {
+  /** 期望的 dispatch_state（宿主派发固定传 "spawning"）。 */
+  dispatchState?: AttemptDispatchState | null;
+  /** 期望的父会话；attempt 已记录父会话时做精确匹配。 */
+  parentSessionId?: string | null;
+}
+
 /** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
- *  g-194：支持持久化 provider / model / modelRoute。 */
+ *  g-194：支持持久化 provider / model / modelRoute。
+ *
+ *  g-610：宿主派发路径传入 `expect` 时走 **CAS 绑定**：
+ *   - 锁内重读（与 abandon/unbind 共用 `execution-<goal>` 锁）；
+ *   - 已 `detached`/`cancelled` 的 attempt 一律拒绝（**不得复活**已取消/已解绑的执行）；
+ *   - `dispatch_state` 必须仍等于期望值（默认 spawning），父会话不一致也拒绝；
+ *   - 成功才写 `dispatch_state="bound"` 并换新 binding token + binding_version。
+ *  失败抛 GraphConflictError（REST 409），由宿主先请求中断刚启动的 child 并把
+ *  `bind_failed`/orphan 落盘——绝不吞掉异常后假装绑定成功。
+ *  不传 `expect` 时保持既有语义（direct call/旧测试），但同样在锁内读改写。 */
 export function bindAttemptChild(
   root: string,
   goalId: string,
@@ -9366,6 +9557,7 @@ export function bindAttemptChild(
   modelRoute?: string | null,
   mode?: string | null,
   modeSource?: "override" | "project" | "global" | "default" | null,
+  expect?: BindAttemptChildExpect,
 ): void {
   const goalFile = findGoalFile(root, goalId);
   // backlog 目标没有目录结构，无法绑定 attempt child
@@ -9374,45 +9566,152 @@ export function bindAttemptChild(
   }
   const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
   if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
-  const doc = loadGoal(file);
-  doc.meta.child_id = childId;
-  // g-190：每次绑定生成新 binding token（CAS 能力）+ 递增 binding_version（审计）；
-  // 解绑后重绑必然换新 token → 旧 token 立即失效（ABA 防护）。重绑 = 重新激活，清除解绑标记。
-  doc.meta.binding_token = randomUUID().replace(/-/g, "");
-  doc.meta.binding_version = (Number(doc.meta.binding_version) || 0) + 1;
-  delete doc.meta.detached;
-  delete doc.meta.detached_at;
-  delete doc.meta.detached_by;
-  if (parentSessionId) doc.meta.parent_session_id = parentSessionId;
-  if (provider && provider.trim()) doc.meta.provider = provider.trim();
-  if (model && model.trim()) doc.meta.model = model.trim();
-  if (modelRoute && modelRoute.trim()) doc.meta.model_route = modelRoute.trim();
-  const normalizedMode = normalizeSubagentMode(mode);
-  if (normalizedMode) {
-    doc.meta.mode = normalizedMode;
-    if (modeSource) doc.meta.mode_source = modeSource;
+  const result = withTx(
+    { root, actor, goal: goalId },
+    { lockName: "execution-" + goalId },
+    () => {
+      const doc = loadGoal(file);
+      if (expect) {
+        if (doc.meta.detached === true || String(doc.meta.result ?? "pending") === "cancelled") {
+          throw new TxCasError(
+            "attempt 已被解绑/取消（detached 或 cancelled）——拒绝复活绑定，child 必须由宿主中断并记为孤儿",
+          );
+        }
+        if (expect.dispatchState) {
+          const current = normalizeAttemptDispatchState(doc.meta.dispatch_state);
+          if (current !== expect.dispatchState) {
+            throw new TxCasError(
+              `dispatch_state 不匹配（期望 ${expect.dispatchState}，实际 ${current ?? "缺失"}）——并发状态已变化，拒绝绑定`,
+            );
+          }
+        }
+        if (expect.parentSessionId && doc.meta.parent_session_id
+          && String(doc.meta.parent_session_id) !== String(expect.parentSessionId)) {
+          throw new TxCasError("父会话与派发记录不一致——拒绝绑定");
+        }
+      }
+      doc.meta.child_id = childId;
+      // g-190：每次绑定生成新 binding token（CAS 能力）+ 递增 binding_version（审计）；
+      // 解绑后重绑必然换新 token → 旧 token 立即失效（ABA 防护）。重绑 = 重新激活，清除解绑标记。
+      doc.meta.binding_token = randomUUID().replace(/-/g, "");
+      doc.meta.binding_version = (Number(doc.meta.binding_version) || 0) + 1;
+      delete doc.meta.detached;
+      delete doc.meta.detached_at;
+      delete doc.meta.detached_by;
+      if (parentSessionId) doc.meta.parent_session_id = parentSessionId;
+      if (provider && provider.trim()) doc.meta.provider = provider.trim();
+      if (model && model.trim()) doc.meta.model = model.trim();
+      if (modelRoute && modelRoute.trim()) doc.meta.model_route = modelRoute.trim();
+      const normalizedMode = normalizeSubagentMode(mode);
+      if (normalizedMode) {
+        doc.meta.mode = normalizedMode;
+        if (modeSource) doc.meta.mode_source = modeSource;
+      }
+      // g-610：绑定成功即离开启动窗口；owner pid 只服务启动窗口诊断，成功绑定后不再保留。
+      doc.meta.dispatch_state = "bound";
+      delete doc.meta.dispatch_error;
+      delete doc.meta.dispatch_owner_pid;
+      delete doc.meta.dispatch_call_settled;
+      const details: Record<string, any> = { attempt: attemptId, child_id: childId, binding_version: doc.meta.binding_version, dispatch_state: "bound" };
+      if (doc.meta.provider) details.provider = doc.meta.provider;
+      if (doc.meta.model) details.model = doc.meta.model;
+      if (doc.meta.model_route) details.model_route = doc.meta.model_route;
+      if (doc.meta.mode) details.mode = doc.meta.mode;
+      if (doc.meta.mode_source) details.mode_source = doc.meta.mode_source;
+      // g-395：事件先行——`attempt.bound` 追加失败 ⇒ attempt.md 保持原值（不再出现「文件已绑定、
+      // 事件流无记录」的静默绑定）。binding_token 每次调用新生成，仅落盘不落事件：persist 失败
+      // 后重试得到的是同一 binding_version（磁盘未变）的新 token，语义等价、可收敛。
+      return {
+        value: undefined as void,
+        events: [{
+          actor,
+          event: "attempt.bound",
+          goal: goalId,
+          details,
+        }],
+        persist: () => saveGoal(file, doc),
+      };
+    },
+  );
+  if (!result.ok) {
+    if (result.recoverable) throw new GraphConflictError(result.error);
+    throw new GraphError(result.error);
   }
-  const details: Record<string, any> = { attempt: attemptId, child_id: childId, binding_version: doc.meta.binding_version };
-  if (doc.meta.provider) details.provider = doc.meta.provider;
-  if (doc.meta.model) details.model = doc.meta.model;
-  if (doc.meta.model_route) details.model_route = doc.meta.model_route;
-  if (doc.meta.mode) details.mode = doc.meta.mode;
-  if (doc.meta.mode_source) details.mode_source = doc.meta.mode_source;
-  // g-395：事件先行——`attempt.bound` 追加失败 ⇒ attempt.md 保持原值（不再出现「文件已绑定、
-  // 事件流无记录」的静默绑定）。binding_token 每次调用新生成，仅落盘不落事件：persist 失败
-  // 后重试得到的是同一 binding_version（磁盘未变）的新 token，语义等价、可收敛。
-  commitPrepared(root, { actor, goal: goalId }, {
-    value: undefined as void,
-    events: [{
-      actor,
-      event: "attempt.bound",
-      goal: goalId,
-      details,
-    }],
-    persist: () => saveGoal(file, doc),
-  });
 }
 
+/** g-610：宿主派发在「spawn 已结算但未成功绑定」时的**事件先行**状态落盘。
+ *
+ *  合法 state：
+ *   - `not_spawned`：可证明在**任何 spawn 之前**就同步失败（无 provider / 无 subagents 服务 /
+ *     无调用 agent），因此绝不可能有 child，允许授权后立即重试；
+ *   - `spawn_unknown`：spawn 调用已抛出，但无法证明其未创建 child（部分成功/远端/中断）——
+ *     fail-closed，旧 attempt 未处理前门禁继续拦截；
+ *   - `bind_failed`：child 已启动但绑定 CAS 失败；必须同时记录 `orphan_child_id`，并请求中断
+ *     （请求中断 ≠ 已停稳，门禁继续拦截直到有权人确认后处理）。
+ *
+ *  任何分支都写 `dispatch_call_settled=true`：这是**本进程观察到 spawn Promise 已结算**的审计事实，
+ *  不是「child 已停」——恢复判定仍需公开子代理目录 + 人工授权（见 abandonAttempt）。
+ *  与 abandon 竞争时以 detached/cancelled 为准：不复活、不改 result，只补审计事件。 */
+export interface MarkAttemptDispatchFailedOptions {
+  actor: string;
+  state: "not_spawned" | "spawn_unknown" | "bind_failed";
+  error?: string | null;
+  orphanChildId?: string | null;
+}
+
+export function markAttemptDispatchFailed(
+  root: string,
+  goalId: string,
+  attemptId: string,
+  opts: MarkAttemptDispatchFailedOptions,
+): { changed: boolean; state: string } {
+  const actor = String(opts.actor ?? "").trim();
+  if (!actor) throw new GraphError("actor 不能为空");
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") throw new GraphError(`暂存目标（backlog）不能写 attempt 派发状态`);
+  const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
+  if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
+  const res = withTx(
+    { root, actor, goal: goalId },
+    { lockName: "execution-" + goalId },
+    () => {
+      const doc = loadGoal(file);
+      if (doc.meta.id !== attemptId || doc.meta.goal !== goalId) {
+        throw new GraphError(`attempt 归属校验失败：${attemptId}（目标 ${goalId}）`);
+      }
+      const detached = doc.meta.detached === true || String(doc.meta.result ?? "pending") === "cancelled";
+      const details: Record<string, any> = {
+        attempt: attemptId,
+        state: opts.state,
+        dispatch_state: opts.state,
+        dispatch_call_settled: true,
+        previous_dispatch_state: doc.meta.dispatch_state ?? null,
+        error: opts.error ? String(opts.error).slice(0, 480) : null,
+        orphan_child_id: opts.orphanChildId ?? null,
+        detached,
+        actor,
+      };
+      if (!detached) {
+        doc.meta.dispatch_state = opts.state;
+        doc.meta.dispatch_call_settled = true;
+        if (opts.error) doc.meta.dispatch_error = String(opts.error).slice(0, 480);
+        if (opts.orphanChildId) doc.meta.orphan_child_id = String(opts.orphanChildId);
+        delete doc.meta.dispatch_owner_pid;
+        delete doc.meta.dispatch_started_at;
+      }
+      return {
+        value: { changed: !detached, state: opts.state },
+        events: [{ actor, event: "attempt.dispatch_failed", goal: goalId, details }],
+        ...(detached ? {} : { persist: () => saveGoal(file, doc) }),
+      };
+    },
+  );
+  if (!res.ok) {
+    if (res.recoverable) throw new GraphConflictError(res.error);
+    throw new GraphError(res.error);
+  }
+  return res.value;
+}
 
 // ---- g-374 F1：attempt 完成摘要（零 token 截获落盘 + goalDetail 只读投影） ----
 
@@ -10727,7 +11026,7 @@ export function unbindGoalChild(
 
   const result = withTx(
     { root, actor, goal: goalId },
-    { lockName: "unbind-" + goalId },
+    { lockName: "execution-" + goalId },
     () => {
       const binding = readGoalBinding(root, goalId);
       // 无绑定：幂等 no-op（不重复记事件）
@@ -10956,11 +11255,31 @@ export function unbindGoalChild(
   return result.value;
 }
 
+/** g-610：宿主提供的**公开 durable 子代理目录**证据（不信任调用者自报，由宿主查 listChildren）。
+ *  core 只按 `graph:<goal>/<attempt>` 精确匹配本 attempt 的 child；`live` 来自公开 live registry 探测，
+ *  仅对**本 attempt 明确拥有的 child** 使用，且 `idle` 仍不视为停稳（只有 gone 才允许）。 */
+export interface SpawnCatalogEvidence {
+  supported: boolean;
+  parent_session_id?: string | null;
+  children?: Array<{
+    id: string;
+    label?: string | null;
+    mode?: string | null;
+    live?: "running" | "idle" | "gone" | "unknown" | string;
+  }>;
+  error?: string | null;
+  queried_at?: string | null;
+}
+
 export interface AbandonAttemptOptions {
   actor: string;
   attempt: string;
   reason: string;
   liveCheck?: (childId: string) => "running" | "idle" | "gone" | "unknown";
+  /** g-610：本进程是否仍有该 attempt 的 spawn Promise 未结算（宿主注入；true = 严禁 abandon）。 */
+  dispatchInFlight?: (attemptId: string) => boolean;
+  /** g-610：宿主用公开 `subagents.listChildren(parentSessionId)` 取得的 durable 目录证据。 */
+  spawnEvidence?: SpawnCatalogEvidence | null;
 }
 
 export interface AbandonAttemptResult {
@@ -10995,7 +11314,8 @@ export function abandonAttempt(
   let abandonedChildId: string | null = null;
   const result = withTx(
     { root, actor, goal: goalId },
-    { lockName: "unbind-" + goalId },
+    // g-610：与派发/绑定同一把 goal 级锁，使 abandon 与「门禁重查→spawn」串行化。
+    { lockName: "execution-" + goalId },
     () => {
       const goalFile = findGoalFile(root, goalId);
       const goalDoc = loadGoal(goalFile);
@@ -11021,6 +11341,78 @@ export function abandonAttempt(
       // 授权：主管或目标 owner
       authorizeUnbind(root, actor, goalDoc.meta.created_by, doc.meta.child_id);
 
+      // ── g-610：无 child_id 的「启动中 / spawn 结果未知」窗口 ──────────────────────────
+      // 普通 abandon 对无 child_id 的 pending attempt 不触发 liveCheck，旧实现会无条件成功——
+      // 那会让「spawn 还在异步进行」时被人工清掉，晚到的 spawn 再创建第二个 child。
+      // 这里按公开证据 fail-closed，绝不按 PID/年龄/目录 mtime 自动放行：
+      const dispatchState = normalizeAttemptDispatchState(doc.meta.dispatch_state);
+      const orphanId = doc.meta.orphan_child_id ? String(doc.meta.orphan_child_id) : null;
+      let callSettled = doc.meta.dispatch_call_settled === true;
+      let settledFromEvent = false;
+      if (!callSettled) {
+        // 事件先行失败恢复：事件流是权威记录。若已有本 attempt 的 dispatch_failed 事件且
+        // 明确 call_settled=true，则即使 attempt.md 持久化失败也可承认「调用已结算」；
+        // 仍然要求后续公开目录证据（不因此单独放行）。
+        try {
+          const ev = readEvents(root).find(
+            (e) => e.event === "attempt.dispatch_failed"
+              && e.goal === goalId
+              && e.details?.attempt === attempt
+              && e.details?.dispatch_call_settled === true,
+          );
+          if (ev) { callSettled = true; settledFromEvent = true; }
+        } catch { /* 事件流不可读：保持 fail-closed */ }
+      }
+      let spawnEvidenceSummary: Record<string, unknown> | null = null;
+      // 覆盖所有「无 child 但 dispatch_state 仍可能代表在途/矛盾」的非 legacy 状态：
+      // spawning / spawn_unknown，以及 bound 但无 child、bind_failed 但缺 orphan 的坏记录。
+      // not_spawned 可证明从未 spawn ⇒ 允许；旧数据 dispatch_state 缺失 = legacy 兼容路径。
+      if (!doc.meta.child_id && dispatchState !== null && dispatchState !== "not_spawned"
+        && !(dispatchState === "bind_failed" && orphanId)) {
+        if (opts.dispatchInFlight?.(attempt) === true) {
+          throw new TxCasError(
+            "该 attempt 的 spawn Promise 尚未结算（本进程在途）——此时放弃会让晚到的 spawn 再创建第二个 child；" +
+              "请等待其绑定/失败结算后再处理",
+          );
+        }
+        const ev = opts.spawnEvidence;
+        if (!ev || ev.supported !== true) {
+          throw new GraphError(
+            "无法通过公开子代理目录（subagents.listChildren）确认该 attempt 是否已创建 child——拒绝放弃，" +
+              "避免把未知当成已停稳；请先恢复宿主 registry/子代理目录能力后重试",
+          );
+        }
+        const expectedLabel = `graph:${goalId}/${attempt}`;
+        const rows = (ev.children ?? []).filter((r) => r && String(r.label ?? "") === expectedLabel);
+        const notGone = rows.filter((r) => String(r.live ?? "unknown") !== "gone");
+        spawnEvidenceSummary = {
+          supported: true,
+          parent_session_id: ev.parent_session_id ?? null,
+          label: expectedLabel,
+          matched: rows.map((r) => ({ id: r.id, mode: r.mode ?? null, live: r.live ?? "unknown" })),
+          catalog_size: (ev.children ?? []).length,
+          call_settled: callSettled,
+          settled_from_event: settledFromEvent,
+        };
+        if (notGone.length) {
+          throw new TxCasError(
+            "公开子代理目录显示该 attempt 仍有 child 存在（" +
+              notGone.map((r) => `${r.id}:${r.live ?? "unknown"}`).join("、") +
+              "）——不能放弃；请先确认其真正停止",
+          );
+        }
+        if (!rows.length && !callSettled) {
+          throw new GraphError(
+            "公开子代理目录中没有该 attempt 的 child，但本进程**未观察到** spawn 调用结算" +
+              "（崩溃/跨进程/宿主重启窗口）——无法证明不存在仍可能返回的 spawn，拒绝放弃。" +
+              "【待裁决限制】当前公开 API 无法在该窗口安全证明「无在途 child / 无尚可能返回的 spawn」，" +
+              "本引擎不提供强制复位（不使用 PID 死亡、目录暂时查不到或人工签字作为停稳证据）；" +
+              "需负责人依据宿主日志与真实 durable 目录人工裁定后再决定恢复方案",
+          );
+        }
+        // rows 全部 gone，或（调用已结算 + 目录无该 child = 发布边界之后仍无 child）⇒ 允许。
+      }
+
       // 活跃状态门控：live running 时禁止放弃
       if (doc.meta.child_id) {
         if (opts.liveCheck) {
@@ -11035,6 +11427,19 @@ export function abandonAttempt(
           throw new GraphError("无法确认子代理状态（未提供 live check）——拒绝放弃 attempt");
         }
       }
+      // g-610：child_id 尚未回写、但 bind 失败留下 orphan_child_id（已知身份）。
+      // 「已请求中断」不等于已停稳：只有公开 live registry 明确 gone 才允许放弃。
+      if (!doc.meta.child_id && dispatchState === "bind_failed" && orphanId) {
+        if (!opts.liveCheck) {
+          throw new GraphError("无法确认孤儿 child 状态（未提供 live check）——拒绝放弃 attempt");
+        }
+        const live = opts.liveCheck(orphanId);
+        if (live !== "gone") {
+          throw new TxCasError(
+            "绑定失败的孤儿 child " + orphanId + " 仍为 " + live + "——请求中断不等于已停稳，拒绝放弃",
+          );
+        }
+      }
 
       const abandonedAt = nowIso();
       abandonedChildId = doc.meta.child_id ?? null;
@@ -11046,11 +11451,17 @@ export function abandonAttempt(
         details: {
           attempt,
           child_id: doc.meta.child_id ?? null,
+          orphan_child_id: orphanId,
           reason,
           actor,
           previous_result: doc.meta.result ?? "pending",
           abandoned_at: abandonedAt,
           goal_status: String(goalDoc.meta.status ?? "unknown"),
+          // g-610：把「为何允许在处理启动窗口」的证据固化进事件（便于事后审计），
+          // 绝不记录 binding token/凭据。
+          dispatch_state: dispatchState,
+          dispatch_call_settled: callSettled,
+          spawn_evidence: spawnEvidenceSummary,
         },
       });
 
@@ -11450,6 +11861,9 @@ function isBacklogFile(file: string, root: string): boolean {
 /** g-247：结构化状态优先；只有旧记录缺失 status_state 时才解析 status_line。 */
 function attemptIsActive(meta: Record<string, any>): boolean {
   if (meta.detached === true || meta.result !== "pending") return false;
+  // g-610：启动窗口/未知/绑定失败同样占用执行（旧数据缺 dispatch_state 时行为不变）。
+  const dispatchState = normalizeAttemptDispatchState(meta.dispatch_state);
+  if (dispatchState === "spawning" || dispatchState === "spawn_unknown" || dispatchState === "bind_failed") return true;
   const structured = normalizeAttemptStatusState(meta.status_state);
   if (structured) return structured === "working";
   const sl = String(meta.status_line ?? "").trim();
@@ -11495,36 +11909,39 @@ export function postponeGoal(
     throw new GraphError(`目标 ${id} 已在 backlog，无需暂缓`);
   }
 
-  if (srcDir && _hasActiveAttempts_postpone(srcDir)) {
-    const reason = "存在进行中的执行子代理";
-    appendEvent(root, {
-      actor: opts.actor,
-      event: "goal.postpone_blocked",
-      goal: id,
-      details: { from: rel, reason },
-    });
-    throw new GraphError(`目标 ${id} 有进行中的子代理，不能暂缓——请等待完成或先自行中断`);
-  }
-
   const from = rel;
   const prevVersion = doc.meta.version ?? null;
   const prevStatus = doc.meta.status as string;
 
   const targetDir = join(root, "backlog", id);
   const targetFile = join(targetDir, "goal.md");
-  if (existsSync(targetFile)) {
-    throw new GraphError(`暂缓目标位置已存在：${targetFile}`);
-  }
-
-  // 事件/检查完成后才执行单次目录 rename，避免失败留下半迁移目录。
-  // g-427：本处原就是正确范式（只建 backlog/ 父目录、不预建 backlog/<id>），现与其余三条站点
-  // 同口径收口到 renameDirInto —— 不变量不变，额外获得「残留空目录自愈 + 非空冲突明确报错」。
-  if (srcDir) {
-    renameDirInto(srcDir, targetDir);
-  } else {
-    mkdirSync(targetDir, { recursive: true });
-    renameSync(file, targetFile);
-  }
+  // g-610：活跃检查与目录 rename 必须与派发共用同一把 goal 级锁——否则派发方在
+  // 「门禁已过、attempt 尚未落盘」的同步窗口内会被 postpone 把目标目录搬走，
+  // 留下已注册的工作树/半迁移状态。锁只包这一段同步临界区，不跨 await。
+  withLocalLock(root, "execution-" + id, () => {
+    if (srcDir && _hasActiveAttempts_postpone(srcDir)) {
+      const reason = "存在进行中的执行子代理";
+      appendEvent(root, {
+        actor: opts.actor,
+        event: "goal.postpone_blocked",
+        goal: id,
+        details: { from: rel, reason },
+      });
+      throw new GraphError(`目标 ${id} 有进行中的子代理，不能暂缓——请等待完成或先自行中断`);
+    }
+    if (existsSync(targetFile)) {
+      throw new GraphError(`暂缓目标位置已存在：${targetFile}`);
+    }
+    // 事件/检查完成后才执行单次目录 rename，避免失败留下半迁移目录。
+    // g-427：本处原就是正确范式（只建 backlog/ 父目录、不预建 backlog/<id>），现与其余三条站点
+    // 同口径收口到 renameDirInto —— 不变量不变，额外获得「残留空目录自愈 + 非空冲突明确报错」。
+    if (srcDir) {
+      renameDirInto(srcDir, targetDir);
+    } else {
+      mkdirSync(targetDir, { recursive: true });
+      renameSync(file, targetFile);
+    }
+  });
 
   doc.meta.version = null;
   if (prevStatus !== "draft") {
@@ -12394,6 +12811,14 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             detached: m.detached === true,
             detached_at: m.detached_at ?? null,
             detached_by: m.detached_by ?? null,
+            // g-610：派发窗口只读投影（供 GUI/主管判断「启动中/未知/绑定失败」并走授权恢复）。
+            // 旧记录缺字段 ⇒ null/false，不按 child_id 反推。
+            dispatch_state: normalizeAttemptDispatchState(m.dispatch_state),
+            dispatch_call_settled: m.dispatch_call_settled === true,
+            dispatch_owner_pid: Number.isFinite(Number(m.dispatch_owner_pid)) ? Number(m.dispatch_owner_pid) : null,
+            dispatch_started_at: m.dispatch_started_at ?? null,
+            dispatch_error: typeof m.dispatch_error === "string" ? m.dispatch_error : null,
+            orphan_child_id: m.orphan_child_id ?? null,
             worktree: m.worktree ?? null,
             // g-409：把**隔离判定**如实透出到 GUI（此前只在 attempt.md 落盘、投影未带 ⇒ 客户端
             // 只能看到 worktree=false/缺失，无法区分「按类型策略豁免」与「建树失败」）。

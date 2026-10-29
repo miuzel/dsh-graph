@@ -64,6 +64,8 @@ import {
   setCriteria,
   setGoalDirective,
   writeProjectConfig,
+  readGoalBinding,
+  unbindGoalChild,
 } from "../ops.ts";
 import { apply } from "../../dist/index.js";
 
@@ -303,6 +305,13 @@ test("g-400 判据 1/2/3：英文派发下伪造保留标记被破坏并标注�
   // （en 侧 handoff 段同样经过反伪装替换，属同一缺陷面）。
   h.lang.value = "zh";
   const first = await startAttempt(h, goal, BRIEF);
+  // g-610：先以公开合法方式处理首派 attempt（确认旧 child 已停后解绑），
+  // 才能在严格单活门禁下进行第二次派发；本用例验证的是第二次 prompt 的 handoff 反伪装。
+  const b0 = readGoalBinding(h.root, goal)!;
+  unbindGoalChild(h.root, goal, {
+    actor: "human:test", attempt: b0.attempt, token: b0.binding_token,
+    reason: "g-610 fixture：首派用于产生 handoff 来源", liveCheck: () => "gone",
+  });
   recordAttemptHandoff(h.root, goal, {
     source_attempts: [first.attempt],
     failures: HANDOFF_FAILURES,

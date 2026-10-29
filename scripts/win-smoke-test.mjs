@@ -704,7 +704,7 @@ const OS_SITE_ROWS = [
   ["core/transaction.ts", "chmodSync", 1, ["reclaimStaleBadLock"],
    "回收 mode 000 坏锁前恢复可读",
    "ws:T3.tx_lock_reclaim"],
-  ["core/transaction.ts", "lockFile", 23, ["lockFilePath", "heldLocks", "lockKey", "STALE_BAD_LOCK_MS", "lockAgeMs", "reclaimStaleBadLock", "acquireLock", "releaseLock", "withTx"],
+  ["core/transaction.ts", "lockFile", 25, ["lockFilePath", "heldLocks", "lockKey", "STALE_BAD_LOCK_MS", "lockAgeMs", "reclaimStaleBadLock", "acquireLock", "releaseLock", "withTx", "withLocalLock"],
    "事务锁获取 / 释放 / 陈旧回收（隔离 + 身份核对）",
    "ws:T3.tx_lock_reclaim"],
   ["core/transaction.ts", "lstatSync", 4, ["lockAgeMs", "reclaimStaleBadLock", "atomicWrite"],

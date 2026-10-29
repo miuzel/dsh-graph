@@ -55,7 +55,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   addCard, createGoal, fillCard, init, recordAttemptHandoff, reviewCard,
-  setCriteria, setGoalDirective, writeProjectConfig,
+  setCriteria, setGoalDirective, writeProjectConfig, readGoalBinding, unbindGoalChild,
 } from "../ops.ts";
 import { apply, formatAttemptPrompt } from "../../dist/index.js";
 
@@ -273,6 +273,12 @@ async function startAttempt(h: Harness, goal: string, brief: string): Promise<st
 /** 先派发一次产生前序 attempt，再登记已确认 handoff ⇒ 下一次派发的 prompt 才带 handoff 段。 */
 async function dispatchWithHandoff(h: Harness, goal: string, brief: string, m: Materials): Promise<string> {
   await startAttempt(h, goal, brief);
+  // g-610：首派仅用于产生 handoff 来源；严格单活门禁要求先显式处理该 attempt 再二次派发。
+  const b0 = readGoalBinding(h.root, goal)!;
+  unbindGoalChild(h.root, goal, {
+    actor: "human:test", attempt: b0.attempt, token: b0.binding_token,
+    reason: "g-610 fixture：首派用于产生 handoff 来源", liveCheck: () => "gone",
+  });
   recordAttemptHandoff(h.root, goal, {
     source_attempts: ["att-001"],
     failures: m.handoffFailures ?? "plain failure body",

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { init, createGoal, setCriteria, goalDetail, findGoalFile, loadGoal } from "../ops.ts";
+import { init, createGoal, setCriteria, goalDetail, findGoalFile, loadGoal, readGoalBinding, unbindGoalChild } from "../ops.ts";
 import { appendEvent } from "../events.ts";
 import { prepareAttemptWorktree, readBoardOwner } from "../worktree.ts";
 import { apply } from "../../dist/index.js";
@@ -307,7 +307,18 @@ test("g-448 判据 1（真实入口）：tool 入口同号跨板派发必须明�
   assert.equal(aMeta.worktree.path, resA.worktree.path);
   assert.equal(aMeta.worktree.canonical_root, rootA);
 
-  // 同板重派仍幂等复用（真实入口，不因新增归属核验而回退）
+  // g-610：同板同 goal 重派在严格单活门禁下必须先显式处理旧 attempt（不再静默创建第二 child）。
+  // 这里按既有授权走 unbind（liveCheck=gone 表示已确认旧 child 不在运行），保留原断言：
+  // 新 attempt 编号 att-002、另建新树、归属仍是板 A。
+  const bindingA = readGoalBinding(rootA, goalA)!;
+  assert.equal(bindingA.attempt, "att-001");
+  unbindGoalChild(rootA, goalA, {
+    actor: "human:gui",
+    attempt: bindingA.attempt,
+    token: bindingA.binding_token,
+    reason: "g-610 合法返工：确认旧 child 已停后解绑",
+    liveCheck: () => "gone",
+  });
   const resA2: any = await hA.dispatch({ goal: goalA, attempt_brief: "板 A 重派" });
   assert.equal(resA2.attempt, "att-002", "新 attempt 编号 ⇒ 另建新树，不影响 att-001 归属");
   assert.equal(resA2.worktree.canonical_root, rootA);

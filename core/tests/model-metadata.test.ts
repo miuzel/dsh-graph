@@ -21,6 +21,8 @@ import {
   findGoalFile,
   goalDetail,
   goalCards,
+  readGoalBinding,
+  unbindGoalChild,
   boardPayload,
   resolveModelRoute,
 } from "../ops.ts";
@@ -244,6 +246,12 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
   assert.equal(att1.provider, "tool-p");
   assert.equal(att1.model, "tool-m");
   assert.equal(att1.model_route, "tool-p/tool-m");
+  // g-610：同一 goal 的第二次派发（HTTP 入口）前，先按公开合法路径处理首派 attempt。
+  const b1 = readGoalBinding(root, goalId)!;
+  unbindGoalChild(root, goalId, {
+    actor: "human:gui", attempt: b1.attempt, token: b1.binding_token,
+    reason: "g-610 fixture：验证 HTTP 入口路由", liveCheck: () => "gone",
+  });
 
   function fakeReq(method: string, queryParams: string, body: any) {
     const listeners: Record<string, Function> = {};
