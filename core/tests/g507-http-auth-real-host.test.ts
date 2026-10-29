@@ -22,13 +22,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { init } from "../ops.ts";
 import { apply } from "../../dist/index.js";
 import { assertSingleProtectedEntry, loadServicePlugin } from "./_http-auth-harness.ts";
 import { loadHostStack, HOST_STACK_PINS, resolveHostStack } from "./_host-stack.ts";
+import {
+  PLUGIN_CONFIG,
+  assertPrivateTestRoot,
+  createPrivateTestRoot,
+  realBoardRoot,
+  removePrivateTestRoot,
+  uniqueMarker,
+  workspaceQuery,
+} from "./_g611-private-root.ts";
 
 const stack = await loadHostStack();
 const { Context, WebServer, connectionApi } = stack;
@@ -101,8 +109,27 @@ function expirePayload(cookieHeader: string) {
  * @param opts.connectionFirst true = connection 早于 webServer；false = webServer 先到
  */
 async function startHost(opts: { connectionFirst?: boolean } = {}) {
-  const ws = mkdtempSync(join(tmpdir(), "g507-b-ws-"));
-  init(join(ws, ".dsh-graph"));
+  // g-611：workspace 必须是**本次测试独占**的私有根，并在任何请求/服务器启动之前 fail-closed 自证。
+  // 旧实现在这里创建并 `init` 了 ws，却没有把它放进返回对象 ⇒ `h.ws === undefined` ⇒ B2/B3 拼出
+  // `?workspace=undefined`；host 把 "undefined" 当普通相对路径（`resolve("undefined")` = `<cwd>/undefined`），
+  // 在目录已存在且未被 gitignore 的后续运行中由 `resolveCanonicalRoot` 归一到**真实主看板**，
+  // 真实 owner POST 的静态标题就写进了主图（历史 100 条空草稿的机制）。
+  // 私有根放在仓库已忽略的 `tmp/`（g-363 scratch 边界 ⇒ 生产 resolver 走 workspace-fallback），
+  // guard 再用与 server **逐字相同**的 resolver 调用复核（默认 TTL + ttl=0 双查）。
+  const ws = createPrivateTestRoot("b-ws");
+  // 顺序铁律：**先**证明最终 realpath 归属（禁符号链接/越界/主图），**再**允许写入（init）。
+  // guard 失败时零写入（连 events.jsonl 都不会出现），绝不出现「先写用户路径再发现不对」。
+  const wsGuard = assertPrivateTestRoot(ws, {
+    where: "g507 real-host startHost（init 前）",
+    config: PLUGIN_CONFIG,
+    requireInitialized: false,
+  });
+  init(wsGuard.root);
+  assertPrivateTestRoot(ws, {
+    where: "g507 real-host startHost（init 后）",
+    config: PLUGIN_CONFIG,
+    requireInitialized: true,
+  });
   const root = new Context();
   const { provider, records } = memoryCredentials();
   root.provide("credentials", provider);
@@ -249,11 +276,15 @@ async function startHost(opts: { connectionFirst?: boolean } = {}) {
     } catch {
       /* 已释放 */
     }
+    // g-611：只清理本次测试**自己创建**、且已被 guard 校验过的私有根；
+    // 既有 tmp/undefined、他人 worktree、真实看板一律不删（removePrivateTestRoot 强制校验）。
+    removePrivateTestRoot(ws);
   };
 
   return {
     root, state, records, provider, start, origin, authority, request, shutdown,
     mintOwnerCookie, getConnection, bootConnection, disposeConnection, bootWeb,
+    ws, wsGuard,
   };
 }
 
@@ -293,11 +324,15 @@ async function pluginOnRealHost(opts: { connectionFirst?: boolean } = {}) {
   await host.start();
   const ctx = pluginContext(host as any, host.root);
   (host as any).state.root = host.root;
-  const cleanup = apply(ctx, {}) as any;
+  const cleanup = apply(ctx, PLUGIN_CONFIG) as any;
   assert.equal(typeof cleanup, "function", "apply 必须返回清理函数（真实 ctx.effect disposer 语义）");
   (host as any).state.applyCleanup = cleanup;
   (host as any).state.pluginCtx = ctx;
   assertSingleProtectedEntry(host.state.routes);
+  // g-611：所有 B 路径拿到的 h 都必须携带**已 guard 校验**的私有 ws（旧夹具在此处就是 undefined）。
+  assert.equal(host.ws, host.wsGuard.workspace, "h.ws 必须与 guard 校验过的私有根一致");
+  assert.equal(host.wsGuard.root, join(host.ws, ".dsh-graph"), "guard 的 graph root 必须落在私有 ws");
+  assertPrivateTestRoot(host.ws, { where: "pluginOnRealHost", config: PLUGIN_CONFIG, requireInitialized: true });
   return { ...host, server: host.state.webServer as any } as any;
 }
 
@@ -336,9 +371,16 @@ test("g-507 B2：真实宿主签发的 owner cookie ⇒ 业务 200；匿名/篡�
   try {
     const cookie = h.mintOwnerCookie(); // 宿主 token 交换签发（真实 BrowserAuth + 真实 secret）
     const owner = { cookie };
-    const ok = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner);
+    const wsQ = workspaceQuery(h.ws, { where: "B2 owner GET", config: PLUGIN_CONFIG });
+    const ok = await h.request("GET", `${API}${wsQ}`, owner);
     assert.equal(ok.status, 200, "真实签发 cookie ⇒ 200（真实 admit + 真实 BrowserAuth 验收）");
+    // g-611：端到端证明这次业务请求解析到的就是**本次私有根**（旧夹具这里是 undefined ⇒ 主图）。
+    assert.equal(ok.body?._diagnostics?.workspace, h.ws, "host 解析出的 workspace 必须是私有根");
+    assert.equal(ok.body?._diagnostics?.graphRoot, join(h.ws, ".dsh-graph"), "graph root 必须落在私有 ws 下");
+    assert.equal(ok.body?._diagnostics?.rootMode, "workspace-fallback", "私有 tmp 根必须走 workspace-local 口径");
+    assert.notEqual(ok.body?._diagnostics?.graphRoot, realBoardRoot(), "绝不得解析到真实看板");
 
+    // 以下负向请求**不带 workspace**：宿主契约是「认证先行」，它们在解析 root 之前就被拒绝，原样保留。
     assert.equal((await h.request("GET", API)).status, 401, "匿名 ⇒ 401");
     assert.equal((await h.request("GET", `${API}/goal`, { cookie: tamperSignature(cookie) })).status, 401, "篡改签名 ⇒ 401");
     assert.equal((await h.request("GET", `${API}/goal`, { cookie: expirePayload(cookie) })).status, 401, "过期 payload ⇒ 401");
@@ -361,15 +403,37 @@ test("g-507 B2：真实宿主签发的 owner cookie ⇒ 业务 200；匿名/篡�
 test("g-507 B3：真实 owner 的业务面（读/可逆写/资产/304/404/405）", async () => {
   const h = await pluginOnRealHost();
   try {
+    // g-611：写入型业务请求的落点必须可定位到私有根。只做**自己 fixture 根内**的前后对比 +
+    // 单点路径存在性检查；**不读取真实主看板任何正文**（并发主管写入/清理对其免疫）。
+    const strayUndefined = join(process.cwd(), "undefined");
+    const strayExistedBefore = existsSync(strayUndefined);
+    const privateBoard = join(h.ws, ".dsh-graph");
+    assert.ok(existsSync(join(privateBoard, "events.jsonl")), "前置：私有根已由 init 建好骨架");
+    const marker = uniqueMarker("b3-title");
     const owner = { cookie: h.mintOwnerCookie() };
-    const wsQ = `?workspace=${encodeURIComponent(h.ws)}`;
+    const wsQ = workspaceQuery(h.ws, { where: "B3 owner 业务", config: PLUGIN_CONFIG });
     const board = await h.request("GET", `${API}${wsQ}`, owner);
     assert.equal(board.status, 200);
+    assert.equal(board.body?._diagnostics?.graphRoot, privateBoard, "board 必须解析到私有 ws 的看板根");
+    assert.equal(board.body?._diagnostics?.rootMode, "workspace-fallback", "私有根必须走 workspace-local 口径");
+    assert.notEqual(board.body?._diagnostics?.graphRoot, realBoardRoot(), "绝不得解析到真实看板（仅路径比较）");
     const etag = board.headers.etag;
     assert.ok(etag, "看板带 ETag");
     assert.equal((await h.request("GET", `${API}${wsQ}`, { ...owner, "if-none-match": String(etag) })).status, 304, "ETag 命中 ⇒ 304");
-    const created = await h.request("POST", `${API}/create-goal${wsQ}`, owner, { title: "B3 目标" });
+    const created = await h.request("POST", `${API}/create-goal${wsQ}`, owner, { title: `B3 目标 ${marker}` });
     assert.equal(created.status, 200, "真实 owner 可写");
+    // 真实落盘证据：目标文件只在私有 ws 的看板里，标题是本次唯一 marker。
+    const goalId = created.body?.goal;
+    assert.equal(typeof goalId, "string", "create-goal 必须返回目标 id");
+    const goalFile = join(privateBoard, "backlog", `${goalId}.md`);
+    assert.ok(existsSync(goalFile), `真实 owner 写入必须落盘在私有根：${goalFile}`);
+    assert.match(readFileSync(goalFile, "utf8"), new RegExp(marker), "落盘目标必须携带本次唯一标题");
+    // 私有根之外：本次请求不得在 cwd 下**新建** `undefined/`（旧污染路径；既有目录不读、不删、不判）。
+    if (!strayExistedBefore) {
+      assert.equal(existsSync(strayUndefined), false, `本次请求不得新建 ${strayUndefined}`);
+    }
+    assert.equal(existsSync(join(h.ws, "undefined")), false, "私有根内不得出现 undefined/");
+    assert.equal(existsSync(join(privateBoard, "undefined")), false, "私有看板内不得出现 undefined/");
     assert.equal((await h.request("GET", `${API}/diagram/design-philosophy.lifecycle.html`, owner)).status, 200, "资产 200");
     assert.equal((await h.request("HEAD", `${API}/diagram/design-philosophy.lifecycle.html`, owner)).status, 200, "资产 HEAD 200");
     assert.equal((await h.request("GET", `${API}/no-such-endpoint${wsQ}`, owner)).status, 404, "认证后未知 ⇒ 404");
@@ -383,9 +447,10 @@ test("g-507 B4：服务到达顺序（webServer 先到 / connection 先到）与
   for (const connectionFirst of [false, true]) {
     const h = await pluginOnRealHost({ connectionFirst });
     try {
+      const wsQ = workspaceQuery(h.ws, { where: `B4 顺序(${connectionFirst})`, config: PLUGIN_CONFIG });
       assert.equal((await h.request("GET", API)).status, 401, `顺序(${connectionFirst})：匿名 401`);
       assert.equal(
-        (await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: h.mintOwnerCookie() })).status,
+        (await h.request("GET", `${API}${wsQ}`, { cookie: h.mintOwnerCookie() })).status,
         200,
         `顺序(${connectionFirst})：owner 200`,
       );
@@ -399,9 +464,11 @@ test("g-507 B4：服务到达顺序（webServer 先到 / connection 先到）与
   await host.bootWeb();
   const ctx = pluginContext(host as any, host.root);
   (host as any).state.root = host.root;
-  const cleanup = apply(ctx, {});
+  const cleanup = apply(ctx, PLUGIN_CONFIG);
   try {
-    const res = await host.request("GET", `${API}?workspace=${encodeURIComponent(host.ws)}`);
+    // 即使是 503 路径，请求 URL 也必须携带**已校验的私有 ws**，绝不出现 `?workspace=undefined`。
+    const wsQ = workspaceQuery(host.ws, { where: "B4 connection 缺位 503", config: PLUGIN_CONFIG });
+    const res = await host.request("GET", `${API}${wsQ}`);
     assert.equal(res.status, 503, "缺 active connection ⇒ 503（含合法结构与伪造凭证）");
     assert.equal(res.body?.error, "connection-service-unavailable");
   } finally {
@@ -413,16 +480,17 @@ test("g-507 B4：服务到达顺序（webServer 先到 / connection 先到）与
 test("g-507 B5：connection 消失 ⇒ 503；重新引导 ⇒ 恢复（均为真实 fiber 生命周期）", async () => {
   const h = await pluginOnRealHost();
   try {
+    const wsQ = workspaceQuery(h.ws, { where: "B5 fiber 生命周期", config: PLUGIN_CONFIG });
     const cookie = h.mintOwnerCookie();
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie })).status, 200);
+    assert.equal((await h.request("GET", `${API}${wsQ}`, { cookie })).status, 200);
     await h.disposeConnection(); // 真实卸载 fiber
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie })).status, 503, "服务消失 ⇒ 503");
+    assert.equal((await h.request("GET", `${API}${wsQ}`, { cookie })).status, 503, "服务消失 ⇒ 503");
     await h.bootConnection(); // 真实重新引导
     // 行为观察：宿主把浏览器会话 secret 存在 credentials 里（本轮为空实现的内存表）⇒ 重新引导复用同一 secret，
     // 旧 cookie 仍然有效。这是宿主的真实语义，不称其为「撤销」，也不臆造失效结论。
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie })).status, 200, "重新引导后旧 cookie 仍有效（宿主复用 credentials 中的 secret）");
+    assert.equal((await h.request("GET", `${API}${wsQ}`, { cookie })).status, 200, "重新引导后旧 cookie 仍有效（宿主复用 credentials 中的 secret）");
     const fresh = h.mintOwnerCookie();
-    assert.equal((await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: fresh })).status, 200, "新签发的 cookie ⇒ 200");
+    assert.equal((await h.request("GET", `${API}${wsQ}`, { cookie: fresh })).status, 200, "新签发的 cookie ⇒ 200");
   } finally {
     await h.shutdown();
   }
@@ -439,23 +507,77 @@ test("g-507 B6：apply 的真实 cleanup（ctx.effect disposer）⇒ 入口消�
     assert.equal(after?.path, "/api", "cleanup 后只剩宿主 /api 前缀（本插件未留任何裸业务）");
     // 宿主自己的 /api 桥对匿名同样回 401（不许以此判绿）⇒ 改证「插件业务端点不再可达」：
     // 认证后分发只发生在插件入口内，入口摘除后业务端点不会再被本插件处理。
+    const wsQ = workspaceQuery(h.ws, { where: "B6 cleanup 后", config: PLUGIN_CONFIG });
     const owner = { cookie: h.mintOwnerCookie() };
-    const afterCleanup = await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, owner);
+    const afterCleanup = await h.request("GET", `${API}${wsQ}`, owner);
     assert.notEqual(afterCleanup.body?.ok, true, "cleanup 后看板业务不再由本插件返回");
 
     // 再次 apply：仍只有一个入口，且可正常工作
     h.state.routes.length = 0;
     const ctx2 = pluginContext(h as any, h.root);
     (h as any).state.root = h.root;
-    const cleanup2 = apply(ctx2, {});
+    const cleanup2 = apply(ctx2, PLUGIN_CONFIG);
     assertSingleProtectedEntry(h.state.routes);
     assert.equal((await h.request("GET", API)).status, 401, "再次 apply 后匿名仍 401（单入口生效）");
     assert.equal(
-      (await h.request("GET", `${API}?workspace=${encodeURIComponent(h.ws)}`, { cookie: h.mintOwnerCookie() })).status,
+      (await h.request("GET", `${API}${wsQ}`, { cookie: h.mintOwnerCookie() })).status,
       200,
       "再次 apply 后 owner 仍 200",
     );
     cleanup2?.();
+  } finally {
+    await h.shutdown();
+  }
+});
+
+test("g-611 B7：旧夹具形态（startHost 漏返回 ws / 字面量 undefined）必须在发出请求之前 fail-closed", async () => {
+  const h = await pluginOnRealHost();
+  const marker = uniqueMarker("b7-mutant");
+  const privateBoard = join(h.ws, ".dsh-graph");
+  const eventsBefore = readFileSync(join(privateBoard, "events.jsonl"), "utf8");
+  const backlogFilesBefore = readdirSync(join(privateBoard, "backlog"));
+  let requests = 0;
+  /** 计数包装：先把 URL 参数求值完才会真正调用 request ⇒ 任何 guard 拒绝都发生在「请求发出之前」。 */
+  const countedRequest = (...args: any[]) => {
+    requests += 1;
+    return (h as any).request(...args);
+  };
+  try {
+    // 正向：正常夹具的 ws 能通过 guard，且 query 携带编码后的私有绝对路径（不是 undefined）。
+    const okQ = workspaceQuery(h.ws, { where: "B7 正向", config: PLUGIN_CONFIG });
+    assert.equal(okQ, `?workspace=${encodeURIComponent(h.ws)}`);
+    assert.ok(!okQ.includes("undefined"), "正向 query 不得含 undefined");
+
+    // 变异面：把旧代码的每种失效形态都喂给请求构造器。
+    const mutantWithoutWs = { ...(h as any) };
+    delete mutantWithoutWs.ws; // 旧 startHost 的返回形状（ws 未出现在 return 对象里）
+    const hostile: Array<[string, unknown]> = [
+      ["旧夹具（漏返回 ws）", mutantWithoutWs.ws],
+      ["显式 undefined", undefined],
+      ["字面量 \"undefined\"", "undefined"],
+      ["空字符串", ""],
+      ["相对路径", "tmp/not-private"],
+      ["真实主看板", realBoardRoot()],
+      ["cwd 下的 undefined 路径", join(process.cwd(), "undefined")],
+    ];
+    for (const [label, badWs] of hostile) {
+      assert.throws(
+        () => {
+          const path = `${API}/create-goal${workspaceQuery(badWs, { where: `B7 ${label}`, config: PLUGIN_CONFIG })}`;
+          return countedRequest("POST", path, {}, { title: `B3 目标 ${marker}` });
+        },
+        /拒绝使用该测试 workspace/,
+        `${label}：必须在任何请求之前 fail-closed（旧行为会拼出 ?workspace=undefined 并可能写主图）`,
+      );
+    }
+    assert.equal(requests, 0, "所有变异都不得真正发出 HTTP 请求（零副作用）");
+    // 零写证据（只读**自己 fixture 根**）：私有看板事件流与 backlog 逐字未变、无 undefined 落点。
+    assert.equal(readFileSync(join(privateBoard, "events.jsonl"), "utf8"), eventsBefore, "私有看板事件流不得被变异改动");
+    assert.deepEqual(readdirSync(join(privateBoard, "backlog")), backlogFilesBefore, "私有看板 backlog 不得被变异改动");
+    assert.equal(existsSync(join(h.ws, "undefined")), false, "私有根内不得出现 undefined/");
+
+    // 变异不影响正常宿主：紧接一次合法的匿名 401（认证先行，无需 workspace）。
+    assert.equal((await h.request("GET", API)).status, 401, "变异后宿主仍正常：匿名 ⇒ 401");
   } finally {
     await h.shutdown();
   }
