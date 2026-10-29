@@ -64,8 +64,7 @@ import {
   setCriteria,
   setGoalDirective,
   writeProjectConfig,
-  readGoalBinding,
-  unbindGoalChild,
+  abandonAttempt, goalDetail,
 } from "../ops.ts";
 import { apply } from "../../dist/index.js";
 
@@ -233,8 +232,21 @@ function createGoalWithMaterials(h: Harness, m: Materials): string {
   return goal;
 }
 
+
+/** g-610：同一目标重派前，把上一 attempt 按既有授权正常结束（模拟真实完成后的再派发）。 */
+function closePriorAttempts(root: string, goal: string): void {
+  for (const a of goalDetail(root, goal).attempts) {
+    if (a.result === "pending") {
+      abandonAttempt(root, goal, {
+        actor: "human:test", attempt: a.id, reason: "fixture: prior attempt ended",
+        liveCheck: () => "gone",
+      });
+    }
+  }
+}
 /** 经**真实** `graph_start_attempt` 派发，返回 `subagents.startContinuable` 捕获的最终 prompt。 */
 async function startAttempt(h: Harness, goal: string, brief: string): Promise<{ prompt: string; attempt: string }> {
+  closePriorAttempts(h.root, goal);
   const before = h.captured.length;
   const tool = h.registered.find((d: any) => d.name === "graph_start_attempt");
   assert.ok(tool, "graph_start_attempt 必须已注册");
@@ -305,13 +317,6 @@ test("g-400 判据 1/2/3：英文派发下伪造保留标记被破坏并标注�
   // （en 侧 handoff 段同样经过反伪装替换，属同一缺陷面）。
   h.lang.value = "zh";
   const first = await startAttempt(h, goal, BRIEF);
-  // g-610：先以公开合法方式处理首派 attempt（确认旧 child 已停后解绑），
-  // 才能在严格单活门禁下进行第二次派发；本用例验证的是第二次 prompt 的 handoff 反伪装。
-  const b0 = readGoalBinding(h.root, goal)!;
-  unbindGoalChild(h.root, goal, {
-    actor: "human:test", attempt: b0.attempt, token: b0.binding_token,
-    reason: "g-610 fixture：首派用于产生 handoff 来源", liveCheck: () => "gone",
-  });
   recordAttemptHandoff(h.root, goal, {
     source_attempts: [first.attempt],
     failures: HANDOFF_FAILURES,

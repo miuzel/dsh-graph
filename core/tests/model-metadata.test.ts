@@ -21,10 +21,9 @@ import {
   findGoalFile,
   goalDetail,
   goalCards,
-  readGoalBinding,
-  unbindGoalChild,
   boardPayload,
   resolveModelRoute,
+  abandonAttempt,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
@@ -190,6 +189,15 @@ test("g-194 ④ 历史 attempt / card 缺少 provider / model 字段时安全降
   assert.equal(detail.cards[0].model, null);
 });
 
+/** g-610：同一目标重派前，把上一 attempt 按既有授权正常结束。 */
+function closePriorAttempts(root: string, goal: string): void {
+  for (const a of goalDetail(root, goal).attempts) {
+    if (a.result === "pending") {
+      abandonAttempt(root, goal, { actor: "human:gui", attempt: a.id, reason: "fixture: prior attempt ended", liveCheck: () => "gone" });
+    }
+  }
+}
+
 test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / start-collection）均持久化解析后路由", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g194-ws-"));
   const root = join(ws, ".dsh-graph");
@@ -246,12 +254,6 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
   assert.equal(att1.provider, "tool-p");
   assert.equal(att1.model, "tool-m");
   assert.equal(att1.model_route, "tool-p/tool-m");
-  // g-610：同一 goal 的第二次派发（HTTP 入口）前，先按公开合法路径处理首派 attempt。
-  const b1 = readGoalBinding(root, goalId)!;
-  unbindGoalChild(root, goalId, {
-    actor: "human:gui", attempt: b1.attempt, token: b1.binding_token,
-    reason: "g-610 fixture：验证 HTTP 入口路由", liveCheck: () => "gone",
-  });
 
   function fakeReq(method: string, queryParams: string, body: any) {
     const listeners: Record<string, Function> = {};
@@ -274,6 +276,7 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
     return res;
   }
 
+  closePriorAttempts(root, goalId);
   // 2. start-execution REST 端点 (缺省继承 project.yaml)
   const execHandler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   assert.ok(execHandler, "start-execution 已注册");
@@ -290,6 +293,7 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
   assert.equal(att2.model, "proj-m");
   assert.equal(att2.model_route, "proj-p/proj-m");
 
+  closePriorAttempts(root, goalId);
   // 3. start-collection REST 端点 (显式指定)
   const collectHandler = handlerFor(routeDefs) /* /api/dsh-graph/start-collection */;
   assert.ok(collectHandler, "start-collection 已注册");

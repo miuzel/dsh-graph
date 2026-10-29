@@ -49,10 +49,9 @@ import {
   generateHandoff,
   claimSupervisor,
   bindAttemptChild,
-  markAttemptDispatchFailed,
+  settleAttemptDispatchInFlight,
+  assertNoActiveExecutionChild,
   withLocalLock,
-  GraphExecutionBusyError,
-  TxLockTimeoutError,
   moveGoal,
   amendGoal,
   // g-379：目标间关系（覆盖/调整/补充）写入/解除 + 单目标关系视图
@@ -3911,62 +3910,6 @@ export function apply(ctx, config) {
     }
   };
 
-  // g-610：本进程仍在 await 的 spawn（`root\0goal\0attempt`）。唯一用途 = 让 abandon 在
-  // spawn Promise 尚未结算时**明确拒绝**——fire-and-forget interrupt 不能当作已停稳，
-  // 晚到的 spawn 会再创建第二个 child。绝不用它推断「child 已停」。
-  const inFlightExecutionSpawns = new Set();
-  const executionSpawnKey = (rootForReq, goalId, attemptId) => `${rootForReq}\u0000${goalId}\u0000${attemptId}`;
-
-  /** g-610：读取 attempt 的派发窗口字段（只读；供 abandon 决定是否需要查公开子代理目录）。 */
-  const readAttemptDispatchMeta = (rootForReq, goalId, attemptId) => {
-    try {
-      const gf = findGoalFile(rootForReq, goalId);
-      if (basename(gf) !== "goal.md") return null;
-      const f = join(dirname(gf), "attempts", String(attemptId), "attempt.md");
-      if (!existsSync(f)) return null;
-      const doc = loadGoal(f);
-      if (doc.meta.id !== attemptId || doc.meta.goal !== goalId) return null;
-      return {
-        child_id: doc.meta.child_id ? String(doc.meta.child_id) : null,
-        dispatch_state: doc.meta.dispatch_state ? String(doc.meta.dispatch_state) : null,
-        dispatch_call_settled: doc.meta.dispatch_call_settled === true,
-        orphan_child_id: doc.meta.orphan_child_id ? String(doc.meta.orphan_child_id) : null,
-        parent_session_id: doc.meta.parent_session_id ? String(doc.meta.parent_session_id) : null,
-      };
-    } catch { return null; }
-  };
-
-  /** g-610：用宿主**公开 durable 子代理目录** `subagents.listChildren(parentSessionId)` 取证据。
-   *  不读私有字段、不猜 registry：目录行含 id/label/mode；live 态另经公开 `agents.get` 探测。
-   *  能力缺失/查询失败一律 `supported:false`（core 会 fail-closed 拒绝 abandon）。 */
-  const querySpawnCatalogEvidence = async (rootForReq, goalId, attemptId) => {
-    const meta = readAttemptDispatchMeta(rootForReq, goalId, attemptId);
-    const parentSessionId = meta?.parent_session_id ?? null;
-    if (!parentSessionId) {
-      return { supported: false, error: "attempt 未记录派发父会话，无法查询 durable 子代理目录" };
-    }
-    const subagents = ctx.get?.("subagents");
-    if (!subagents || typeof subagents.listChildren !== "function") {
-      return { supported: false, parent_session_id: parentSessionId, error: "宿主未提供 subagents.listChildren（durable 子代理目录不可用）" };
-    }
-    try {
-      const rows = await subagents.listChildren(parentSessionId);
-      return {
-        supported: true,
-        parent_session_id: parentSessionId,
-        children: (rows ?? []).map((r) => ({
-          id: String(r?.id ?? ""),
-          label: r?.label ?? null,
-          mode: r?.mode ?? null,
-          live: childLiveState(String(r?.id ?? "")),
-        })),
-        queried_at: new Date().toISOString(),
-      };
-    } catch (e) {
-      return { supported: false, parent_session_id: parentSessionId, error: String(e?.message ?? e) };
-    }
-  };
-
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
   // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
@@ -4179,170 +4122,141 @@ export function apply(ctx, config) {
     // g-390：模式标题 + 模式策略片段按 promptLanguage 本地化（片段语言由 resolveSubagentMode 的第 4 参传入）。
     const modeStrategySection = effModeRes.prompt ? [(isEnPrompt ? "## Subagent execution mode (" + effModeRes.mode + ")" : "## 子代理执行模式（" + effModeRes.mode + "）"), "", effModeRes.prompt].join("\n") : null;
 
-    // 预测下一 attempt ID（用于 prompt 中精准渲染 attempt 编号）
-    // g-414：预测是**只读**的——容忍 attempts/ 不存在（首次派发等价于空目录计数 ⇒ 仍得 att-001），
-    // 绝不为「预测」预建目录。计数口径与 core startAttempt 的 `count(att-*)+1` 逐字一致。
-    //
-    // g-610：把「门禁重查 → 预测 → 建树 → 迁移 → startAttempt(state=spawning)」整体收进同一把
-    // **同步短锁**（按 root+goal 隔离，绝不跨 await）：同一 workspace+goal 的第二个派发者（同进程
-    // 并发或另一进程）在锁内重查时必然看到已落盘的 spawning attempt ⇒ 零副作用拒绝。
-    // spawn 在锁释放之后才 await，长任务不会阻塞其它 goal 的派发/解绑。
-    let reservation;
-    try {
-      reservation = withLocalLock(root, "execution-" + goal, () => {
-        // 锁内权威重查：状态/判据/描述准入 + 同目标「单活」门禁（force 不绕过）。
-        // 外层第 2 步只是尽早给诊断；真正的并发决策以这里的重查为准。
-        const lockedAdmission = assertExecutionAdmission(root, goal, { force, requireDescription: entrypoint === "tool" });
-
-        const attemptsDir = join(dirname(goalFile), "attempts");
-        let attemptEntries = [];
-        try {
-          attemptEntries = readdirSync(attemptsDir);
-        } catch (e) {
-          // 仅「目录不存在」视为 0 项；EACCES/ENOTDIR 等其它错误照旧抛出（不静默吞错）。
-          if (e?.code !== "ENOENT") throw e;
-        }
-        const seq = attemptEntries.filter((d) => d.startsWith("att-")).length + 1;
-        const nextAttId = `att-${String(seq).padStart(3, "0")}`;
-
-        // 真实创建 / 幂等复用 / 失败即停（在状态迁移与创建 attempt 之前执行，失败即停零副作用）
-        const wtResult = prepareAttemptWorktree(root, goal, nextAttId, {
-          enabled: isWorktree,
-          baselineCommit: baseline_commit,
-          reason: isolationDecision.reason,
-        });
-
-        // g-414：建树已成功（失败已于上一行抛 GraphError ⇒ 此刻未迁移状态、未建 attempt、未启动子代理，
-        // 且 attempts/ 尚未被创建 = 真正零副作用可重试）⇒ 此时才为后续写入准备目标 attempts/ 目录。
-        // 位置必须早于真正写入 attempt 目录的时机（startAttempt 的 persist）。
-        mkdirSync(attemptsDir, { recursive: true });
-
-        // g-437 P1：**门禁③的区间锚点必须由引擎在派发时落盘**（引擎只信 attempt 记录，绝不信报告）。
-        // 否则「报告把 baseline 取到自己的 HEAD」就能让 diff 恒为空（0 行 0 未跟踪）必然放行。
-        //  - 隔离 attempt：锚点 = 刚建/复用工作树的实际起点（`prepareAttemptWorktree` 已算好并落盘）；
-        //  - 非隔离 attempt：在工作区仓库根执行，recorded 形态里没有 head ⇒ 取派发这一刻的仓库 HEAD；
-        //  - 显式 `baseline_commit` 优先（原样回显，语义不变）；取不到（非 Git 仓库 / 无提交 / git 不可用）
-        //    ⇒ `undefined`/`null`（不写基线；门禁③对这类 attempt fail-closed 拒绝，不退回采信报告）。
-        const engineBaselineCommit = baseline_commit !== undefined && baseline_commit !== null
-          ? baseline_commit
-          : (wtResult.worktree && typeof wtResult.worktree.head === "string" && wtResult.worktree.head
-            ? wtResult.worktree.head
-            : readRepoHead(dirname(root)));
-
-        // g-406：派发返回必须**可据以判定隔离**，否则 `worktree:false` 会把两种完全不同的
-        // 情形混成同一个值：①解析为「本次不建树」（显式 worktree=false / 干净工作区下
-        // patch/chore/task 的类型默认豁免）②建树失败——后者不存在静默降级：prepareAttemptWorktree
-        // 失败一律抛 GraphError，此时尚未迁移状态、未建 attempt、未启动子代理（零副作用可重试）。
-        // 故返回三件套：isolated（是否真的建了隔离树并据此启动子代理）、worktree_reason（为何如此，
-        // 与 attempt 记录 / attempt.started 事件的 worktree_reason 同值）、created/reused（创建结果）。
-        // 该对象在**同一同步临界区**内由 wtResult 求得，且下面的子代理启动晚于此（见 g-406 结构性守卫）。
-        const isolationReport = {
-          isolated: Boolean(wtResult.worktree),
-          worktree_reason: wtResult.reason ?? null,
-          worktree_created: Boolean(wtResult.created),
-          worktree_reused: Boolean(wtResult.reused),
-          // g-437 P1：落盘的区间锚点（fast_track 的 `machine_report.baseline_commit` 必须与之相等）。
-          // null = 取不到锚点（非 Git 仓库等）⇒ 该 attempt 走不了 fast_track，如实回传而不是编一个值。
-          baseline_commit: engineBaselineCommit ?? null,
-        };
-
-        const prompt = formatAttemptPrompt({
-          goal,
-          attempt: nextAttId,
-          goalRel,
-          attemptBrief: resolvedBrief.brief,
-          briefSource: resolvedBrief.source,
-          directive: currentDirective,
-          taskType: task_type,
-          baselineCommit: engineBaselineCommit,
-          sourceAttempt: source_attempt,
-          acceptanceItems: acceptance_items,
-          handoffSection: handoffsSection,
-          cardsSection,
-          targetContext,
-          subagentPromptSection,
-          modeStrategySection,
-          worktreeBlock,
-          promptLanguage,
-        });
-        const promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 16);
-
-        // 8. g-237：真实迁移先于 attempt 与 child——准入已在锁内用同一套不变式重查通过。
-        //    迁移失败直接抛出（工具报错 / HTTP 400）：此时尚未创建 attempt、未启动 child，
-        //    零副作用可安全重试；绝不先启动子代理再把迁移失败吞掉。
-        if (lockedAdmission.needsTransition) {
-          ensureExecutionInProgress(root, goal, {
-            reason: `attempt 派发（${entrypoint === "tool" ? "graph_start_attempt" : "GUI 执行"}）`,
-            actor,
-            force,
-          });
-        }
-
-        // 9. 创建并持久化 attempt 记录与 attempt.started 事件
-        // g-289：将探测状态摘要（clean/dirty/unknown）落盘到 attempt metadata，与 worktree_reason 互补实现完整可观测性。
-        const probeSummary = cleanliness.clean === true ? { state: "clean" }
-          : cleanliness.clean === false ? { state: "dirty" }
-          : { state: "unknown", error: cleanliness.error };
-        // g-610：dispatch_state=spawning 与 attempt 记录**同步落盘**（事件先行），作为绑定前窗口的
-        // 持久门禁：第二个派发者即使在本进程异步启动期间进入，也会被它拦住。
-        const attempt = startAttempt(root, goal, {
-          executor: executor ?? (entrypoint === "http" ? "agent:executor" : actor),
-          actor,
-          injectedCards,
-          injectedHandoffs: injectedHandoffRefs,
-          attemptBrief: resolvedBrief.brief ?? undefined,
-          // g-251：来源与实际用在 prompt 里的 brief 同源，落进 attempt meta 与 attempt.started 事件
-          briefSource: resolvedBrief.source,
-          injectedDirective: currentDirective ?? undefined,
-          provider: effProvider,
-          model: effModel,
-          modelRoute: effRoute,
-          reasoningEffort: effReasoningEffort,
-          mode: effModeRes.mode,
-          modeSource: effModeRes.source,
-          taskType: task_type,
-          baselineCommit: engineBaselineCommit,
-          sourceAttempt: source_attempt,
-          acceptanceItems: acceptance_items,
-          templateVersion,
-          promptHash,
-          contextDigest,
-          contextVersion,
-          worktree: wtResult.worktree,
-          worktreeReason: wtResult.reason,
-          worktreeProbe: probeSummary,
-          // g-610：spawn 前的持久派发状态（owner pid 仅诊断，不作为停稳依据）。
-          dispatchState: "spawning",
-          dispatchOwnerPid: process.pid,
-          dispatchStartedAt: new Date().toISOString(),
-          parentSessionId: parentSessionId ?? null,
-        });
-        return { attempt, wtResult, isolationReport, prompt };
-      }, { lockTimeoutMs: 5000 });
-    } catch (e) {
-      // 派发锁超时/同目标状态在锁内变化：稳定 409（可重试），绝不退回无锁创建。
-      if (e instanceof TxLockTimeoutError) {
-        throw new GraphExecutionBusyError(
-          "EXECUTION_DISPATCH_BUSY",
-          "同一 workspace + goal 的派发锁未能在时限内取得（另一派发/解绑/放弃正在进行）。" +
-            "本次未创建 attempt、未建工作树、未启动子代理；请稍后重试。",
-          [],
-          "稍后重试；若长期占用，检查 root 下该 goal 的 execution 锁文件与持有进程。",
-        );
+    // g-610：门禁重查 → 预测 → 建树 → 迁移 → attempt 落盘 必须在同一把同步短锁内完成。
+    // `dispatch_in_flight` 在 startAttempt 中同步落盘：第二个请求/进程即使先通过外层准入，
+    // 进入锁后也必然看到“首次启动未结算”而拒绝；不同 goal/workspace 锁名不同，可并行。
+    const reservation = withLocalLock(root, "execution-" + goal, () => {
+      assertNoActiveExecutionChild(root, goal, { liveCheck: childLiveState, action: "派发执行", includeLocalActive: true });
+      // 预测下一 attempt ID（用于 prompt 中精准渲染 attempt 编号）
+      // g-414：预测是**只读**的——容忍 attempts/ 不存在（首次派发等价于空目录计数 ⇒ 仍得 att-001），
+      // 绝不为「预测」预建目录。计数口径与 core startAttempt 的 `count(att-*)+1` 逐字一致；
+      // 「计数+1 未加锁」是既有语义（并发下可能撞号），本目标不改变也不扩大它。
+      const attemptsDir = join(dirname(goalFile), "attempts");
+      let attemptEntries = [];
+      try {
+        attemptEntries = readdirSync(attemptsDir);
+      } catch (e) {
+        // 仅「目录不存在」视为 0 项；EACCES/ENOTDIR 等其它错误照旧抛出（不静默吞错）。
+        if (e?.code !== "ENOENT") throw e;
       }
-      throw e;
-    }
+      const seq = attemptEntries.filter((d) => d.startsWith("att-")).length + 1;
+      const nextAttId = `att-${String(seq).padStart(3, "0")}`;
+
+      // 真实创建 / 幂等复用 / 失败即停（在状态迁移与创建 attempt 之前执行，失败即停零副作用）
+      const wtResult = prepareAttemptWorktree(root, goal, nextAttId, {
+        enabled: isWorktree,
+        baselineCommit: baseline_commit,
+        reason: isolationDecision.reason,
+      });
+
+      // g-414：建树已成功（失败已于上一行抛 GraphError ⇒ 此刻未迁移状态、未建 attempt、未启动子代理，
+      // 且 attempts/ 尚未被创建 = 真正零副作用可重试）⇒ 此时才为后续写入准备目标 attempts/ 目录。
+      // 位置必须早于真正写入 attempt 目录的时机（startAttempt 的 persist）。
+      mkdirSync(attemptsDir, { recursive: true });
+
+      // g-437 P1：**门禁③的区间锚点必须由引擎在派发时落盘**（引擎只信 attempt 记录，绝不信报告）。
+      // 否则「报告把 baseline 取到自己的 HEAD」就能让 diff 恒为空（0 行 0 未跟踪）必然放行。
+      //  - 隔离 attempt：锚点 = 刚建/复用工作树的实际起点（`prepareAttemptWorktree` 已算好并落盘）；
+      //  - 非隔离 attempt：在工作区仓库根执行，recorded 形态里没有 head ⇒ 取派发这一刻的仓库 HEAD；
+      //  - 显式 `baseline_commit` 优先（原样回显，语义不变）；取不到（非 Git 仓库 / 无提交 / git 不可用）
+      //    ⇒ `undefined`/`null`（不写基线；门禁③对这类 attempt fail-closed 拒绝，不退回采信报告）。
+      const engineBaselineCommit = baseline_commit !== undefined && baseline_commit !== null
+        ? baseline_commit
+        : (wtResult.worktree && typeof wtResult.worktree.head === "string" && wtResult.worktree.head
+          ? wtResult.worktree.head
+          : readRepoHead(dirname(root)));
+
+      // g-406：派发返回必须**可据以判定隔离**，否则 `worktree:false` 会把两种完全不同的
+      // 情形混成同一个值：①解析为「本次不建树」（显式 worktree=false / 干净工作区下
+      // patch/chore/task 的类型默认豁免）②建树失败——后者不存在静默降级：prepareAttemptWorktree
+      // 失败一律抛 GraphError，此时尚未迁移状态、未建 attempt、未启动子代理（零副作用可重试）。
+      // 故返回三件套：isolated（是否真的建了隔离树并据此启动子代理）、worktree_reason（为何如此，
+      // 与 attempt 记录 / attempt.started 事件的 worktree_reason 同值）、created/reused（创建结果）。
+      // 该对象在**同一同步临界区**内由 wtResult 求得，且下面的子代理启动晚于此（见 g-406 结构性守卫）。
+      const isolationReport = {
+        isolated: Boolean(wtResult.worktree),
+        worktree_reason: wtResult.reason ?? null,
+        worktree_created: Boolean(wtResult.created),
+        worktree_reused: Boolean(wtResult.reused),
+        // g-437 P1：落盘的区间锚点（fast_track 的 `machine_report.baseline_commit` 必须与之相等）。
+        // null = 取不到锚点（非 Git 仓库等）⇒ 该 attempt 走不了 fast_track，如实回传而不是编一个值。
+        baseline_commit: engineBaselineCommit ?? null,
+      };
+
+      const prompt = formatAttemptPrompt({
+        goal,
+        attempt: nextAttId,
+        goalRel,
+        attemptBrief: resolvedBrief.brief,
+        briefSource: resolvedBrief.source,
+        directive: currentDirective,
+        taskType: task_type,
+        baselineCommit: engineBaselineCommit,
+        sourceAttempt: source_attempt,
+        acceptanceItems: acceptance_items,
+        handoffSection: handoffsSection,
+        cardsSection,
+        targetContext,
+        subagentPromptSection,
+        modeStrategySection,
+        worktreeBlock,
+        promptLanguage,
+      });
+      const promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 16);
+
+      // 8. g-237：真实迁移先于 attempt 与 child——准入已在第 2 步用同一套不变式预演通过。
+      //    迁移失败直接抛出（工具报错 / HTTP 400）：此时尚未创建 attempt、未启动 child，
+      //    零副作用可安全重试；绝不先启动子代理再把迁移失败吞掉。
+      //    ensureExecutionInProgress 只对“并发下已 in_progress”做幂等放行，其它拒绝原样抛出。
+      if (admission.needsTransition) {
+        ensureExecutionInProgress(root, goal, {
+          reason: `attempt 派发（${entrypoint === "tool" ? "graph_start_attempt" : "GUI 执行"}）`,
+          actor,
+          force,
+        });
+      }
+
+      // 9. 创建并持久化 attempt 记录与 attempt.started 事件
+      // g-289：将探测状态摘要（clean/dirty/unknown）落盘到 attempt metadata，与 worktree_reason 互补实现完整可观测性。
+      const probeSummary = cleanliness.clean === true ? { state: "clean" }
+        : cleanliness.clean === false ? { state: "dirty" }
+        : { state: "unknown", error: cleanliness.error };
+      const attempt = startAttempt(root, goal, {
+        executor: executor ?? (entrypoint === "http" ? "agent:executor" : actor),
+        actor,
+        injectedCards,
+        injectedHandoffs: injectedHandoffRefs,
+        attemptBrief: resolvedBrief.brief ?? undefined,
+        // g-251：来源与实际用在 prompt 里的 brief 同源，落进 attempt meta 与 attempt.started 事件
+        briefSource: resolvedBrief.source,
+        injectedDirective: currentDirective ?? undefined,
+        provider: effProvider,
+        model: effModel,
+        modelRoute: effRoute,
+        reasoningEffort: effReasoningEffort,
+        mode: effModeRes.mode,
+        modeSource: effModeRes.source,
+        taskType: task_type,
+        baselineCommit: engineBaselineCommit,
+        sourceAttempt: source_attempt,
+        acceptanceItems: acceptance_items,
+        templateVersion,
+        promptHash,
+        contextDigest,
+        contextVersion,
+        worktree: wtResult.worktree,
+        worktreeReason: wtResult.reason,
+        worktreeProbe: probeSummary,
+        dispatchInFlight: true,
+      });
+      return { attempt, wtResult, isolationReport, prompt };
+    }, { lockTimeoutMs: 5000 });
     const { attempt, wtResult, isolationReport, prompt } = reservation;
 
     // 9. 启动与绑定子代理
     if (providerError) {
-      // g-610：**已证明在任何 spawn 之前**同步失败（无可用 provider）⇒ 记录 not_spawned。
-      // 这是唯一允许「不处理旧 attempt 就重试」的失败类别（绝无 child 可能）。
-      try {
-        markAttemptDispatchFailed(root, goal, attempt, { actor, state: "not_spawned", error: providerError });
-      } catch (markErr) {
-        process.stderr.write(`[dsh-graph-host] 记录 not_spawned 失败（attempt 保持 spawning，门禁 fail-closed）：${markErr?.message ?? markErr}\n`);
-      }
+      try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: `无可用 provider：${providerError}` }); }
+      catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
       // g-374 F1：child_error 占位（无 provider ⇒ 无子代理 ⇒ 永不产生 subagent/end）。
       writeChildErrorResults(root, goal, attempt, actor, `无可用 provider：${providerError}`);
       return {
@@ -4365,11 +4279,6 @@ export function apply(ctx, config) {
     }
 
     if (subagents && parentAgent && availableProvider) {
-      const spawnKey = executionSpawnKey(root, goal, attempt);
-      inFlightExecutionSpawns.add(spawnKey);
-      let started = null;
-      let bindFailed = false;
-      let boundOk = false;
       try {
         const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap, readModuleSwitchesForRoot(root));
         const request = {
@@ -4383,9 +4292,7 @@ export function apply(ctx, config) {
         if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
         if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
 
-        // g-610：随后的 bind 是 CAS 绑定——锁内重读，已 detached/cancelled 或 dispatch_state
-        // 已变一律拒绝，绝不「复活」被取消/解绑的执行；父会话不一致也拒绝。
-        started = await startSubagentCompat(subagents, {
+        const started = await startSubagentCompat(subagents, {
           provider: availableProvider,
           label: `graph:${goal}/${attempt}`,
           request,
@@ -4405,16 +4312,10 @@ export function apply(ctx, config) {
             effRoute,
             effModeRes.mode,
             effModeRes.source,
-            {
-              dispatchState: "spawning",
-              parentSessionId: parentSessionId ?? started.parentSessionId ?? null,
-            },
           );
-          boundOk = true;
         } catch (bindErr) {
-          bindFailed = true;
           // g-237：绑定失败必须收敛——先请求中断刚启动的 child，避免留下无主运行 child，
-          // 再把 bind_failed/orphan 事件先行落盘，最后抛出携带 child_id 的可追溯错误。
+          // 再抛出携带 child_id 的可追溯错误（外层 catch 会上报 child_error）。
           let interruptNote = "";
           try {
             const parentSessionIdForInterrupt = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
@@ -4426,19 +4327,6 @@ export function apply(ctx, config) {
             }
           } catch (interruptErr) {
             interruptNote = `，中断该 child 失败：${interruptErr?.message ?? interruptErr}`;
-          }
-          // g-610：「已请求中断」不是「已停稳」：记录 bind_failed + orphan_child_id，
-          // 门禁继续拦截新派发，直到有权人确认该 child 真正不在运行后处理旧 attempt。
-          try {
-            markAttemptDispatchFailed(root, goal, attempt, {
-              actor,
-              state: "bind_failed",
-              error: `绑定失败（child ${started.childId}）：${bindErr?.message ?? bindErr}${interruptNote}`,
-              orphanChildId: started.childId,
-            });
-          } catch (markErr) {
-            // 落盘失败 ⇒ 保持 spawning，门禁仍 fail-closed；绝不因此假装绑定成功。
-            process.stderr.write(`[dsh-graph-host] 记录 bind_failed 失败（attempt 保持 spawning，门禁 fail-closed）：${markErr?.message ?? markErr}\n`);
           }
           throw new GraphError(
             `attempt 绑定失败（child ${started.childId} 已启动${interruptNote}）：${bindErr?.message ?? bindErr}`,
@@ -4465,20 +4353,11 @@ export function apply(ctx, config) {
           prompt,
         };
       } catch (e) {
-        // g-610：**spawn 抛错不能证明未创建 child**（可能已部分成功/远端已启动/中断不可观察）
-        // ⇒ 记录 spawn_unknown（fail-closed），绝不把「catch 到异常」当作「无副作用」。
-        // bind 失败已在上面落盘 bind_failed/orphan，不在这里覆盖。
-        if (!bindFailed && !boundOk) {
-          try {
-            markAttemptDispatchFailed(root, goal, attempt, {
-              actor,
-              state: started ? "bind_failed" : "spawn_unknown",
-              error: String(e?.message ?? e),
-              orphanChildId: started?.childId ?? null,
-            });
-          } catch (markErr) {
-            process.stderr.write(`[dsh-graph-host] 记录 spawn_unknown 失败（attempt 保持 spawning，门禁 fail-closed）：${markErr?.message ?? markErr}\n`);
-          }
+        // g-610：绑定失败保留 dispatch_in_flight（child 可能仍在跑，不能放行第二次派发）；
+        // 其余 spawn 失败清除标记，允许正常重试。
+        if (!String(e?.message ?? e).includes("attempt 绑定失败")) {
+          try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: String(e?.message ?? e) }); }
+          catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
         }
         // g-374 F1：child_error 占位（含 g-237 绑定失败收敛路径）。
         writeChildErrorResults(root, goal, attempt, actor, `subagent 派发失败：${e?.message ?? e}`);
@@ -4500,22 +4379,10 @@ export function apply(ctx, config) {
           brief_source: resolvedBrief.source,
           prompt,
         };
-      } finally {
-        // spawn/bind 已结算（成功或失败）：撤掉 in-flight 标记，abandon 不再被它拒绝；
-        // 失败场景已落盘 spawn_unknown/bind_failed，门禁继续按持久状态拦截。
-        inFlightExecutionSpawns.delete(spawnKey);
       }
     } else {
-      // g-610：**可证明在任何 spawn 之前**就同步失败（服务/调用 agent 缺失）⇒ not_spawned。
-      try {
-        markAttemptDispatchFailed(root, goal, attempt, {
-          actor,
-          state: "not_spawned",
-          error: "subagents 服务不可用或无调用 agent",
-        });
-      } catch (markErr) {
-        process.stderr.write(`[dsh-graph-host] 记录 not_spawned 失败（attempt 保持 spawning，门禁 fail-closed）：${markErr?.message ?? markErr}\n`);
-      }
+      try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: "subagents 服务不可用或无调用 agent" }); }
+      catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
       // g-374 F1：subagents 服务不可用 / 无调用 agent（此分支 child_error 恒 null，最易漏）。
       writeChildErrorResults(root, goal, attempt, actor, "subagents 服务不可用或无调用 agent");
       return {
@@ -5794,7 +5661,7 @@ export function apply(ctx, config) {
         parameters: params({ id: str, confirm: { type: "boolean" } }, ["id", "confirm"]),
       },
       run: (a, ex) => {
-        const r = cleanWorktree(rootFor(ex), a.id, actorOf(ex), a.confirm === true);
+        const r = cleanWorktree(rootFor(ex), a.id, actorOf(ex), a.confirm === true, childLiveState);
         if (r.ok) _clearWorktreeCache();
         return r;
       },
@@ -5805,7 +5672,7 @@ export function apply(ctx, config) {
         description: "归档目标（仅 draft/planning/delivered 可归档）。移动到对应 archived 目录，记 goal.archived 事件。",
         parameters: params({ goal: str }, ["goal"]),
       },
-      run: (a, ex) => { archiveGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { archiveGoal(rootFor(ex), a.goal, { actor: actorOf(ex), liveCheck: childLiveState }); return { ok: true }; },
     },
     {
       def: {
@@ -5821,7 +5688,7 @@ export function apply(ctx, config) {
         description: "删除已归档目标（含其卡片/attempts 目录）。仅已归档目标可删除，且不能有活跃子代理；若目标仍有关联未清理的工作树则阻断并提示先清理。记 goal.deleted 事件。",
         parameters: params({ goal: str }, ["goal"]),
       },
-      run: (a, ex) => { deleteGoal(rootFor(ex), a.goal, { actor: actorOf(ex) }); return { ok: true }; },
+      run: (a, ex) => { deleteGoal(rootFor(ex), a.goal, { actor: actorOf(ex), liveCheck: childLiveState }); return { ok: true }; },
     },
     {
       def: {
@@ -5829,7 +5696,7 @@ export function apply(ctx, config) {
         description: "暂缓目标：将版本/独立目标移回 backlog 目录形态并置为 draft（保留 cards/attempts）。存在活跃 agent 时拒绝操作。",
         parameters: params({ goal: str, reason: str }, ["goal"]),
       },
-      run: (a, ex) => { postponeGoal(rootFor(ex), a.goal, { actor: actorOf(ex), reason: a.reason }); return { ok: true }; },
+      run: (a, ex) => { postponeGoal(rootFor(ex), a.goal, { actor: actorOf(ex), reason: a.reason, liveCheck: childLiveState }); return { ok: true }; },
     },
     {
       // g-190/g-282：从目标解绑执行子代理（安全 detach）——主管/目标 owner 专用。
@@ -5872,25 +5739,13 @@ export function apply(ctx, config) {
           ["goal", "attempt", "reason"],
         ),
       },
-      run: async (a, ex) => {
+      run: (a, ex) => {
         const r = rootFor(ex);
-        // g-610：启动窗口（无 child_id 的 spawning/spawn_unknown）放弃前，先用公开 durable
-        // 子代理目录取证；core 只接受「目录里本 attempt 的 child 全部 gone」或
-        // 「spawn 已结算且目录无该 child」。证据不可得 ⇒ core fail-closed 拒绝。
-        const meta = readAttemptDispatchMeta(r, a.goal, a.attempt);
-        // 与 core 的覆盖面对齐：无 child 且 dispatch_state 仍代表在途/矛盾（not_spawned 除外；
-        // bind_failed 有已知 orphan 时走 liveCheck，不需要目录证据）。
-        const needEvidence = Boolean(meta && !meta.child_id && meta.dispatch_state
-          && meta.dispatch_state !== "not_spawned"
-          && !(meta.dispatch_state === "bind_failed" && meta.orphan_child_id));
-        const spawnEvidence = needEvidence ? await querySpawnCatalogEvidence(r, a.goal, a.attempt) : null;
         const result = abandonAttempt(r, a.goal, {
           actor: unbindActorOf(ex, r),
           attempt: a.attempt,
           reason: a.reason,
           liveCheck: childLiveState,
-          dispatchInFlight: (att) => inFlightExecutionSpawns.has(executionSpawnKey(r, a.goal, att)),
-          spawnEvidence,
         });
         return { ok: true, ...result };
       },
@@ -6651,7 +6506,7 @@ export function apply(ctx, config) {
           if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
           const body = await readBody(req);
           if (!body.id || body.confirm !== true) return json(res, 400, { error: "missing id or confirmation" });
-          const result = cleanWorktree(rootForReq(req, body), String(body.id), "human:gui", true);
+          const result = cleanWorktree(rootForReq(req, body), String(body.id), "human:gui", true, childLiveState);
           if (result.ok) _clearWorktreeCache();
           json(res, result.ok ? 200 : 409, result);
         } catch (e) { json(res, e instanceof GraphError ? 400 : 500, { error: String(e?.message ?? e) }); }
@@ -7414,15 +7269,10 @@ export function apply(ctx, config) {
             baseline_commit: execRes.baseline_commit ?? null,
           });
         } catch (e) {
-          // g-610：同目标已有活动/启动中/未知执行 ⇒ 409 + 稳定 code + 可执行恢复指引
-          // （不含 binding token）；其余准入错误维持 400；g-507 的 401/403/503 在鉴权层先发生。
-          if (e instanceof GraphExecutionBusyError) {
-            return json(res, 409, {
-              error: String(e?.message ?? e),
-              code: e.code,
-              activity: e.activity,
-              recovery: e.recovery,
-            });
+          // g-610：同目标仍在运行/首次启动未结算 ⇒ 409；其余准入错误维持 400；
+          // g-507 的 401/403/503 在鉴权层先发生（本 catch 不会先于鉴权执行）。
+          if (e instanceof GraphConflictError) {
+            return json(res, 409, { error: String(e?.message ?? e) });
           }
           const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
@@ -7654,7 +7504,7 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
-          archiveGoal(rootForReq(req, body), goal, { actor: "human:gui" });
+          archiveGoal(rootForReq(req, body), goal, { actor: "human:gui", liveCheck: childLiveState });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
@@ -7671,7 +7521,7 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal, reason } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
-          postponeGoal(rootForReq(req, body), goal, { actor: "human:gui", reason });
+          postponeGoal(rootForReq(req, body), goal, { actor: "human:gui", reason, liveCheck: childLiveState });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
@@ -7705,7 +7555,7 @@ export function apply(ctx, config) {
           const body = await readBody(req);
           const { goal } = body;
           if (!goal) return json(res, 400, { error: "missing goal" });
-          deleteGoal(rootForReq(req, body), goal, { actor: "human:gui" });
+          deleteGoal(rootForReq(req, body), goal, { actor: "human:gui", liveCheck: childLiveState });
           json(res, 200, { ok: true });
         } catch (e) {
           const code = e instanceof GraphError ? 400 : 500;
@@ -7783,19 +7633,11 @@ export function apply(ctx, config) {
           const attempt = String(body.attempt);
           const reason = String(body.reason);
           const rRoot = rootForReq(req, body);
-          // g-610：同工具入口——启动窗口放弃前先取公开 durable 子代理目录证据。
-          const meta = readAttemptDispatchMeta(rRoot, goal, attempt);
-          const needEvidence = Boolean(meta && !meta.child_id && meta.dispatch_state
-            && meta.dispatch_state !== "not_spawned"
-            && !(meta.dispatch_state === "bind_failed" && meta.orphan_child_id));
-          const spawnEvidence = needEvidence ? await querySpawnCatalogEvidence(rRoot, goal, attempt) : null;
           const result = abandonAttempt(rRoot, goal, {
             actor: "human:gui",
             attempt,
             reason,
             liveCheck: childLiveState,
-            dispatchInFlight: (att) => inFlightExecutionSpawns.has(executionSpawnKey(rRoot, goal, att)),
-            spawnEvidence,
           });
           json(res, 200, { ok: true, ...result });
         } catch (e) {
