@@ -268,7 +268,11 @@ isolatedTest("g-351 判据3：旧形态（settings 有 register、无 describe�
     assert.equal(registerCalls[0].ns, "dsh-graph", "namespace 契约不变");
     assert.deepEqual(
       (registerCalls[0].options as any)?.base,
-      { subagentProvider: "", subagentModel: "", subagentMode: "", subagentReasoningEffort: "", subagentPrompt: "", promptLanguage: "follow", supervisorKeepAlive: "" },
+      {
+        subagentProvider: "", subagentModel: "", subagentMode: "", subagentReasoningEffort: "",
+        subagentPrompt: "", promptLanguage: "follow", supervisorKeepAlive: "",
+        supervisorCare: "", supervisorCareThresholdSeconds: "", supervisorCareRecheckSeconds: "",
+      },
       "旧路径的 base 默认层不变",
     );
     assert.equal(/settings 注册失败|能力不可用/.test(stderr), false, "旧路径正常注册时不得有任何降级告警");

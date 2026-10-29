@@ -59,6 +59,7 @@ const zh = Object.freeze({
   "tool.graph_unbind_goal_child": "从目标安全解绑执行子代理：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 定位；仅授权主管或目标 owner 可执行（子代理不能自我解绑）。只清理绑定，attempt/事件/日志保留可审计；幂等。遗留缺 token 的绑定可显式 legacy: true 并给 reason 受控解绑（若存在 token 则禁止绕过）。",
   "tool.graph_abandon_attempt": "放弃陈旧/失联 attempt：把指定 attempt 标记为已放弃（result=cancelled、detached=true），清除绑定；仅授权主管或目标 owner 可执行；子代理仍运行（live registry）或状态不可确认时拒绝；事件先行（attempt.abandoned 含 reason/actor）。放弃后该 attempt 不再被判为活跃，目标可正常暂缓/归档/删除。",
   "tool.graph_get_settings": "读取当前 workspace 的项目配置（基于 readProjectConfig）：返回解析后的配置对象、配置文件路径与合法枚举/字段元信息。只读，不修改任何文件。",
+  "tool.graph_care_outcome": "提交一次长任务关照巡检结论（唯一窄回传入口）：必须带服务端下发的 inspection id + 本次巡检内的 goal/attempt/child 绑定 + outcome=progress|no-progress|unknown + 有界证据。服务端会核验精确 live 主管、新鲜度、一次性与当前绑定；unknown/未回复不计数，连续 3 份新鲜 no-progress 才升级待人，progress 归零但不解除已有人工裁决锁。不得伪造证据或冒充人类。",
   "tool.graph_update_settings": "更新当前 workspace 的项目配置（基于 writeProjectConfig）。传入部分 patch；保留 schema 校验、非法枚举拒绝、未知键与 YAML 注释保留、原子写，并记 project.config_set 事件。未传字段保持不变。",
   // === g-489：「使用说明 → 工具清单」的分类标签与工具简称（zh/en 必须对称）===
   // 分类归属表见文件末尾的 TOOL_TAXONOMY；与注册真源的一致性由 helpToolTaxonomyProblems 守卫。
@@ -125,6 +126,7 @@ const zh = Object.freeze({
   "toolShort.graph_report_status": "报执行状态",
   "toolShort.graph_report_supervisor_status": "报主管状态",
   "toolShort.graph_get_settings": "读设置",
+  "toolShort.graph_care_outcome": "报巡检结论",
   "toolShort.graph_update_settings": "改设置",
   "toolShort.graph_validate": "校验不变量",
   "toolShort.graph_rebuild": "重建状态",
@@ -187,6 +189,7 @@ const en = Object.freeze({
   "tool.graph_unbind_goal_child": "Safely detach an execution subagent from a goal: locate by goal plus one selector (attempt or child_id) and the current binding token; only the supervisor or goal owner is authorized (a subagent cannot detach itself). Only the binding is cleared; attempt/event/log evidence remains auditable; repeated detaches are idempotent. For legacy bindings lacking a binding_token, supports explicitly declaring legacy: true with a reason for controlled detachment (bypassing with legacy while a token exists is forbidden).",
   "tool.graph_abandon_attempt": "Abandon a stale or lost attempt: mark the specified attempt as abandoned (result=cancelled, detached=true) and clear its binding; only the authorized supervisor or goal owner can execute this; rejected if the subagent is still running (live registry) or its status cannot be confirmed; event-first (attempt.abandoned records reason/actor). After being abandoned, the attempt is no longer considered active, allowing the goal to be postponed, archived, or deleted normally.",
   "tool.graph_get_settings": "Read the current workspace project configuration (based on readProjectConfig): returns the parsed config object, the config file path, and valid enum/field metadata. Read-only; no files are modified.",
+  "tool.graph_care_outcome": "Report one long-task care inspection result (the only narrow result channel): include the server-issued inspection id, this inspection's goal/attempt/child binding, outcome=progress|no-progress|unknown, and bounded evidence. The server verifies the exact live supervisor, freshness, one-shot resolution, and current binding; unknown/no reply never counts, three fresh no-progress results escalate to the human, and progress resets the counter without clearing an existing human-decision lock. Never fabricate evidence or impersonate a human.",
   "tool.graph_update_settings": "Update the current workspace project configuration (based on writeProjectConfig). Pass a partial patch; schema validation, illegal-enum rejection, preservation of unknown keys and YAML comments, atomic writes, and a project.config_set event are retained. Omitted fields remain unchanged.",
   // === g-489: category labels and tool short names for "Help -> Tools" (zh/en stay symmetric) ===
   // The category assignment table is TOOL_TAXONOMY at the end of this file; helpToolTaxonomyProblems guards it against the registration source.
@@ -252,6 +255,7 @@ const en = Object.freeze({
   "toolShort.graph_report_status": "Report status",
   "toolShort.graph_report_supervisor_status": "Report supervisor",
   "toolShort.graph_get_settings": "Get settings",
+  "toolShort.graph_care_outcome": "Report care result",
   "toolShort.graph_update_settings": "Update settings",
   "toolShort.graph_validate": "Validate",
   "toolShort.graph_rebuild": "Rebuild",
@@ -328,6 +332,7 @@ export const TOOL_TAXONOMY = Object.freeze({
   graph_report_status: "ops",
   graph_report_supervisor_status: "ops",
   graph_get_settings: "settings",
+  graph_care_outcome: "exec",
   graph_update_settings: "settings",
   graph_validate: "diag",
   graph_rebuild: "diag",

@@ -2130,6 +2130,14 @@ test("g-352 att-005：会话内看板页签签名 == 冻结 fixture，且 fixtur
   assert.equal(bodyHash(body), meta.get("content-sha256"), "fixture 内容 hash 与正文不一致（被手改过？）");
   // ③ 源码 hash 头必须与当前「决定头部渲染的源模块」一致 ⇒ fixture 与源码同步，改坏必红
   assert.equal(sourceFingerprint(), meta.get("source-sha256"), "fixture 与源码不同步：确认改动后按维护者工具重新冻结");
+  // ③b g-506 返工 B8：来源 commit 必须真的包含与 source-sha256 一致的这批源文件。
+  //    只校验 commit 存在/是祖先不够 —— 否则会把「基线 commit + 候选源码 hash」混拼进 fixture。
+  const committed = createHash("sha256");
+  for (const name of SIG_SOURCE_FILES) {
+    const text = execFileSync("git", ["show", `${sourceCommit}:dsh-graph-host/lib/client/${name}.js`], { cwd: repoRoot(), encoding: "utf8" });
+    committed.update(name + "\n" + text + "\n");
+  }
+  assert.equal(committed.digest("hex"), meta.get("source-sha256"), "source-commit 里这批源文件的 hash 必须等于 source-sha256（禁止混拼基线/hash）");
   // ④ 会话内看板页签的实渲染签名 == 冻结正文（逐字）
   assert.equal(Number(meta.get("board-width")), SIG_BOARD_WIDTH, "fixture 记录了冻结时的板宽，须与本测试一致");
   assert.deepEqual(actual, body, "会话内看板页签元素签名必须与冻结值逐字一致（差异 0 行）");

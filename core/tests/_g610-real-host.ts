@@ -38,14 +38,28 @@ function memoryCredentials() {
 
 export class FakeGateAdapter {
   gate: { promise: Promise<void>; resolve: () => void } | null = null;
+  /** g-506 联合夹具：按正文 marker 定向 hold，避免把主管的关照回合也一起卡住。 */
+  holds = new Map<string, Promise<void>>();
+  releases: Array<() => void> = [];
   calls = 0;
-  hold() {
+  hold(marker?: string) {
+    if (marker) {
+      const d = Promise.withResolvers<void>();
+      this.holds.set(marker, d.promise);
+      this.releases.push(d.resolve);
+      return d.promise;
+    }
     this.gate = Promise.withResolvers<void>();
     return this.gate;
   }
   release() {
     this.gate?.resolve();
     this.gate = null;
+  }
+  releaseAll() {
+    this.release();
+    for (const resolve of this.releases.splice(0)) resolve();
+    this.holds.clear();
   }
 }
 
@@ -84,7 +98,20 @@ export async function loadHostPackages() {
   };
 }
 
-export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: boolean; http?: boolean } = {}) {
+/**
+ * @param opts.relativeRoot  g-506 联合夹具：以 `sandboxPolicy.workspaceRoot`（相对 root 解析）
+ *   代替绝对 `config.root`，使同一宿主可服务多个私有 workspace（各自 `<ws>/.dsh-graph`）。
+ * @param opts.sandboxWorkspace 相对 root 模式下的默认 workspace（默认即本夹具 ws）。
+ * @param opts.projectYaml  覆盖启动时写入的 project.yaml（默认只写 supervisor.session）。
+ */
+export async function makeRealHost(opts: {
+  gitRepo?: boolean;
+  holdPrepare?: boolean;
+  http?: boolean;
+  relativeRoot?: boolean;
+  sandboxWorkspace?: string;
+  projectYaml?: string;
+} = {}) {
   const P = await loadHostPackages();
   const wsBase = join(process.cwd(), "tmp", "g610");
   mkdirSync(wsBase, { recursive: true });
@@ -101,6 +128,12 @@ export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: bool
   const ctx = new P.Context();
   const creds = memoryCredentials();
   ctx.provide("credentials", creds.provider);
+  if (opts.relativeRoot) {
+    ctx.provide("sandboxPolicy", {
+      workspaceRoot: opts.sandboxWorkspace ?? ws,
+      overrideOf: () => null, // dsh-subagent 会读 parent.ctx.get("sandboxPolicy")?.overrideOf(...)
+    });
+  }
   await P.persist.apply(ctx, P.persist.Config({ root: join(ws, ".sessions") }));
   new P.session.SessionStore(ctx);
   new P.projection.default(ctx);
@@ -120,6 +153,8 @@ export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: bool
   adapter.stream = async function* (_options: any) {
     fake.calls += 1;
     if (fake.gate) await fake.gate.promise;
+    const serialized = JSON.stringify(_options?.messages ?? "");
+    for (const [marker, gate] of fake.holds) if (serialized.includes(marker)) await gate;
     yield { type: "block-start", index: 0, blockType: "text" };
     yield { type: "text-delta", index: 0, text: "fake-done" };
     yield { type: "block-end", index: 0, block: { type: "text", text: "fake-done" } };
@@ -147,7 +182,7 @@ export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: bool
     });
   }
   const parent = await loop.create("sess-super", { provider: "fake", model: "fake-model" }, { cwd: ws });
-  writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${parent.id}\n`, "utf8");
+  writeFileSync(join(root, "project.yaml"), opts.projectYaml ?? `supervisor:\n  session: ${parent.id}\n`, "utf8");
 
   let webState: any = null;
   let webFiber: any = null;
@@ -168,7 +203,7 @@ export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: bool
   const registered: any[] = [];
   const orig = ctx.tools.register.bind(ctx.tools);
   ctx.tools.register = (d: any) => { registered.push(d); return orig(d); };
-  apply(ctx, { root });
+  apply(ctx, opts.relativeRoot ? {} : { root });
 
   const tool = (name: string) => registered.find((t) => t.name === name);
   const exec = { agent: parent, signal: new AbortController().signal };
@@ -209,7 +244,7 @@ export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: bool
     return setCookie.split(";")[0];
   };
   const api = {
-    ws, root, ctx, reg, parent, fake, subagents, registered,
+    ws, root, ctx, reg, parent, fake, subagents, registered, modules: P, llm,
     releasePrepare: () => prepareGate?.resolve(),
     http: { origin, request, mintOwnerCookie },
     tools: { get: tool },

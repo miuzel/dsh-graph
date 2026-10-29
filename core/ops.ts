@@ -161,6 +161,18 @@ import {
 } from "./review-policy.ts";
 // g-505：主管上下文缓存保活的配置解析（两级三态）与只读投影（纯函数模块 keepalive.ts）。
 import { KEEP_ALIVE_EXEMPT_TTL_MS, normalizeKeepAliveMode, isKeepAliveModeMalformed, type KeepAliveMode } from "./keepalive.ts";
+// g-506：子代理长任务关照的配置解析（两级三态 + 时间参数继承/覆盖）、调度/巡检状态机与只读投影。
+import {
+  CARE_MODES,
+  CARE_THRESHOLD_MIN_SECONDS,
+  CARE_THRESHOLD_MAX_SECONDS,
+  normalizeCareMode,
+  isCareModeMalformed,
+  normalizeCareSeconds,
+  careEffectiveProjection,
+  type CareMode,
+  type CareEffectiveProjection,
+} from "./care.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
 export {
@@ -277,6 +289,96 @@ export type {
   KeepAliveSnapshotUnavailable,
   KeepAliveStatusProjection,
 } from "./keepalive.ts";
+// g-506：子代理长任务关照（纯函数模块 care.ts）经 ops 统一 re-export，
+// host 半边只需从 ./core/ops.js 取用（与 keepalive / review-policy 系列同款）。
+export {
+  CARE_MODES,
+  CARE_DEFAULT_ENABLED,
+  CARE_DEFAULTS,
+  CARE_MAX_UNANSWERED_REMINDERS,
+  CARE_NO_RESPONSE_COOLDOWN_MS,
+  CARE_THRESHOLD_MIN_SECONDS,
+  CARE_THRESHOLD_MAX_SECONDS,
+  CARE_CAPABILITIES,
+  CARE_STALL_SIGNALS,
+  CARE_ALLOWED_ACTIONS,
+  CARE_PRESERVED_GATES,
+  CARE_INTERVENTIONS,
+  CARE_WAKE_KINDS,
+  CARE_PHASES,
+  CARE_OUTCOMES,
+  CARE_INSPECTION_STATUSES,
+  CARE_INSPECTION_MIN_FRESHNESS_MS,
+  CARE_INSPECTION_MAX_FRESHNESS_MS,
+  normalizeCareMode,
+  isCareModeMalformed,
+  normalizeCareGlobal,
+  isCareGlobalMalformed,
+  normalizeCareSeconds,
+  resolveCare,
+  resolveCareTiming,
+  careEffectiveProjection,
+  assessCareCapabilities,
+  assessIntervention,
+  assertNoMutualWake,
+  careDedupeKey,
+  careTaskDueAt,
+  careTaskIntervalMs,
+  carePausedRemainingMs,
+  decideCare,
+  applyCareDelivery,
+  applyCareOutcome,
+  applyNoResponseLimit,
+  normalizeCareOutcome,
+  careInspectionFreshnessMs,
+  createCareInspection,
+  careInspectionOpen,
+  expireCareInspection,
+  validateCareOutcome,
+  applyCareInspectionOutcome,
+  pauseCare,
+  resumeCare,
+  resetCare,
+  newCareGroupState,
+  isCareReminderStillValid,
+  careStatusProjection,
+  formatCareWakeMessage,
+  makeCareAuditEntry,
+  formatCareAudit,
+  careResolutionOf,
+  careEffectiveOf,
+} from "./care.ts";
+export type {
+  CareMode,
+  CareConfigValue,
+  CareSource,
+  CareProjectConfig,
+  CareGlobalConfig,
+  CareResolution,
+  CareTimingResolution,
+  CareEffectiveProjection,
+  CareCapability,
+  CareCapabilityReport,
+  CareStallSignal,
+  CareAllowedAction,
+  CareIntervention,
+  CareWakeKind,
+  CarePhase,
+  CareTaskState,
+  CareGroupState,
+  CareInputs,
+  CareTaskSchedule,
+  CareDecision,
+  CareReason,
+  CareOutcomeKind,
+  CareInspectionStatus,
+  CareInspectionTarget,
+  CareInspection,
+  CareOutcomeRejection,
+  CareOutcomeRecord,
+  CareStatusProjection,
+  CareAuditEntry,
+} from "./care.ts";
 export { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } from "./model.ts";
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
@@ -1773,6 +1875,24 @@ export interface ProjectConfig {
     keep_alive_malformed?: boolean;
     /** g-505 **仅读侧元信息**：畸形原始值的 JSON 安全投影（仅用于展示/诊断，绝不回写）。 */
     keep_alive_raw?: unknown;
+    /**
+     * g-506：子代理长任务关照的项目级三态（`inherit`/`true`/`false`）。未配置/缺失 ⇒ `null`。
+     * 畸形原始值 ⇒ 归一为 `inherit` 且 `care_malformed=true`（宿主/调度器 fail-closed 关闭）。
+     */
+    care?: CareMode | null;
+    /** g-506 **仅读侧元信息**：`supervisor.care` 原始值（畸形判定用，绝不回写）。 */
+    care_raw?: unknown;
+    /** g-506 **仅读侧元信息**：`supervisor.care` 原始值无法判定为三态之一。 */
+    care_malformed?: boolean;
+    /** g-506：项目级任务工作阈值（秒）；`null` = 继承全局。 */
+    care_threshold_seconds?: number | null;
+    /** g-506：项目级复查间隔（秒）；`null` = 继承全局。 */
+    care_recheck_seconds?: number | null;
+    /** g-506 **仅读侧元信息**：时间参数原始值存在但非法（按继承处理并显示告警）。 */
+    care_threshold_seconds_malformed?: boolean;
+    care_recheck_seconds_malformed?: boolean;
+    /** g-506：关照的**项目半边**只读投影（host 会以真实全局值重新投影后下发 UI/REST）。 */
+    care_effective?: CareEffectiveProjection;
   };
   prompt_overrides: { subagent: PromptOverride };
   /**
@@ -2102,7 +2222,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     return {
       executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
-      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false, care: null, care_malformed: false, care_threshold_seconds: null, care_recheck_seconds: null, care_threshold_seconds_malformed: false, care_recheck_seconds_malformed: false },
       prompt_overrides: { subagent: { state: "default", value: null } },
       // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
       modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
@@ -2261,6 +2381,61 @@ export function readProjectConfig(root: string): ProjectConfig {
   const keepAliveConfig = keepAliveRead();
 
   /**
+   * g-506：`supervisor.care*` 的读侧装配（**原始值判畸形**，与 keep_alive 同口径）。
+   *
+   * - `care` 合法三态/真布尔/未配置 ⇒ 归一；畸形 ⇒ 归一 `inherit` 但 `care_malformed=true`
+   *   （宿主 fail-closed 关闭，绝不把坏值当「开」）。
+   * - 时间参数非法存在值 ⇒ 归一 `null`（继承）但 *_malformed=true（界面告警，不静默）。
+   * - 项目半边 `care_effective` 只作提示；host 会以真实全局值重新投影。
+   */
+  const careRead = (): Pick<
+    ProjectConfig["supervisor"],
+    | "care" | "care_raw" | "care_malformed"
+    | "care_threshold_seconds" | "care_threshold_seconds_malformed"
+    | "care_recheck_seconds" | "care_recheck_seconds_malformed"
+    | "care_effective"
+  > => {
+    const sv = isPlainObject(parsedDoc) && isPlainObject((parsedDoc as any).supervisor)
+      ? (parsedDoc as any).supervisor as Record<string, unknown>
+      : null;
+    const pickRaw = (key: string): { present: boolean; value: unknown } => {
+      if (sv && key in sv) return { present: true, value: sv[key] };
+      const lineValue = readScalarByPath(lines, ["supervisor", key]);
+      return { present: lineValue !== null, value: lineValue };
+    };
+    const modeRaw = pickRaw("care");
+    const thresholdRaw = pickRaw("care_threshold_seconds");
+    const recheckRaw = pickRaw("care_recheck_seconds");
+    const threshold = normalizeCareSeconds(thresholdRaw.present ? thresholdRaw.value : null);
+    const recheck = normalizeCareSeconds(recheckRaw.present ? recheckRaw.value : null);
+    const modeMalformed = documentMalformed
+      || (modeRaw.present && isCareModeMalformed(modeRaw.value));
+    const stored: CareMode | null = modeRaw.present && !documentMalformed
+      ? normalizeCareMode(modeRaw.value)
+      : null;
+    let safeRaw: unknown = null;
+    if (modeRaw.present) {
+      try { safeRaw = JSON.parse(JSON.stringify(modeRaw.value)); } catch { safeRaw = null; }
+    }
+    const projectHalf = {
+      mode: modeMalformed ? (modeRaw.value as any) : stored,
+      thresholdSeconds: threshold,
+      recheckSeconds: recheck,
+    };
+    return {
+      care: stored,
+      ...(modeRaw.present ? { care_raw: safeRaw } : {}),
+      care_malformed: modeMalformed,
+      care_threshold_seconds: threshold,
+      care_threshold_seconds_malformed: thresholdRaw.present && threshold === null,
+      care_recheck_seconds: recheck,
+      care_recheck_seconds_malformed: recheckRaw.present && recheck === null,
+      care_effective: careEffectiveProjection(projectHalf, { enabled: null, thresholdSeconds: null, recheckSeconds: null }),
+    };
+  };
+  const careConfig = careRead();
+
+  /**
    * g-505 B5：`supervisor.keep_alive_ttl` 的读侧装配（可选显式可信长 TTL）。
    * 只认完整 `{provider, model, ttl_ms}` 映射；provider/model 非空字符串（≤128），
    * ttl_ms 为 [KEEP_ALIVE_EXEMPT_TTL_MS, 24h] 的整数。缺失/null ⇒ null（未知）。
@@ -2346,7 +2521,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
     },
-    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]), ...keepAliveConfig, ...keepAliveTtlConfig },
+    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]), ...keepAliveConfig, ...keepAliveTtlConfig, ...careConfig },
     // g-480：五个模块开关（真布尔或 null=未配置）；旧键 `memory.tools_enabled` 只作为 **memory 模块
     // 的读侧默认**保留一次，并在 `modules.memory` 落盘时被删除（见 writeProjectConfig）⇒ 同一时刻
     // 只有一个生效真源，且旧值不会被静默丢弃（判据 5）。
@@ -2622,6 +2797,21 @@ function validateConfigPatch(patch: any): void {
     if ("agent_teams" in s && s.agent_teams !== undefined && s.agent_teams !== null && typeof s.agent_teams !== "boolean") {
       throw new GraphError("supervisor.agent_teams 只允许 true/false 或 null（未配置）");
     }
+    // g-506：关照三态必须落在合法闭集（真布尔 / "inherit"|"true"|"false" / null）；畸形即拒绝。
+    if ("care" in s && isCareModeMalformed(s.care)) {
+      throw new GraphError(`supervisor.care 只允许 ${CARE_MODES.join("/")} 或 null（未配置）`);
+    }
+    // g-506：时间参数必须是合法秒数或 null（继承）；越界/字符串垃圾一律拒绝，绝不静默接受。
+    for (const key of ["care_threshold_seconds", "care_recheck_seconds"] as const) {
+      if (!(key in s)) continue;
+      const v = (s as any)[key];
+      if (v === null || v === undefined) continue;
+      if (normalizeCareSeconds(v) === null) {
+        throw new GraphError(
+          `supervisor.${key} 只允许 ${CARE_THRESHOLD_MIN_SECONDS}~${CARE_THRESHOLD_MAX_SECONDS} 之间的秒数或 null（继承）`,
+        );
+      }
+    }
   }
   if ("prompt_overrides" in patch) {
     needObj(patch.prompt_overrides, "prompt_overrides");
@@ -2850,6 +3040,19 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
       else if (state === "override") encoded = JSON.stringify(o.value ?? "");
       setScalar(["prompt_overrides", key], "", () => encoded);
     }
+  }
+  // g-506：关照三态落盘——`inherit`/null 清空叶子（跟随全局，默认态）；`true`/`false` 写布尔字面量。
+  if (patch.supervisor && "care" in patch.supervisor) {
+    const mode = normalizeCareMode(patch.supervisor.care);
+    if (mode === "inherit") deleteScalarChild(lines, ["supervisor"], "care");
+    else setScalar(["supervisor", "care"], mode);
+  }
+  // g-506：时间参数落盘——合法秒数写数字；null/继承清空叶子（绝不写 "inherit" 噪声）。
+  for (const key of ["care_threshold_seconds", "care_recheck_seconds"] as const) {
+    if (!patch.supervisor || !(key in patch.supervisor)) continue;
+    const v = normalizeCareSeconds((patch.supervisor as any)[key]);
+    if (v === null) deleteScalarChild(lines, ["supervisor"], key);
+    else setScalar(["supervisor", key], String(v));
   }
   // g-311/g-435：顶层 review 列表写入
   if (patch.review) {

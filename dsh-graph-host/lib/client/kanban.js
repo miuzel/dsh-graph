@@ -2725,7 +2725,7 @@
         // g-a92e1406：statusLine 传 supervisor 自己的 status_line（board 下发 supervisorStatus）
         b.supervisorSession
           // g-352 att-003 第 3 项：窄档（<480px，仅右侧栏实例）主管区重排为单行 + 图标按钮 + 隐藏模型 id
-          ? h(SupervisorBar, { id: b.supervisorSession, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null, narrow: narrowActive })
+          ? h(SupervisorBar, { id: b.supervisorSession, workspace: activeWs, statusLine: b.supervisorStatus ?? null, statusAt: b.supervisorStatusAt ?? null, narrow: narrowActive })
           : null,
         // g-127/g-156/g-164：折叠时对应列窄化为 36px（blocked 和 deliver 独立折叠），
         // 列模板统一由 gridCols 按当前折叠状态动态计算，与 released 泳道网格保持一致
