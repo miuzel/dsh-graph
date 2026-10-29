@@ -9359,6 +9359,13 @@ export function reportStatus(
 
 /** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
  *  g-194：支持持久化 provider / model / modelRoute。 */
+export interface BindAttemptExpect {
+  /** 仅派发路径使用：要求 attempt 仍处于「首次 spawn 未结算」窗口，防止晚到绑定复活已终止记录。 */
+  dispatchInFlight: true;
+  /** 期望的 parent session；attempt 已记录时精确匹配。 */
+  parentSessionId?: string | null;
+}
+
 export function bindAttemptChild(
   root: string,
   goalId: string,
@@ -9371,6 +9378,30 @@ export function bindAttemptChild(
   modelRoute?: string | null,
   mode?: string | null,
   modeSource?: "override" | "project" | "global" | "default" | null,
+  expect?: BindAttemptExpect,
+): void {
+  if (expect) {
+    withLocalLock(root, "execution-" + goalId, () => {
+      bindAttemptChildLocked(root, goalId, attemptId, childId, actor, parentSessionId, provider, model, modelRoute, mode, modeSource, expect);
+    });
+    return;
+  }
+  bindAttemptChildLocked(root, goalId, attemptId, childId, actor, parentSessionId, provider, model, modelRoute, mode, modeSource, undefined);
+}
+
+function bindAttemptChildLocked(
+  root: string,
+  goalId: string,
+  attemptId: string,
+  childId: string,
+  actor: string,
+  parentSessionId: string | undefined,
+  provider: string | null | undefined,
+  model: string | null | undefined,
+  modelRoute: string | null | undefined,
+  mode: string | null | undefined,
+  modeSource: "override" | "project" | "global" | "default" | null | undefined,
+  expect: BindAttemptExpect | undefined,
 ): void {
   const goalFile = findGoalFile(root, goalId);
   // backlog 目标没有目录结构，无法绑定 attempt child
@@ -9380,6 +9411,18 @@ export function bindAttemptChild(
   const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
   if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
   const doc = loadGoal(file);
+  if (expect) {
+    const result = String(doc.meta.result ?? "pending");
+    if (doc.meta.detached === true || result === "cancelled") {
+      throw new GraphConflictError("attempt 已被解绑/取消——拒绝晚到绑定复活已终止记录");
+    }
+    if (doc.meta.dispatch_in_flight !== true) {
+      throw new GraphConflictError("attempt 已不处于首次启动窗口（dispatch_in_flight 缺失/已结算）——拒绝晚到绑定");
+    }
+    if (expect.parentSessionId && doc.meta.parent_session_id && String(doc.meta.parent_session_id) !== expect.parentSessionId) {
+      throw new GraphConflictError("attempt 的 parent session 已变化——拒绝晚到绑定");
+    }
+  }
   doc.meta.child_id = childId;
   // g-190：每次绑定生成新 binding token（CAS 能力）+ 递增 binding_version（审计）；
   // 解绑后重绑必然换新 token → 旧 token 立即失效（ABA 防护）。重绑 = 重新激活，清除解绑标记。
@@ -10766,7 +10809,7 @@ export function unbindGoalChild(
 
   const result = withTx(
     { root, actor, goal: goalId },
-    { lockName: "unbind-" + goalId },
+    { lockName: "execution-" + goalId },
     () => {
       const binding = readGoalBinding(root, goalId);
       // 无绑定：幂等 no-op（不重复记事件）
@@ -11034,7 +11077,7 @@ export function abandonAttempt(
   let abandonedChildId: string | null = null;
   const result = withTx(
     { root, actor, goal: goalId },
-    { lockName: "unbind-" + goalId },
+    { lockName: "execution-" + goalId },
     () => {
       const goalFile = findGoalFile(root, goalId);
       const goalDoc = loadGoal(goalFile);
@@ -11059,6 +11102,17 @@ export function abandonAttempt(
 
       // 授权：主管或目标 owner
       authorizeUnbind(root, actor, goalDoc.meta.created_by, doc.meta.child_id);
+
+      // g-610（rev-02）：首次 spawn 尚未 bind 的持久窗口内**普通 abandon 一律拒绝**。
+      // 该窗口没有 child_id，旧实现会直接成功，随后第二派发与晚到 bind 会产出两个 child。
+      // 正常恢复只有两条：spawn 成功绑定（bind 清标记）或已确认无 child 的前置失败
+      // （settleAttemptDispatchInFlight 清标记）。不提供调用方声明/理由放行的旁路。
+      if (doc.meta.dispatch_in_flight === true && String(doc.meta.result ?? "pending") === "pending") {
+        throw new TxCasError(
+          "首次子代理启动尚未结算（dispatch_in_flight）——拒绝放弃；请等待其绑定/失败结算。"
+          + "若宿主已崩溃且无法结算，这是已记录的残余风险，需人工按宿主日志核实后另行处理",
+        );
+      }
 
       // 活跃状态门控：live running 时禁止放弃
       if (doc.meta.child_id) {
@@ -11432,17 +11486,19 @@ export function assertNoActiveExecutionChild(root: string, goalId: string, opts:
     if (!existsSync(f)) continue; // 既有语义：坏/缺失证据跳过（新边界不把手改损坏当强场景）
     let doc: GoalDoc;
     try { doc = loadGoal(f); } catch { continue; }
-    if (doc.meta.detached === true) continue;
-    if (doc.meta.executor === "agent:collect") continue;
     const result = String(doc.meta.result ?? "pending");
     const terminal = result !== "pending";
     const childId = doc.meta.child_id ? String(doc.meta.child_id) : null;
+    // g-610 rev-02：在途标记优先于 detached 跳过——即使记录已被取消/解绑，只要首次 spawn
+    // 尚未结算，就不能放行下一次派发（防止晚到 child 与第二个 child 并行）。
     if (doc.meta.dispatch_in_flight === true && !terminal) {
       throw new GraphConflictError(
         `拒绝${opts.action}：目标 ${goalId} 的 ${a} 首次子代理启动尚未结算（dispatch_in_flight）；` +
-          `本次不创建第二个 child。请等待绑定/失败结算；若确认是崩溃残留，用既有 graph_abandon_attempt 显式处理`,
+          `本次不创建第二个 child。请等待绑定/失败结算；若宿主已崩溃且无法结算，这是已记录的残余风险`,
       );
     }
+    if (doc.meta.detached === true) continue;
+    if (doc.meta.executor === "agent:collect") continue;
     if (!childId) {
       if (opts.includeLocalActive === true && attemptIsActive(doc.meta)) {
         throw new GraphConflictError(

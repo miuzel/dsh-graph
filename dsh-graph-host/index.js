@@ -4279,6 +4279,7 @@ export function apply(ctx, config) {
     }
 
     if (subagents && parentAgent && availableProvider) {
+      let spawnReceipt = null;
       try {
         const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap, readModuleSwitchesForRoot(root));
         const request = {
@@ -4298,6 +4299,7 @@ export function apply(ctx, config) {
           request,
           signal,
         });
+        spawnReceipt = started;
 
         try {
           bindAttemptChild(
@@ -4312,21 +4314,27 @@ export function apply(ctx, config) {
             effRoute,
             effModeRes.mode,
             effModeRes.source,
+            // g-610 rev-02：派发专用 CAS——晚到 bind 不得复活已取消/已解绑/已结算的记录。
+            { dispatchInFlight: true, parentSessionId: parentSessionId ?? null },
           );
         } catch (bindErr) {
-          // g-237：绑定失败必须收敛——先请求中断刚启动的 child，避免留下无主运行 child，
-          // 再抛出携带 child_id 的可追溯错误（外层 catch 会上报 child_error）。
+          // 绑定 CAS 冲突不自动中断真实 child（用户未授权的 intervention）；普通绑定失败才保留
+          // 既有「请求中断」收敛（fire-and-forget，不作为停稳结论）。
           let interruptNote = "";
-          try {
-            const parentSessionIdForInterrupt = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
-            if (parentSessionIdForInterrupt && typeof subagents.interruptByParent === "function") {
-              subagents.interruptByParent(started.childId, parentSessionIdForInterrupt, "continuable");
-              interruptNote = "，已请求中断该 child";
-            } else {
-              interruptNote = "，无法中断该 child（缺少 parent session 或服务能力）";
+          if (!(bindErr instanceof GraphConflictError)) {
+            try {
+              const parentSessionIdForInterrupt = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
+              if (parentSessionIdForInterrupt && typeof subagents.interruptByParent === "function") {
+                subagents.interruptByParent(started.childId, parentSessionIdForInterrupt, "continuable");
+                interruptNote = "，已请求中断该 child";
+              } else {
+                interruptNote = "，无法中断该 child（缺少 parent session 或服务能力）";
+              }
+            } catch (interruptErr) {
+              interruptNote = `，中断该 child 失败：${interruptErr?.message ?? interruptErr}`;
             }
-          } catch (interruptErr) {
-            interruptNote = `，中断该 child 失败：${interruptErr?.message ?? interruptErr}`;
+          } else {
+            interruptNote = "，CAS 冲突未自动中断该 child";
           }
           throw new GraphError(
             `attempt 绑定失败（child ${started.childId} 已启动${interruptNote}）：${bindErr?.message ?? bindErr}`,
@@ -4353,11 +4361,26 @@ export function apply(ctx, config) {
           prompt,
         };
       } catch (e) {
-        // g-610：绑定失败保留 dispatch_in_flight（child 可能仍在跑，不能放行第二次派发）；
-        // 其余 spawn 失败清除标记，允许正常重试。
-        if (!String(e?.message ?? e).includes("attempt 绑定失败")) {
-          try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: String(e?.message ?? e) }); }
-          catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
+        // g-610 rev-02：
+        //  - 已拿到 receipt（child 已真实启动）⇒ 绝不清 dispatch_in_flight；晚到/绑定失败保持阻断。
+        //  - 无 receipt ⇒ 用公开 durable 子代理目录（listChildren + label）判定：确认无 child 才结算；
+        //    目录不可用/查询失败 ⇒ 保持阻断（不按异常文案猜测“未创建 child”）。
+        if (spawnReceipt?.childId) {
+          process.stderr.write(`[dsh-graph-host] spawn 已返回 child=${spawnReceipt.childId} 但后续失败，保留 dispatch_in_flight：${e?.message ?? e}\n`);
+        } else {
+          let catalog = "unknown";
+          if (subagents && typeof subagents.listChildren === "function" && parentSessionId) {
+            try {
+              const rows = await subagents.listChildren(parentSessionId);
+              catalog = (rows ?? []).some((r) => String(r?.label ?? "") === `graph:${goal}/${attempt}`) ? "present" : "absent";
+            } catch { catalog = "unknown"; }
+          }
+          if (catalog === "absent") {
+            try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: String(e?.message ?? e) }); }
+            catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
+          } else {
+            process.stderr.write(`[dsh-graph-host] spawn 失败但无法证明无 child（catalog=${catalog}），保留 dispatch_in_flight：${e?.message ?? e}\n`);
+          }
         }
         // g-374 F1：child_error 占位（含 g-237 绑定失败收敛路径）。
         writeChildErrorResults(root, goal, attempt, actor, `subagent 派发失败：${e?.message ?? e}`);

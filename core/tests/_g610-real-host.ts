@@ -8,12 +8,33 @@
  * 不联网、不发真实 provider、不读写真实看板/3110/其他树。
  */
 import { pathToFileURL } from "node:url";
+import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init, createGoal, setCriteria, goalDetail, CRITERIA_VERIFIED_MARK } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+import { loadServicePlugin } from "./_http-auth-harness.ts";
+import { loadHostStack } from "./_host-stack.ts";
+
+const INIT = Symbol.for("cordis.init");
+
+function memoryCredentials() {
+  const records = new Map<string, any>();
+  return {
+    records,
+    provider: {
+      async readRecord(key: any) { return records.get(String(key)); },
+      async describeRecord(key: any) { const rec = records.get(String(key)); return { present: rec !== undefined, kind: rec?.kind, writable: true }; },
+      async listRecords() { return [...records.entries()].map(([key, rec]) => ({ key, kind: rec?.kind })); },
+      async modifyRecord(key: any, mutate: (current: any) => Promise<any>) { const next = await mutate(records.get(String(key))); if (next !== undefined) records.set(String(key), next); return records.get(String(key)); },
+      async deleteRecord(key: any) { records.delete(String(key)); },
+      async unset() {},
+    },
+  };
+}
 
 export class FakeGateAdapter {
   gate: { promise: Promise<void>; resolve: () => void } | null = null;
@@ -63,9 +84,11 @@ export async function loadHostPackages() {
   };
 }
 
-export async function makeRealHost(opts: { gitRepo?: boolean } = {}) {
+export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: boolean; http?: boolean } = {}) {
   const P = await loadHostPackages();
-  const ws = mkdtempSync(join(tmpdir(), "g610-real-"));
+  const wsBase = join(process.cwd(), "tmp", "g610");
+  mkdirSync(wsBase, { recursive: true });
+  const ws = mkdtempSync(join(wsBase, "real-"));
   if (opts.gitRepo) {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
     writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n.sessions/\n");
@@ -76,6 +99,8 @@ export async function makeRealHost(opts: { gitRepo?: boolean } = {}) {
   const root = join(ws, ".dsh-graph");
   init(root);
   const ctx = new P.Context();
+  const creds = memoryCredentials();
+  ctx.provide("credentials", creds.provider);
   await P.persist.apply(ctx, P.persist.Config({ root: join(ws, ".sessions") }));
   new P.session.SessionStore(ctx);
   new P.projection.default(ctx);
@@ -103,11 +128,15 @@ export async function makeRealHost(opts: { gitRepo?: boolean } = {}) {
   llm.registerAdapter(["fake"], adapter);
   const subagents = new P.sub.SubagentRuntime(ctx, P.sub.SubagentRuntime.Config({ maxDepth: 3, maxActiveSubagents: 8 }));
   const loop = new P.loop.AgentLoop(ctx, { agents: [], maxParallelToolCalls: 4 });
+  const prepareGate = opts.holdPrepare ? Promise.withResolvers<void>() : null;
   subagents.registerProvider({
     name: "spawn",
     capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true },
     inheritsParentContext: false,
-    prepareContinuable: async () => ({}),
+    prepareContinuable: async () => {
+      if (prepareGate) await prepareGate.promise;
+      return {};
+    },
   });
   // 能力自检只要求这些工具名存在；真实 ToolRuntime 注册，测试不执行它们。
   for (const name of ["read", "write", "edit", "bash", "pwsh"]) {
@@ -120,6 +149,22 @@ export async function makeRealHost(opts: { gitRepo?: boolean } = {}) {
   const parent = await loop.create("sess-super", { provider: "fake", model: "fake-model" }, { cwd: ws });
   writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${parent.id}\n`, "utf8");
 
+  let webState: any = null;
+  let webFiber: any = null;
+  let connFiber: any = null;
+  if (opts.http) {
+    const { WebServer, connectionApi } = await loadHostStack();
+    const loaded = await loadServicePlugin(ctx, "g610-test-webserver", (c: any) => {
+      const server = new WebServer(c, { host: "127.0.0.1", port: 0 });
+      c.effect(() => server[INIT](), "g610: webServer.listen");
+      return server;
+    });
+    webState = loaded.service; webFiber = loaded.fiber;
+    for (let i = 0; i < 400 && !webState?.server?.listening; i++) await new Promise((r) => setTimeout(r, 5));
+    connFiber = ctx.plugin({ name: connectionApi.name, inject: connectionApi.inject, apply: connectionApi.apply, Config: connectionApi.Config }, {});
+    await connFiber;
+  }
+
   const registered: any[] = [];
   const orig = ctx.tools.register.bind(ctx.tools);
   ctx.tools.register = (d: any) => { registered.push(d); return orig(d); };
@@ -127,8 +172,46 @@ export async function makeRealHost(opts: { gitRepo?: boolean } = {}) {
 
   const tool = (name: string) => registered.find((t) => t.name === name);
   const exec = { agent: parent, signal: new AbortController().signal };
+  const origin = () => webState?.getOrigin?.() ?? "";
+  const request = (method: string, path: string, headers: Record<string, string> = {}, body?: unknown) =>
+    new Promise<{ status: number; body: any }>((resolve) => {
+      const url = new URL(origin());
+      const payload = body === undefined ? undefined : Buffer.from(typeof body === "string" ? body : JSON.stringify(body), "utf8");
+      const req = http.request({ host: url.hostname, port: Number(url.port), path, method, headers: {
+        host: new URL(origin()).host,
+        ...(payload ? { "content-type": "application/json", "content-length": String(payload.length) } : {}),
+        ...headers,
+      } }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c) => chunks.push(Buffer.from(c)));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          let parsed: any = text;
+          try { parsed = text.length ? JSON.parse(text) : null; } catch { /* raw */ }
+          resolve({ status: res.statusCode ?? 0, body: parsed });
+        });
+      });
+      req.on("error", (e) => resolve({ status: 0, body: String(e) }));
+      if (payload) req.write(payload);
+      req.end();
+    });
+  const mintOwnerCookie = () => {
+    const connection = ctx.get("connection");
+    assert(connection, "真实 connection 必须已引导");
+    const url = connection.authenticatedUrl(`${origin()}/`);
+    const token = new URL(url).searchParams.get("token");
+    let status = 0; let setCookie: string | undefined;
+    connection.authorizeIndex({ method: "GET", url: `/?token=${encodeURIComponent(token)}`, headers: { host: new URL(origin()).host } }, {
+      writeHead(code: number, headers: any) { status = code; setCookie = headers?.["set-cookie"]; },
+      end() {},
+    });
+    if (![302, 303].includes(status) || !setCookie) throw new Error("真实 token 交换失败");
+    return setCookie.split(";")[0];
+  };
   const api = {
     ws, root, ctx, reg, parent, fake, subagents, registered,
+    releasePrepare: () => prepareGate?.resolve(),
+    http: { origin, request, mintOwnerCookie },
     tools: { get: tool },
     dispatch: async (goal: string, brief = "real host dispatch", extra: any = {}) =>
       tool("graph_start_attempt").execute({ goal, attempt_brief: brief, worktree: false, ...extra }, exec),
@@ -138,7 +221,12 @@ export async function makeRealHost(opts: { gitRepo?: boolean } = {}) {
       return a.status === "running" ? "running" : "idle";
     },
     attempts: (goal: string) => goalDetail(root, goal).attempts,
-    shutdown: async () => { try { await ctx.fiber.dispose(); } catch { /* disposed */ } },
+    shutdown: async () => {
+      try { await connFiber?.dispose?.(); } catch { /* disposed */ }
+      try { if (webState?.server?.listening) await new Promise<void>((resolve) => { webState.server.close(() => resolve()); webState.server.closeAllConnections?.(); setTimeout(resolve, 1000).unref?.(); }); } catch { /* closed */ }
+      try { await webFiber?.dispose?.(); } catch { /* disposed */ }
+      try { await ctx.fiber.dispose(); } catch { /* disposed */ }
+    },
   };
   return api;
 }

@@ -90,6 +90,7 @@ function createHarness({
       if (name === "subagents") {
         return {
           list: () => providers,
+          listChildren: async () => [],
           getProvider: (name: string) => {
             if (providerHasPrepareContinuable) {
               return { prepareContinuable: () => {} };
@@ -617,6 +618,22 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   assert.equal(detail.attempts.length, 2);
   assert.equal(detail.attempts[0].child_id, null);
   assert.equal(detail.attempts[1].child_id, null);
+
+  // g-610 rev-02：另一个私有 goal 上恢复独立 HTTP spawn-failure 语义（不依赖同 goal 的
+  // 首次失败结算；也不删除上面的工具/HTTP 同 goal 断言）。
+  const httpOnlyGoal = createGoal(root, { title: "HTTP 独立失败测试", version: "v1.0", actor: "human:gui" });
+  setCriteria(root, httpOnlyGoal, ["判据"], "human:gui");
+  const req2 = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
+    goal: httpOnlyGoal,
+    attempt_brief: "HTTP 独立失败",
+  });
+  const res2 = fakeRes();
+  const p2 = handler(req2, res2);
+  req2._emit();
+  await p2;
+  assert.equal(res2._code, 200, "独立 goal 的 HTTP spawn 失败必须仍是 200 + child_error");
+  assert.ok(res2._body.child_error?.includes("LLM quota exceeded"));
+  assert.equal(goalDetail(root, httpOnlyGoal).attempts.length, 1, "独立 goal 只落一个失败 attempt");
 });
 
 test("g-270: 目标描述含闭合围栏内 ## 伪标题时，prompt 目标描述不截断且质量判据完整", async () => {

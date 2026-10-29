@@ -8,8 +8,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { init, createGoal, setCriteria } from "../ops.ts";
 import { readEvents } from "../events.ts";
-import { transition, loadGoal, saveGoal, findGoalFile, listWorktrees, startAttempt, abandonAttempt } from "../ops.ts";
+import { transition, loadGoal, saveGoal, findGoalFile, listWorktrees, startAttempt, abandonAttempt, bindAttemptChild, settleAttemptDispatchInFlight, assertNoActiveExecutionChild } from "../ops.ts";
+import { existsSync, mkdtempSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { makeRealHost, makeGoal } from "./_g610-real-host.ts";
 
@@ -231,11 +233,10 @@ test("g-610 真实宿主：running child 时 cleanWorktree 不执行；自然结
 });
 
 
-test("g-610：另一写入者遗留的 dispatch_in_flight 持久标记会拒绝派发；授权 abandon 后可恢复", async () => {
+test("g-610：另一写入者遗留的 dispatch_in_flight 拒绝派发与普通 abandon；凭已确认无 child 结算后可恢复", async () => {
   const h = await makeRealHost();
   try {
     const goal = await makeGoal(h, "durable inflight marker");
-    // 模拟另一进程已落盘 attempt 但尚未 bind：本进程/另一进程都必须看到持久标记
     const att = startAttempt(h.root, goal, { executor: "agent:executor", actor: "human:gui", dispatchInFlight: true });
     const before = h.attempts(goal).length;
     await assert.rejects(
@@ -243,12 +244,139 @@ test("g-610：另一写入者遗留的 dispatch_in_flight 持久标记会拒绝�
       (e: any) => /dispatch_in_flight/.test(String(e?.message ?? e)) && /首次子代理启动尚未结算/.test(String(e?.message ?? e)),
     );
     assert.equal(h.attempts(goal).length, before, "拒绝不得新增 attempt");
-    // 既有授权 abandon（owner）清除标记后可正常重派
-    abandonAttempt(h.root, goal, { actor: "human:gui", attempt: att, reason: "explicit recovery" });
-    const ok: any = await h.dispatch(goal, "after explicit recovery");
-    assert.ok(ok.child_id, "显式恢复后可派发");
+    // 不提供调用方声明放行：普通 abandon 在标记存在时同样拒绝
+    await assert.rejects(
+      async () => abandonAttempt(h.root, goal, { actor: "human:gui", attempt: att, reason: "not proven stopped" }),
+      /首次子代理启动尚未结算/,
+    );
+    // 已确认无 child 的前置失败由 settle 正常结算（正常恢复路径，不是人工 attestation）
+    settleAttemptDispatchInFlight(h.root, goal, att, { actor: "human:gui", error: "confirmed pre-spawn failure" });
+    const ok: any = await h.dispatch(goal, "after confirmed settlement");
+    assert.ok(ok.child_id, "确认无 child 的失败结算后可派发");
   } finally {
     h.fake.release();
     await h.shutdown();
   }
+});
+
+test("g-610 rev-02 真实宿主：spawn await 窗口普通 abandon 必拒；第二派发零新 attempt；原 spawn 只 bind 一次", async () => {
+  const h = await makeRealHost({ holdPrepare: true });
+  try {
+    const goal = await makeGoal(h, "rev2 inflight abandon race");
+    const exec = { agent: h.parent, signal: new AbortController().signal };
+    const first = h.dispatch(goal, "first-held");
+    await waitFor(() => {
+      const a = h.attempts(goal)[0];
+      if (!a) return false;
+      const f = join(dirname(findGoalFile(h.root, goal)), "attempts", a.id, "attempt.md");
+      return existsSync(f) && loadGoal(f).meta.dispatch_in_flight === true && !loadGoal(f).meta.child_id;
+    }, "attempt 持久 in_flight 且 child_id=null");
+
+    const att = h.attempts(goal)[0];
+    const beforeEvents = readEvents(h.root).length;
+    await assert.rejects(
+      async () => h.tools.get("graph_abandon_attempt").execute({ goal, attempt: att.id, reason: "normal race" }, exec),
+      (e: any) => /首次子代理启动尚未结算/.test(String(e?.message ?? e)),
+      "在途窗口普通 abandon 必须拒绝",
+    );
+    assert.equal(readEvents(h.root).length, beforeEvents, "拒绝不得写事件");
+    assert.equal(h.attempts(goal).length, 1, "拒绝不得新增 attempt");
+    const beforeSecond = readEvents(h.root).length;
+    await assert.rejects(() => h.dispatch(goal, "second"), /dispatch_in_flight/, "第二派发必须拒绝");
+    assert.equal(h.attempts(goal).length, 1, "第二派发不得新增 attempt");
+    assert.equal(readEvents(h.root).length, beforeSecond, "第二派发不得写图事件");
+
+    h.fake.hold();
+    h.releasePrepare();
+    const ok: any = await first;
+    assert.ok(ok.child_id, "原 spawn 正常完成 bind");
+    await waitFor(() => h.childLive(ok.child_id) === "running", "original child running");
+    assert.equal(h.attempts(goal).length, 1);
+    assert.equal(readEvents(h.root).filter((e) => e.event === "attempt.bound" && e.details?.attempt === att.id).length, 1, "只允许一次 bound");
+    assert.equal(readEvents(h.root).some((e) => e.event === "attempt.abandoned" && e.details?.attempt === att.id), false, "不得出现 abandoned");
+
+    // 已 bind 后再次用派发 CAS 绑定同一 attempt 必须拒绝且零事件（简单防倒置）
+    const beforeDup = readEvents(h.root).length;
+    assert.throws(
+      () => bindAttemptChild(h.root, goal, att.id, ok.child_id, "human:gui", "sess-super", null, null, null, null, null, { dispatchInFlight: true, parentSessionId: "sess-super" }),
+      /不处于首次启动窗口/,
+    );
+    assert.equal(readEvents(h.root).length, beforeDup, "重复 bind 不得写事件");
+
+    // 自然结束 + 既有授权解绑后合法返工
+    h.fake.release();
+    await waitFor(() => readEvents(h.root).some((e) => e.event === "attempt.results_written"
+      && e.details?.attempt === att.id && e.details?.source === "subagent/end"), "natural end");
+    await waitFor(() => h.childLive(ok.child_id) !== "running", "child stopped");
+    const row = h.attempts(goal).find((a: any) => a.id === att.id);
+    await h.tools.get("graph_unbind_goal_child").execute({ goal, attempt: att.id, token: row.binding_token, reason: "natural end" }, exec);
+    const retry: any = await h.dispatch(goal, "authorized retry");
+    assert.ok(retry.child_id, "正常结束+授权解绑后可返工");
+    assert.equal(h.attempts(goal).length, 2);
+  } finally {
+    h.fake.release();
+    h.releasePrepare();
+    await h.shutdown();
+  }
+});
+
+test("g-610 rev-02 真实 HTTP owner 路径：401/403 先于业务；在途 abandon 409；第二 start 409 且零新 attempt", async () => {
+  const h = await makeRealHost({ holdPrepare: true, http: true });
+  try {
+    const goal = await makeGoal(h, "rev2 http inflight race");
+    const path = "/api/dsh-graph/start-execution";
+    const body = { goal, workspace: h.ws, attempt_brief: "http first" };
+    const anon = await h.http.request("POST", path, {}, body);
+    assert.ok([401, 403].includes(anon.status), `匿名必须先 401/403，实得 ${anon.status}`);
+    assert.equal(h.attempts(goal).length, 0, "匿名请求零业务副作用");
+
+    const cookie = h.http.mintOwnerCookie();
+    const firstP = h.http.request("POST", path, { cookie }, body);
+    await waitFor(() => {
+      const a = h.attempts(goal)[0];
+      if (!a) return false;
+      const f = join(dirname(findGoalFile(h.root, goal)), "attempts", a.id, "attempt.md");
+      return existsSync(f) && loadGoal(f).meta.dispatch_in_flight === true && !loadGoal(f).meta.child_id;
+    }, "HTTP attempt in_flight");
+    const att = h.attempts(goal)[0];
+
+    const ab = await h.http.request("POST", "/api/dsh-graph/abandon-attempt", { cookie }, { goal, attempt: att.id, reason: "http normal race", workspace: h.ws });
+    assert.notEqual(ab.status, 200, "在途 HTTP abandon 必须拒绝");
+    assert.match(String(ab.body?.error ?? ab.body), /首次子代理启动尚未结算/);
+    assert.equal(h.attempts(goal).length, 1, "HTTP abandon 拒绝不得新增 attempt");
+
+    const second = await h.http.request("POST", path, { cookie }, { goal, workspace: h.ws, attempt_brief: "http second" });
+    assert.equal(second.status, 409, `第二 HTTP start 必须 409，实得 ${second.status} ${JSON.stringify(second.body)}`);
+    assert.equal(h.attempts(goal).length, 1, "第二 HTTP start 不得新增 attempt");
+
+    h.fake.hold();
+    h.releasePrepare();
+    const first: any = await firstP;
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.ok(first.body?.child_id, "原 HTTP spawn 正常 bind");
+    await waitFor(() => h.childLive(first.body.child_id) === "running", "HTTP child running");
+    assert.equal(h.attempts(goal).length, 1);
+    assert.equal(readEvents(h.root).filter((e) => e.event === "attempt.bound" && e.details?.attempt === att.id).length, 1);
+  } finally {
+    h.fake.release();
+    h.releasePrepare();
+    await h.shutdown();
+  }
+});
+
+
+test("g-610 rev-02：registry=idle 但 result 仍 pending 且无结束事件 ⇒ 拒绝；终态/结束事件才放行", () => {
+  const h = { root: mkdtempSync(join(process.cwd(), "tmp", "g610", "idle-")) };
+  init(h.root);
+  const goal = createGoal(h.root, { title: "idle gate", version: "v1.0", type: "task", actor: "human:gui" });
+  setCriteria(h.root, goal, ["判据"], "human:gui");
+  const att = startAttempt(h.root, goal, { executor: "agent:executor", actor: "human:gui" });
+  bindAttemptChild(h.root, goal, att, "idle-child", "human:gui", "sess-super");
+  assert.throws(
+    () => assertNoActiveExecutionChild(h.root, goal, { liveCheck: () => "idle", action: "派发执行", includeLocalActive: true }),
+    /idle 只代表.*已登记未终结/,
+  );
+  const f = join(dirname(findGoalFile(h.root, goal)), "attempts", att, "attempt.md");
+  const doc = loadGoal(f); doc.meta.result = "completed"; saveGoal(f, doc);
+  assert.doesNotThrow(() => assertNoActiveExecutionChild(h.root, goal, { liveCheck: () => "idle", action: "派发执行", includeLocalActive: true }));
 });

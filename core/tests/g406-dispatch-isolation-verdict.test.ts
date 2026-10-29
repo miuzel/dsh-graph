@@ -101,6 +101,7 @@ function createHarness({ gitRepo = false, providers = ["spawn"], providerHasPrep
         if (!providers.length) return undefined;
         return {
           list: () => providers,
+          listChildren: async () => [],
           getProvider: () => (providerHasPrepareContinuable ? { prepareContinuable: () => {} } : {}),
           startContinuable: async (opts: any) => {
             // 实拍：子代理被启动的这一刻，工作树是否已经注册（主树窗口的结构性取证）。
@@ -464,8 +465,8 @@ test("g-406 判据 3 负向对照②：结构性守卫钉住「创建并注册�
   // 锚点取「子代理启动语句结束之后」的位置：把创建块挪到启动之后 ⇒ 子代理先于建树启动
   const moved = mutateOnce(
     source,
-    "        });\n\n        try {\n          bindAttemptChild(",
-    "        });\n\n" + createBlock + "        try {\n          bindAttemptChild(",
+    "        spawnReceipt = started;\n\n        try {\n          bindAttemptChild(",
+    "        spawnReceipt = started;\n\n" + createBlock + "        try {\n          bindAttemptChild(",
   ).replace(createBlock, "");
   assert.match(String(isolationOrderingViolation(dispatchRegion(moved))), /晚于子代理启动/);
 });

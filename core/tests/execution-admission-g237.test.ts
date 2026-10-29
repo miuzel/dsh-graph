@@ -73,6 +73,7 @@ function createHarness({
       if (name === "subagents") {
         return {
           list: () => providers,
+          listChildren: async () => [],
           getProvider: () => (providerHasPrepareContinuable ? { prepareContinuable: () => {} } : {}),
           startContinuable: async (opts: any) => {
             capturedRequests.push(opts);
