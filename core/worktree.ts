@@ -424,7 +424,7 @@ export function cleanWorktree(root: string, id: string, actor = "human:gui", con
   // g-610：真正 `git worktree remove` 之前再核公开 registry（运行中/已登记未终结的 child 拒绝）。
   if (liveCheck) {
     try {
-      assertNoActiveExecutionChild(root, c.goal, { liveCheck, action: "清理工作树" });
+      assertNoActiveExecutionChild(root, c.goal, { liveCheck, action: "清理工作树", scope: "management", onlyAttempt: c.attempt, worktreePath: realPath });
     } catch (e) {
       return block(String((e as Error)?.message ?? e));
     }

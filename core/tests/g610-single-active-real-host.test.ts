@@ -9,9 +9,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { init, createGoal, setCriteria } from "../ops.ts";
+import { prepareAttemptWorktree } from "../worktree.ts";
 import { readEvents } from "../events.ts";
-import { transition, loadGoal, saveGoal, findGoalFile, listWorktrees, startAttempt, abandonAttempt, bindAttemptChild, settleAttemptDispatchInFlight, assertNoActiveExecutionChild } from "../ops.ts";
-import { existsSync, mkdtempSync } from "node:fs";
+import { transition, loadGoal, saveGoal, findGoalFile, listWorktrees, startAttempt, abandonAttempt, bindAttemptChild, settleAttemptDispatchInFlight, assertNoActiveExecutionChild, archiveGoal, deleteGoal } from "../ops.ts";
+import { existsSync, mkdtempSync, renameSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { makeRealHost, makeGoal } from "./_g610-real-host.ts";
 
@@ -379,4 +380,223 @@ test("g-610 rev-02：registry=idle 但 result 仍 pending 且无结束事件 ⇒
   const f = join(dirname(findGoalFile(h.root, goal)), "attempts", att, "attempt.md");
   const doc = loadGoal(f); doc.meta.result = "completed"; saveGoal(f, doc);
   assert.doesNotThrow(() => assertNoActiveExecutionChild(h.root, goal, { liveCheck: () => "idle", action: "派发执行", includeLocalActive: true }));
+});
+
+test("g-610 rev-03 管理动作：历史 delivered + pending/done/gone 无 subagent/end ⇒ archive/delete 成功", async () => {
+  const h = await makeRealHost();
+  try {
+    const goal = await makeGoal(h, "rev3 historical delivered", "task", true);
+    transition(h.root, goal, "in_progress", { actor: "human:gui", force: true });
+    const att = startAttempt(h.root, goal, { executor: "agent:fixture", actor: "human:gui" });
+    h.fake.hold();
+    const child: any = await h.startChild("rev3-historical");
+    await waitFor(() => h.childLive(child.childId) === "running", "fixture child running");
+    bindAttemptChild(h.root, goal, att, child.childId, "human:gui", "sess-super");
+    h.fake.release();
+    await waitFor(() => h.childLive(child.childId) === "gone", "fixture child gone");
+    const af = join(dirname(findGoalFile(h.root, goal)), "attempts", att, "attempt.md");
+    const doc = loadGoal(af); doc.meta.status_state = "done"; saveGoal(af, doc);
+    transition(h.root, goal, "review", { actor: "human:gui" });
+    transition(h.root, goal, "delivered", { actor: "human:gui" });
+    assert.equal(readEvents(h.root).some((e) => e.event === "attempt.results_written" && e.details?.attempt === att), false, "历史形态不得有 subagent/end");
+
+    const exec = { agent: h.parent, signal: new AbortController().signal };
+    const ar: any = await h.tools.get("graph_archive_goal").execute({ goal }, exec);
+    assert.equal(ar.ok, true, "delivered + idle/gone 管理归档应成功");
+    const dr: any = await h.tools.get("graph_delete_goal").execute({ goal }, exec);
+    assert.equal(dr.ok, true, "归档后 delete 应成功");
+  } finally {
+    h.fake.release();
+    await h.shutdown();
+  }
+});
+
+test("g-610 rev-03 管理动作：历史 delivered + pending/done/gone 无 end ⇒ cleanWorktree 成功（仅目标树）", async () => {
+  const h = await makeRealHost({ gitRepo: true });
+  try {
+    const goal = await makeGoal(h, "rev3 historical clean", "feature", true);
+    transition(h.root, goal, "in_progress", { actor: "human:gui", force: true });
+    const att = startAttempt(h.root, goal, { executor: "agent:fixture", actor: "human:gui" });
+    const wt: any = prepareAttemptWorktree(h.root, goal, att, { enabled: true });
+    const af = join(dirname(findGoalFile(h.root, goal)), "attempts", att, "attempt.md");
+    let doc = loadGoal(af); doc.meta.worktree = wt.worktree; saveGoal(af, doc);
+    h.fake.hold();
+    const child: any = await h.startChild("rev3-historical-clean");
+    await waitFor(() => h.childLive(child.childId) === "running", "clean child running");
+    bindAttemptChild(h.root, goal, att, child.childId, "human:gui", "sess-super");
+    h.fake.release();
+    await waitFor(() => h.childLive(child.childId) === "gone", "clean child gone");
+    doc = loadGoal(af); doc.meta.status_state = "done"; saveGoal(af, doc);
+    transition(h.root, goal, "review", { actor: "human:gui" });
+    transition(h.root, goal, "delivered", { actor: "human:gui" });
+    const row = listWorktrees(h.root, goal).find((c) => c.attempt === att);
+    assert.ok(row, "历史 worktree 候选可见");
+    const out: any = await h.tools.get("graph_clean_worktree").execute({ id: row!.id, confirm: true }, { agent: h.parent, signal: new AbortController().signal });
+    assert.equal(out.ok, true, JSON.stringify(out));
+  } finally {
+    h.fake.release();
+    await h.shutdown();
+  }
+});
+
+test("g-610 rev-03 管理动作负向：running/unknown/in-flight 均拒且零移动；idle management 放行但 dispatch 仍拒", () => {
+  const root = mkdtempSync(join(process.cwd(), "tmp", "g610", "mgmt-"));
+  init(root);
+  const goal = createGoal(root, { title: "mgmt gates", version: "v1.0", type: "task", actor: "human:gui" });
+  setCriteria(root, goal, ["判据"], "human:gui");
+  transition(root, goal, "in_progress", { actor: "human:gui", force: true });
+  const att = startAttempt(root, goal, { executor: "agent:fixture", actor: "human:gui" });
+  bindAttemptChild(root, goal, att, "mgmt-child", "human:gui", "sess-super");
+  transition(root, goal, "review", { actor: "human:gui" });
+  transition(root, goal, "delivered", { actor: "human:gui" });
+  const file = findGoalFile(root, goal);
+  assert.throws(
+    () => archiveGoal(root, goal, { actor: "human:gui", liveCheck: () => "running" }),
+    (e: any) => /仍在运行/.test(String(e?.message ?? e)) && /management blocks only running\/unknown\/in-flight/.test(String(e?.message ?? e)),
+  );
+  assert.throws(() => archiveGoal(root, goal, { actor: "human:gui", liveCheck: () => "unknown" }), /无法从公开 registry 确认/);
+  assert.ok(existsSync(file), "running/unknown 拒绝不得移动目标");
+  // idle management 放行归档；同一 idle 对 dispatch 仍拒绝
+  archiveGoal(root, goal, { actor: "human:gui", liveCheck: () => "idle" });
+  assert.equal(existsSync(file), false, "idle management 允许归档");
+  // 归档是移动而非删除；原位置已不存在，且 archived 目标仍可被 findGoalFile 找到
+  assert.equal(existsSync(file), false, "归档后原位置已移动");
+  assert.ok(existsSync(findGoalFile(root, goal)), "归档目标仍存在于 archived 位置");
+
+  // in-flight：archive/delete 都必须阻断且零移动
+  const g2 = createGoal(root, { title: "mgmt inflight", version: "v1.0", type: "task", actor: "human:gui" });
+  setCriteria(root, g2, ["判据"], "human:gui");
+  transition(root, g2, "in_progress", { actor: "human:gui", force: true });
+  startAttempt(root, g2, { executor: "agent:fixture", actor: "human:gui", dispatchInFlight: true });
+  transition(root, g2, "review", { actor: "human:gui" });
+  transition(root, g2, "delivered", { actor: "human:gui" });
+  const f2 = findGoalFile(root, g2);
+  assert.throws(() => archiveGoal(root, g2, { actor: "human:gui", liveCheck: () => "gone" }), /dispatch_in_flight/);
+  assert.ok(existsSync(f2), "in-flight archive 拒绝不得移动目标");
+  const g2d = loadGoal(f2); g2d.meta.archived = true; saveGoal(f2, g2d);
+  assert.throws(() => deleteGoal(root, g2, { actor: "human:gui", liveCheck: () => "gone" }), /dispatch_in_flight/);
+  assert.ok(existsSync(f2), "in-flight delete 拒绝不得删除目标");
+});
+
+test("g-610 rev-03 clean 归属收窄：同 goal 另一 attempt/另一 tree 的 running child 不误阻目标树", async () => {
+  const h = await makeRealHost({ gitRepo: true });
+  try {
+    const goal = await makeGoal(h, "rev3 clean scope", "feature", true);
+    transition(h.root, goal, "in_progress", { actor: "human:gui", force: true });
+    const att1 = startAttempt(h.root, goal, { executor: "agent:fixture", actor: "human:gui" });
+    const wt1: any = prepareAttemptWorktree(h.root, goal, att1, { enabled: true });
+    let f1 = join(dirname(findGoalFile(h.root, goal)), "attempts", att1, "attempt.md");
+    let d1 = loadGoal(f1); d1.meta.worktree = wt1.worktree; saveGoal(f1, d1);
+    const att2 = startAttempt(h.root, goal, { executor: "agent:fixture", actor: "human:gui" });
+    const wt2: any = prepareAttemptWorktree(h.root, goal, att2, { enabled: true });
+    let f2 = join(dirname(findGoalFile(h.root, goal)), "attempts", att2, "attempt.md");
+    let d2 = loadGoal(f2); d2.meta.worktree = wt2.worktree; saveGoal(f2, d2);
+
+    h.fake.hold();
+    const c1: any = await h.startChild("clean-scope-one");
+    await waitFor(() => h.childLive(c1.childId) === "running", "c1 running");
+    bindAttemptChild(h.root, goal, att1, c1.childId, "human:gui", "sess-super");
+    h.fake.release();
+    await waitFor(() => h.childLive(c1.childId) === "gone", "c1 gone");
+    d1 = loadGoal(f1); d1.meta.status_state = "done"; saveGoal(f1, d1);
+
+    h.fake.hold();
+    const c2: any = await h.startChild("clean-scope-two");
+    await waitFor(() => h.childLive(c2.childId) === "running", "c2 running");
+    bindAttemptChild(h.root, goal, att2, c2.childId, "human:gui", "sess-super");
+    transition(h.root, goal, "review", { actor: "human:gui" });
+    transition(h.root, goal, "delivered", { actor: "human:gui" });
+
+    const row = listWorktrees(h.root, goal).find((c) => c.attempt === att1);
+    assert.ok(row, "target tree candidate");
+    const out: any = await h.tools.get("graph_clean_worktree").execute({ id: row!.id, confirm: true }, { agent: h.parent, signal: new AbortController().signal });
+    assert.equal(out.ok, true, `另一树的 running child 不得误阻：${JSON.stringify(out)}`);
+  } finally {
+    h.fake.release();
+    await h.shutdown();
+  }
+});
+
+test("g-610 rev-03 P3：settle 遇事件写失败必须显式抛错且 marker 保持（不 fail-open/不泄露凭据）", () => {
+  const root = mkdtempSync(join(process.cwd(), "tmp", "g610", "settle-"));
+  init(root);
+  const goal = createGoal(root, { title: "settle failure", version: "v1.0", type: "task", actor: "human:gui" });
+  setCriteria(root, goal, ["判据"], "human:gui");
+  transition(root, goal, "in_progress", { actor: "human:gui", force: true });
+  const att = startAttempt(root, goal, { executor: "agent:fixture", actor: "human:gui", dispatchInFlight: true });
+  const f = join(dirname(findGoalFile(root, goal)), "attempts", att, "attempt.md");
+  const ev = join(root, "events.jsonl");
+  const bak = join(root, "events.jsonl.bak");
+  renameSync(ev, bak);
+  mkdirSync(ev);
+  let err: any = null;
+  try { settleAttemptDispatchInFlight(root, goal, att, { actor: "human:gui", error: "controlled event write failure" }); }
+  catch (e) { err = e; }
+  assert.ok(err, "事件写失败必须抛出，不得当作成功");
+  assert.match(String(err.message), /结算 dispatch_in_flight 失败/);
+  assert.equal(loadGoal(f).meta.dispatch_in_flight, true, "失败后 marker 必须保持");
+  assert.equal(/token|secret|key/i.test(String(err.message)), false, "错误文案不得输出凭据");
+  rmSync(ev, { recursive: true, force: true });
+  renameSync(bak, ev);
+  settleAttemptDispatchInFlight(root, goal, att, { actor: "human:gui", error: "retry after repair" });
+  assert.equal(loadGoal(f).meta.dispatch_in_flight, undefined);
+});
+
+test("g-610 rev-03 真实 HTTP owner：历史 delivered/idle-gone archive/delete/clean 成功；匿名 401/403 零副作用", async () => {
+  const h = await makeRealHost({ gitRepo: true, http: true });
+  try {
+    const cookie = h.http.mintOwnerCookie();
+    // 匿名管理请求必须先认证
+    for (const [path, body] of [
+      ["/api/dsh-graph/archive", { goal: "g-001", workspace: h.ws }],
+      ["/api/dsh-graph/delete", { goal: "g-001", workspace: h.ws }],
+      ["/api/dsh-graph/worktrees/clean", { id: "x", confirm: true, workspace: h.ws }],
+    ] as const) {
+      const r = await h.http.request("POST", path, {}, body);
+      assert.ok([401, 403].includes(r.status), `${path} 匿名必须 401/403，实得 ${r.status}`);
+    }
+
+    // 历史 delivered + gone + 无 end：HTTP archive/delete 成功
+    const g1 = await makeGoal(h, "rev3 http historical", "task", true);
+    transition(h.root, g1, "in_progress", { actor: "human:gui", force: true });
+    const a1 = startAttempt(h.root, g1, { executor: "agent:fixture", actor: "human:gui" });
+    h.fake.hold();
+    const c1: any = await h.startChild("http-hist");
+    await waitFor(() => h.childLive(c1.childId) === "running", "http hist running");
+    bindAttemptChild(h.root, g1, a1, c1.childId, "human:gui", "sess-super");
+    h.fake.release();
+    await waitFor(() => h.childLive(c1.childId) === "gone", "http hist gone");
+    const af = join(dirname(findGoalFile(h.root, g1)), "attempts", a1, "attempt.md");
+    const d = loadGoal(af); d.meta.status_state = "done"; saveGoal(af, d);
+    transition(h.root, g1, "review", { actor: "human:gui" });
+    transition(h.root, g1, "delivered", { actor: "human:gui" });
+    const ar = await h.http.request("POST", "/api/dsh-graph/archive", { cookie }, { goal: g1, workspace: h.ws });
+    assert.equal(ar.status, 200, JSON.stringify(ar.body));
+    const dr = await h.http.request("POST", "/api/dsh-graph/delete", { cookie }, { goal: g1, workspace: h.ws });
+    assert.equal(dr.status, 200, JSON.stringify(dr.body));
+
+    // 历史 worktree + gone：HTTP clean 成功
+    const g2 = await makeGoal(h, "rev3 http clean", "feature", true);
+    transition(h.root, g2, "in_progress", { actor: "human:gui", force: true });
+    const a2 = startAttempt(h.root, g2, { executor: "agent:fixture", actor: "human:gui" });
+    const wt: any = prepareAttemptWorktree(h.root, g2, a2, { enabled: true });
+    const f2 = join(dirname(findGoalFile(h.root, g2)), "attempts", a2, "attempt.md");
+    let d2 = loadGoal(f2); d2.meta.worktree = wt.worktree; saveGoal(f2, d2);
+    h.fake.hold();
+    const c2: any = await h.startChild("http-clean");
+    await waitFor(() => h.childLive(c2.childId) === "running", "http clean running");
+    bindAttemptChild(h.root, g2, a2, c2.childId, "human:gui", "sess-super");
+    h.fake.release();
+    await waitFor(() => h.childLive(c2.childId) === "gone", "http clean gone");
+    d2 = loadGoal(f2); d2.meta.status_state = "done"; saveGoal(f2, d2);
+    transition(h.root, g2, "review", { actor: "human:gui" });
+    transition(h.root, g2, "delivered", { actor: "human:gui" });
+    const row = listWorktrees(h.root, g2).find((c) => c.attempt === a2);
+    assert.ok(row);
+    const cr = await h.http.request("POST", "/api/dsh-graph/worktrees/clean", { cookie }, { id: row!.id, confirm: true, workspace: h.ws });
+    assert.equal(cr.status, 200, JSON.stringify(cr.body));
+  } finally {
+    h.fake.release();
+    await h.shutdown();
+  }
 });

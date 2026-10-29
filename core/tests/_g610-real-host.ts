@@ -215,6 +215,12 @@ export async function makeRealHost(opts: { gitRepo?: boolean; holdPrepare?: bool
     tools: { get: tool },
     dispatch: async (goal: string, brief = "real host dispatch", extra: any = {}) =>
       tool("graph_start_attempt").execute({ goal, attempt_brief: brief, worktree: false, ...extra }, exec),
+    startChild: async (label = "fixture") => subagents.startActivation({
+      provider: "spawn",
+      label,
+      request: { parent, prompt: [{ type: "text", text: "fixture child" }] },
+      signal: new AbortController().signal,
+    }),
     childLive: (childId: string) => {
       const a = reg.get(childId);
       if (!a) return "gone";

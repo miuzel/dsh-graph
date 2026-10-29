@@ -10742,7 +10742,7 @@ export function settleAttemptDispatchInFlight(
   if (basename(goalFile) !== "goal.md") return;
   const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
   if (!existsSync(file)) return;
-  withTx({ root, actor: opts.actor, goal: goalId }, { lockName: "execution-" + goalId }, () => {
+  const result = withTx({ root, actor: opts.actor, goal: goalId }, { lockName: "execution-" + goalId }, () => {
     const doc = loadGoal(file);
     if (doc.meta.dispatch_in_flight !== true) return { value: undefined as void, events: [], persist: () => {} };
     return {
@@ -10759,6 +10759,13 @@ export function settleAttemptDispatchInFlight(
       },
     };
   });
+  if (!result.ok) {
+    throw new TxError(
+      `结算 dispatch_in_flight 失败（phase=${result.phase}）：${result.error}`,
+      result.phase,
+      result.recoverable,
+    );
+  }
 }
 
 /** 从目标解绑执行子代理（g-190/g-282）：
@@ -11438,11 +11445,20 @@ export function moveGoal(
 /** g-610：公开 registry 的 child 活跃度（由宿主注入；core 不直接读私有 registry）。 */
 export type ExecutionLiveCheck = (childId: string) => "running" | "idle" | "gone" | "unknown";
 
+export type ExecutionGateScope = "dispatch" | "management";
+
 export interface ExecutionGateOptions {
   /** 宿主公开 `agents.get` 探测；缺省 = 旧行为（只按 attempt 元数据，不新增阻断）。 */
   liveCheck?: ExecutionLiveCheck;
   /** 面向用户的动作名（派发 / 归档目标 / 删除目标 / 暂缓目标 / 清理工作树）。 */
   action: string;
+  /** 同一公共同源策略：dispatch 严格（idle+pending 无结束事件仍拒）；management 仅在
+   *  running/unknown/首次 spawn 未结算时阻断（idle/gone 不阻断管理清理，但也不代表完成/
+   *  不授权重派）。默认 dispatch 保持既有宿主派发行为。 */
+  scope?: ExecutionGateScope;
+  /** 仅 management 清理工作树：只检查该候选 attempt，以及 worktreePath 相同的共享树占用。 */
+  onlyAttempt?: string;
+  worktreePath?: string;
   /** 是否把「无 child 但 status_line/status_state 表明本地执行中」也算占用。
    *  仅派发入口传 true；系统管理动作沿用既有 attemptIsActive 门禁，避免重复/误拦。 */
   includeLocalActive?: boolean;
@@ -11489,12 +11505,41 @@ export function assertNoActiveExecutionChild(root: string, goalId: string, opts:
     const result = String(doc.meta.result ?? "pending");
     const terminal = result !== "pending";
     const childId = doc.meta.child_id ? String(doc.meta.child_id) : null;
+    // g-610 rev-03：cleanWorktree 只对实际目标树归属的 attempt 做实时检查；同 goal 其它
+    // worktree/旧 attempt 不误阻。共享同一 worktree.path 的 attempt 仍纳入。
+    // 归属以候选 realpath + attempt 记录路径的 realpath 为准；无法证明不同且该 attempt 仍
+    // 绑定 child 时保守纳入（避免仅比较可能为空/相对路径而假放行）。
+    if (opts.onlyAttempt && a !== opts.onlyAttempt) {
+      const own = String(doc.meta.worktree?.path ?? "").trim();
+      let sameTree = false;
+      let provablyDifferent = false;
+      if (opts.worktreePath && own) {
+        try {
+          const aPath = realpathSync(resolve(opts.worktreePath));
+          const bPath = realpathSync(resolve(own));
+          sameTree = aPath === bPath;
+          provablyDifferent = !sameTree;
+        } catch {
+          sameTree = resolve(opts.worktreePath) === resolve(own);
+          // realpath 不可用 ⇒ 无法证明不同；有 child 时保守纳入。
+          provablyDifferent = false;
+        }
+      }
+      if (!sameTree) {
+        // 无 child ⇒ 与本次清理无关；有 child 且能证明路径不同 ⇒ 跳过；无法证明不同 ⇒ 保守纳入。
+        if (!childId || provablyDifferent) continue;
+      }
+    }
     // g-610 rev-02：在途标记优先于 detached 跳过——即使记录已被取消/解绑，只要首次 spawn
     // 尚未结算，就不能放行下一次派发（防止晚到 child 与第二个 child 并行）。
+    const scope = opts.scope ?? "dispatch";
     if (doc.meta.dispatch_in_flight === true && !terminal) {
+      const tail = scope === "management"
+        ? "管理动作仅因首次 spawn 未结算而阻断；idle/gone 不阻断管理清理，但也不代表完成、不授权重派"
+        : "本次不创建第二个 child。请等待绑定/失败结算；若宿主已崩溃且无法结算，这是已记录的残余风险";
       throw new GraphConflictError(
-        `拒绝${opts.action}：目标 ${goalId} 的 ${a} 首次子代理启动尚未结算（dispatch_in_flight）；` +
-          `本次不创建第二个 child。请等待绑定/失败结算；若宿主已崩溃且无法结算，这是已记录的残余风险`,
+        `拒绝${opts.action}：目标 ${goalId} 的 ${a} 首次子代理启动尚未结算（dispatch_in_flight）；${tail}`
+        + "（management blocks only in-flight/running/unknown; idle/gone is not proof of completion and does not authorize re-dispatch）",
       );
     }
     if (doc.meta.detached === true) continue;
@@ -11512,15 +11557,22 @@ export function assertNoActiveExecutionChild(root: string, goalId: string, opts:
     if (live === "running") {
       throw new GraphConflictError(
         `拒绝${opts.action}：目标 ${goalId} 的 ${a} 绑定的 child ${childId} 仍在运行（公开 registry=running）；` +
-          `请等待其结束，或用既有授权 interrupt/unbind/abandon 处理后再继续`,
+          `请等待其结束，或用既有授权 interrupt/unbind/abandon 处理后再继续`
+          + (scope === "management"
+            ? "（management blocks only running/unknown/in-flight; idle/gone is not proof of completion and does not authorize re-dispatch）"
+            : ""),
       );
     }
     if (live === "unknown") {
       throw new GraphConflictError(
         `拒绝${opts.action}：无法从公开 registry 确认目标 ${goalId} 的 ${a}/child ${childId} 是否仍在运行；` +
-          `服务不可用时不做“不存在”的安全承诺，请恢复 registry 后重试`,
+          `服务不可用时不做“不存在”的安全承诺，请恢复 registry 后重试`
+          + (scope === "management"
+            ? "（management blocks only running/unknown/in-flight; idle/gone is not proof of completion and does not authorize re-dispatch）"
+            : ""),
       );
     }
+    if (scope === "management") continue; // 管理动作：idle/gone 不阻断，但不代表完成/不授权重派
     if (terminal || hasEndEvent(a)) continue;
     throw new GraphConflictError(
       `拒绝${opts.action}：目标 ${goalId} 的 ${a} 绑定的 child ${childId} 当前 registry=${live}，` +
@@ -11550,7 +11602,7 @@ export function archiveGoal(
   const targetFile = join(root, targetRel);
   if (existsSync(targetFile)) throw new GraphError(`归档位置已存在：${targetFile}`);
   // g-610：搬走/写 archived 之前先核公开 registry，运行中的 child 一律拒绝。
-  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "归档目标" });
+  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "归档目标", scope: "management" });
   // 标记已归档
   doc.meta.archived = true;
   // g-395：事件先行——`goal.archived` 追加失败时不再留下「目标已搬进 archived/、事件流无记录」
@@ -11686,7 +11738,7 @@ export function postponeGoal(
   }
 
   // g-610：搬走之前核公开 registry（先于既有元数据门禁的补充，不替代它）。
-  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "暂缓目标" });
+  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "暂缓目标", scope: "management" });
   if (srcDir && _hasActiveAttempts_postpone(srcDir)) {
     const reason = "存在进行中的执行子代理";
     appendEvent(root, {
@@ -11784,7 +11836,7 @@ export function deleteGoal(
     }
   }
   // g-610：删目录之前再核公开 registry；运行中/已登记未终结的 child 一律拒绝。
-  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "删除目标" });
+  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "删除目标", scope: "management" });
   // g-500 判据 1：关联工作树阻断闸门（在**任何**破坏性动作之前，含下面的 rmSync）。
   // 目标目录（含 attempts/）是这些工作树归属的唯一板内证据：删掉之后树立刻退化成
   // missing_attempt_evidence 孤儿而无法安全清理。故此处 fail-closed 阻断，并给出
