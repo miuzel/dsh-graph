@@ -600,3 +600,41 @@ test("g-610 rev-03 真实 HTTP owner：历史 delivered/idle-gone archive/delete
     await h.shutdown();
   }
 });
+
+test("g-610 rev-03 clean 共享实际树：另一 attempt 绑定同一 canonical path 且 child running ⇒ 必阻", async () => {
+  const h = await makeRealHost({ gitRepo: true });
+  try {
+    const goal = await makeGoal(h, "rev3 clean shared path", "feature", true);
+    transition(h.root, goal, "in_progress", { actor: "human:gui", force: true });
+    const att1 = startAttempt(h.root, goal, { executor: "agent:fixture", actor: "human:gui" });
+    const wt1: any = prepareAttemptWorktree(h.root, goal, att1, { enabled: true });
+    const f1 = join(dirname(findGoalFile(h.root, goal)), "attempts", att1, "attempt.md");
+    let d1 = loadGoal(f1); d1.meta.worktree = wt1.worktree; saveGoal(f1, d1);
+    const att2 = startAttempt(h.root, goal, { executor: "agent:fixture", actor: "human:gui" });
+    const f2 = join(dirname(findGoalFile(h.root, goal)), "attempts", att2, "attempt.md");
+    let d2 = loadGoal(f2); d2.meta.worktree = { ...wt1.worktree }; saveGoal(f2, d2);
+
+    h.fake.hold();
+    const c1: any = await h.startChild("shared-one");
+    await waitFor(() => h.childLive(c1.childId) === "running", "c1 running");
+    bindAttemptChild(h.root, goal, att1, c1.childId, "human:gui", "sess-super");
+    h.fake.release();
+    await waitFor(() => h.childLive(c1.childId) === "gone", "c1 gone");
+    d1 = loadGoal(f1); d1.meta.status_state = "done"; saveGoal(f1, d1);
+
+    h.fake.hold();
+    const c2: any = await h.startChild("shared-two");
+    await waitFor(() => h.childLive(c2.childId) === "running", "c2 running");
+    bindAttemptChild(h.root, goal, att2, c2.childId, "human:gui", "sess-super");
+    transition(h.root, goal, "review", { actor: "human:gui" });
+    transition(h.root, goal, "delivered", { actor: "human:gui" });
+    const row = listWorktrees(h.root, goal).find((c) => c.attempt === att1);
+    assert.ok(row);
+    const out: any = await h.tools.get("graph_clean_worktree").execute({ id: row!.id, confirm: true }, { agent: h.parent, signal: new AbortController().signal });
+    assert.equal(out.ok, false, "共享实际树上的 running child 必须阻断");
+    assert.match(String(out.reason ?? ""), /仍在运行/);
+  } finally {
+    h.fake.release();
+    await h.shutdown();
+  }
+});
