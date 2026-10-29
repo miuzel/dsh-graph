@@ -110,7 +110,7 @@ import {
   type MemoryKind,
   type MemoryScope,
 } from "./events.ts";
-import { GraphError, GraphConflictError, GraphExecutionBusyError, STATUSES, assertTransition } from "./machine.ts";
+import { GraphError, GraphConflictError, GraphExecutionBusyError, ATTEMPT_TERMINAL_RESULTS, STATUSES, assertTransition } from "./machine.ts";
 import { withTx, withLocalLock, TxError, TxLockTimeoutError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
 import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, assertVersionSlug, isVersionSlug, type ObjectSchema } from "./schema.ts";
 
@@ -8724,6 +8724,24 @@ export function normalizeAttemptDispatchState(value: unknown): AttemptDispatchSt
 /** 门禁命中的原因闭集（与错误 code 一一对应；`child_bound` 优先于其它）。 */
 export type ActiveExecutionReason = "child_bound" | "spawning" | "bind_failed" | "unknown";
 
+/**
+ * g-610：终态词表分两层（唯一词表在 `machine.ts`，与 worktree 清理侧共享）：
+ *
+ *  1. **引擎可证终态**（`ENGINE_PROVEN_TERMINAL_RESULTS`）：`cancelled` / `detached` /
+ *     `superseded`——写入点本身已要求 liveCheck 通过或公开证据/无 child，可直接视为已结束；
+ *  2. **声明式终态**（`completed` / `failed` / `selected` / `merged` / `rejected`）：
+ *     历史/评审/交付路径的字符串声明，当前 core **没有**直接写 attempt.md 的生产写入点。
+ *     仅凭字符串不能证明 child 已停 ⇒ 必须另有 `detached===true` 或可信结束事件
+ *     （`attempt.abandoned/unbound/detached/superseded`，或 `attempt.results_written` 且
+ *     `source=subagent/end` 带 child_id）才放行；否则按 `unknown` fail-closed。
+ *
+ *  其它任何值（缺失、空串、数字/对象、未知拼写）一律 unknown，绝不因为「不是 pending」
+ *  就当成安全。`detached===true` 是显式已处理标记，优先放行（旧 unbind 记录兼容）。
+ */
+export { ATTEMPT_TERMINAL_RESULTS };
+const TERMINAL_ATTEMPT_RESULT_SET: ReadonlySet<string> = new Set(ATTEMPT_TERMINAL_RESULTS);
+const ENGINE_PROVEN_TERMINAL_RESULTS: ReadonlySet<string> = new Set(["cancelled", "detached", "superseded"]);
+
 export interface ActiveExecutionAttempt {
   attempt: string;
   child_id: string | null;
@@ -8734,6 +8752,8 @@ export interface ActiveExecutionAttempt {
   started_at: string | null;
   executor: string | null;
   reason: ActiveExecutionReason;
+  /** 元数据异常的可读原因（仅错误类别/码，**绝不**包含 attempt.md 原文或 token）。 */
+  metadata_error: string | null;
 }
 
 /**
@@ -8755,42 +8775,152 @@ export function listActiveExecutionAttempts(root: string, goalId: string): Activ
   const goalFile = findGoalFile(root, goalId);
   if (basename(goalFile) !== "goal.md") return [];
   const attDir = join(goalDirOf(goalFile), "attempts");
-  if (!existsSync(attDir)) return [];
+  if (!existsSync(attDir)) return []; // 尚无 attempt 目录 = 合法首次派发（旧数据兼容）
   const out: ActiveExecutionAttempt[] = [];
-  for (const a of readdirSync(attDir).filter((d) => d.startsWith("att-")).sort()) {
+  // 声明式终态的可信结束证据（事件流为审计真源）。仅在真的遇到声明式终态且无 child 时
+  // 才惰性读取；事件流不可读 ⇒ 没有证据 ⇒ 继续 fail-closed（不抛错掩盖单条记录）。
+  let endEvents: Map<string, string[]> | null = null;
+  let endEventsError = false;
+  const ensureEndEvents = (): void => {
+    if (endEvents) return;
+    endEvents = new Map();
+    try {
+      for (const e of readEvents(root)) {
+        if (e.goal !== goalId) continue;
+        const att = e.details?.attempt;
+        if (typeof att !== "string" || !att) continue;
+        const kinds = endEvents.get(att) ?? [];
+        if (["attempt.abandoned", "attempt.unbound", "attempt.detached", "attempt.superseded"].includes(e.event)) {
+          kinds.push(e.event);
+        } else if (e.event === "attempt.results_written"
+          && e.details?.source === "subagent/end"
+          && typeof e.details?.child_id === "string" && e.details.child_id) {
+          kinds.push("subagent/end");
+        }
+        if (kinds.length) endEvents.set(att, kinds);
+      }
+    } catch {
+      endEventsError = true;
+    }
+  };
+  const hasTrustworthyEndEvidence = (attempt: string): boolean => {
+    ensureEndEvents();
+    if (endEventsError) return false;
+    return (endEvents?.get(attempt)?.length ?? 0) > 0;
+  };
+  const pushUnknown = (attempt: string, metadataError: string): void => {
+    out.push({
+      attempt,
+      child_id: null,
+      orphan_child_id: null,
+      result: "(unreadable)",
+      dispatch_state: null,
+      dispatch_owner_pid: null,
+      started_at: null,
+      executor: null,
+      reason: "unknown",
+      metadata_error: metadataError,
+    });
+  };
+  let entries: string[];
+  try {
+    entries = readdirSync(attDir);
+  } catch (e) {
+    // 目录存在但读不了：无法枚举 attempt ⇒ 不能证明无 child，fail-closed。
+    throw new GraphExecutionBusyError(
+      "EXECUTION_STATE_UNKNOWN",
+      "无法读取目标的 attempts 目录（" + String((e as any)?.code ?? "read-error") + "）——无法确认是否存在活动执行 attempt；" +
+        "按 fail-closed 拒绝新派发，请先修复目录权限/读能力。",
+      [],
+      "检查并恢复 attempts 目录的读取权限；本门禁不按时间/进程状态自动放行。",
+    );
+  }
+  for (const a of entries.filter((d) => d.startsWith("att-")).sort()) {
     const f = join(attDir, a, "attempt.md");
-    if (!existsSync(f)) continue;
+    if (!existsSync(f)) {
+      // `att-*` 条目存在但没有 attempt.md：可能是半持久化/损坏/非目录条目。
+      // 无法证明它没有 child ⇒ 状态未知（绝不 continue 放行）。
+      pushUnknown(a, "attempt.md 缺失");
+      continue;
+    }
     let doc: GoalDoc;
     try {
       doc = loadGoal(f);
-    } catch {
-      continue; // 坏 attempt 文件：跳过（与 readGoalBinding 旧口径一致，避免无恢复入口的永久锁）
+    } catch (e) {
+      // 解析/读取失败：只登记错误类别/码，绝不复述文件内容（可能含 token/敏感文本）。
+      const code = String((e as any)?.code ?? "").trim();
+      pushUnknown(a, code ? `attempt.md 无法读取（${code}）` : "attempt.md 无法解析（格式/内容不可读）");
+      continue;
     }
-    if (doc.meta.id !== a || doc.meta.goal !== goalId) continue; // 归属校验
-    if (doc.meta.detached === true) continue;
-    if (doc.meta.executor === "agent:collect") continue;
-    const result = String(doc.meta.result ?? "pending");
-    if (result !== "pending") continue; // 已显式终结的记录不占执行绑定
+    // 归属校验：目录名/meta.id/goal 任一不一致都无法确认这条记录属于本目标 ⇒ 未知。
+    if (doc.meta.id !== a) {
+      pushUnknown(a, "attempt.md 的 id 与目录名不一致");
+      continue;
+    }
+    if (String(doc.meta.goal ?? "") !== goalId) {
+      pushUnknown(a, "attempt.md 的 goal 与本目标不一致");
+      continue;
+    }
+    if (doc.meta.detached === true) continue; // 显式已处理（旧 unbind 记录兼容）
+    if (doc.meta.executor === "agent:collect") continue; // 纯收集不占执行绑定
     const childId = doc.meta.child_id ? String(doc.meta.child_id) : null;
     const orphanId = doc.meta.orphan_child_id ? String(doc.meta.orphan_child_id) : null;
+    const rawResult = doc.meta.result;
+    const result = typeof rawResult === "string" ? rawResult.trim() : "";
     const state = normalizeAttemptDispatchState(doc.meta.dispatch_state);
+    // 已绑定 child：不论 result 声称什么，先按活跃拦截（结果是可变元数据，不是停稳证据）。
+    if (childId) {
+      out.push({
+        attempt: a, child_id: childId, orphan_child_id: orphanId, result: result || "(missing)",
+        dispatch_state: state,
+        dispatch_owner_pid: Number.isFinite(Number(doc.meta.dispatch_owner_pid)) ? Number(doc.meta.dispatch_owner_pid) : null,
+        started_at: doc.meta.started_at ? String(doc.meta.started_at) : null,
+        executor: doc.meta.executor ? String(doc.meta.executor) : null,
+        reason: "child_bound", metadata_error: null,
+      });
+      continue;
+    }
+    if (orphanId) {
+      out.push({
+        attempt: a, child_id: null, orphan_child_id: orphanId, result: result || "(missing)",
+        dispatch_state: state,
+        dispatch_owner_pid: Number.isFinite(Number(doc.meta.dispatch_owner_pid)) ? Number(doc.meta.dispatch_owner_pid) : null,
+        started_at: doc.meta.started_at ? String(doc.meta.started_at) : null,
+        executor: doc.meta.executor ? String(doc.meta.executor) : null,
+        reason: "bind_failed", metadata_error: null,
+      });
+      continue;
+    }
+    // result 必须精确属于共享终态词表；缺失/未知/伪造一律 unknown。
+    if (result !== "pending") {
+      if (!TERMINAL_ATTEMPT_RESULT_SET.has(result)) {
+        pushUnknown(a, result ? `未知 result：${result}` : "result 缺失或不是字符串");
+        continue;
+      }
+      if (ENGINE_PROVEN_TERMINAL_RESULTS.has(result)) continue;
+      // 声明式终态（completed/failed/selected/merged/rejected）：仅文字声明不够。
+      // 无 child/orphan 且 detached!==true 时，必须有可信结束事件，否则仍不可证明已停。
+      if (hasTrustworthyEndEvidence(a)) continue;
+      pushUnknown(a, `result=${result} 为声明式终态，但缺少可信结束事件/解绑证据`);
+      continue;
+    }
     let reason: ActiveExecutionReason | null = null;
-    if (childId) reason = "child_bound";
-    else if (state === "spawning") reason = "spawning";
-    else if (state === "bind_failed" || orphanId) reason = "bind_failed";
+    if (state === "spawning") reason = "spawning";
+    else if (state === "bind_failed") reason = "bind_failed";
     else if (state === "not_spawned") reason = null; // 证明未 spawn 的前置失败：允许重试
     else reason = "unknown"; // spawn_unknown / bound 但无 child / 旧数据缺字段
     if (!reason) continue;
     out.push({
       attempt: a,
-      child_id: childId,
-      orphan_child_id: orphanId,
+      child_id: null,
+      orphan_child_id: null,
       result,
       dispatch_state: state,
       dispatch_owner_pid: Number.isFinite(Number(doc.meta.dispatch_owner_pid)) ? Number(doc.meta.dispatch_owner_pid) : null,
       started_at: doc.meta.started_at ? String(doc.meta.started_at) : null,
       executor: doc.meta.executor ? String(doc.meta.executor) : null,
       reason,
+      metadata_error: null,
     });
   }
   return out;
@@ -8809,8 +8939,9 @@ export function assertNoActiveExecutionAttempt(root: string, goalId: string): vo
     started_at: a.started_at,
     executor: a.executor,
     reason: a.reason,
+    metadata_error: a.metadata_error,
   }));
-  const list = active.map((a) => `${a.attempt}（${a.reason}${a.child_id ? `，child=${a.child_id}` : ""}${a.orphan_child_id ? `，orphan_child=${a.orphan_child_id}` : ""}）`).join("、");
+  const list = active.map((a) => `${a.attempt}（${a.reason}${a.metadata_error ? `，${a.metadata_error}` : ""}${a.child_id ? `，child=${a.child_id}` : ""}${a.orphan_child_id ? `，orphan_child=${a.orphan_child_id}` : ""}）`).join("、");
   const busy = "同一 workspace + goal 已存在未处理的执行 attempt：" + list + "。";
   const recovery =
     "请先确认旧执行已停稳，再由目标 owner/主管按既有授权显式处理旧 attempt：" +
@@ -8846,8 +8977,9 @@ export function assertNoActiveExecutionAttempt(root: string, goalId: string): vo
   }
   throw new GraphExecutionBusyError(
     "EXECUTION_STATE_UNKNOWN",
-    busy + "无法判定该 attempt 是否仍可能创建/持有 child（spawn 结果未知或旧数据缺少 dispatch 状态）。" +
-      "按 fail-closed 拒绝新派发；不会按 idle/gone/年龄自动放行。",
+    busy + "无法判定该 attempt 是否仍可能创建/持有 child（spawn 结果未知、旧数据缺少 dispatch 状态，" +
+      "或 attempt 元数据缺失/损坏/归属不符/result 不在引擎终结白名单）。" +
+      "按 fail-closed 拒绝新派发；不会按 idle/gone/年龄自动放行，也不会把不可读/未知 result 当成已终结。",
     publicActivity,
     recovery,
   );

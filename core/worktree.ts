@@ -5,7 +5,7 @@ import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { discoverGitWorktree, isScratchWorkspace } from "./root.ts";
 import { parseNumstatZ, parsePorcelainZ, summarizeProductLinesStrict } from "./review-policy.ts";
 import { atomicWrite, findGoalFile, loadGoal } from "./ops.ts";
-import { GraphError } from "./machine.ts";
+import { ATTEMPT_TERMINAL_RESULTS, GraphError } from "./machine.ts";
 
 export interface WorktreeCandidate {
   id: string; goal: string; attempt: string; path: string; branch: string | null;
@@ -54,10 +54,7 @@ function goalStatus(root: string, goal: string): string | null {
  * 判非活跃，客户端 `hasActiveExecutionAttempt()` 亦以 `result !== "pending"` 收敛；
  * 本表是同一语义的工作树侧显式版本，只对已知终态放行，未知取值仍保守视为活跃。
  */
-const ATTEMPT_TERMINAL_RESULTS = [
-  "completed", "failed", "selected", "merged", "rejected", "superseded",
-  "cancelled", "detached",
-] as const;
+// g-610：与 ops 派发门禁共用同一份终态词表（唯一真源在 machine.ts），避免两处漂移。
 function isActive(root: string, goal: string, attempt: string): boolean {
   try {
     const file = join(dirname(findGoalFile(root, goal)), "attempts", attempt, "attempt.md");

@@ -26,7 +26,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createGoal, findGoalFile, goalDetail, init, loadGoal, setCriteria } from "../ops.ts";
@@ -204,12 +204,22 @@ test("g-414 判据 2：目录仅有非 att-* 杂项时不计入 ⇒ 首次仍得
   assert.equal(basename(String(res.worktree?.path ?? "")), `${goal}-att-01`);
 });
 
+/** g-610：在 attempts/ 下写一个**合法终结**的 attempt（result=detached + detached=true）。
+ *  派发门禁要求 att-* 记录可读且结果属于引擎终结白名单；空目录/缺 attempt.md 现在是
+ *  「状态未知」而非可忽略项（见 g610 专项用例）。 */
+function writeTerminalAttempt(root: string, goal: string, att: string): void {
+  const dir = join(dirname(findGoalFile(root, goal)), "attempts", att);
+  mkdirSync(dir, { recursive: true });
+  const meta = { id: att, goal, executor: "agent:fixture", result: "detached", detached: true };
+  writeFileSync(join(dir, "attempt.md"), `---\n${JSON.stringify(meta, null, 2)}\n---\n\nfixture\n`, "utf8");
+}
+
 test("g-414 判据 2：目录已存在 att-001/att-002 时递增得 att-003（宿主预测与 core 同号）", async () => {
   const h = createHarness({ gitRepo: true });
   const goal = mkGoal(h.root, "递增口径", "feature");
   const dir = attemptsDirOf(h.root, goal);
-  mkdirSync(join(dir, "att-001"), { recursive: true });
-  mkdirSync(join(dir, "att-002"), { recursive: true });
+  writeTerminalAttempt(h.root, goal, "att-001");
+  writeTerminalAttempt(h.root, goal, "att-002");
 
   const res = await h.dispatch({ goal, attempt_brief: "第三次派发" });
   assert.equal(res.attempt, "att-003", "count(att-*)+1 与既有口径逐字一致");
@@ -217,18 +227,32 @@ test("g-414 判据 2：目录已存在 att-001/att-002 时递增得 att-003（�
   assert.ok(existsSync(join(dir, "att-003", "attempt.md")));
 });
 
-test("g-414 判据 2：att-* 前缀的非目录条目同样计入（口径 = count(att-*)+1，不看类型）", async () => {
+test("g-414/g-610 判据 2：att-* 前缀的非目录条目计入预测口径；但作为异常记录必须 fail-closed", async () => {
   const h = createHarness({ gitRepo: true });
   const goal = mkGoal(h.root, "前缀口径", "feature");
   const dir = attemptsDirOf(h.root, goal);
-  mkdirSync(join(dir, "att-001"), { recursive: true });
-  mkdirSync(join(dir, "att-002"), { recursive: true });
-  writeFileSync(join(dir, "att-999-not-a-dir"), "x");
+  writeTerminalAttempt(h.root, goal, "att-001");
+  writeTerminalAttempt(h.root, goal, "att-002");
+  const anomaly = join(dir, "att-999-not-a-dir");
+  writeFileSync(anomaly, "x");
 
-  const res = await h.dispatch({ goal, attempt_brief: "第四次派发" });
-  assert.equal(res.attempt, "att-004", "3 项 att-* ⇒ 4；与既有实现（core startAttempt 同公式）一致");
-  assert.equal(basename(String(res.worktree?.path ?? "")), `${goal}-att-04`);
-  assert.deepEqual(attEntriesOf(h.root, goal).sort(), ["att-001", "att-002", "att-004", "att-999-not-a-dir"]);
+  // 计数口径仍不看类型：3 项 att-* ⇒ 下一号 att-004（宿主/core 同公式）
+  assert.equal(readdirSync(dir).filter((d) => d.startsWith("att-")).length + 1, 4);
+  const before = attEntriesOf(h.root, goal).sort();
+  const spawnedBefore = h.spawnedAt.length;
+  // g-610：但 `att-999-not-a-dir` 没有 attempt.md ⇒ 无法证明无 child ⇒ 必须拒绝，零副作用
+  await assert.rejects(
+    () => h.dispatch({ goal, attempt_brief: "异常在场" }),
+    (e: any) => e.code === "EXECUTION_STATE_UNKNOWN" && /attempt\.md 缺失/.test(String(e.message)),
+  );
+  assert.deepEqual(attEntriesOf(h.root, goal).sort(), before, "拒绝不得创建新 attempt");
+  assert.equal(h.spawnedAt.length, spawnedBefore, "拒绝不得启动子代理");
+
+  // 移除异常条目后回到正常计数：2 项 att-* ⇒ att-003，且宿主预测与 core 同号
+  rmSync(anomaly, { force: true });
+  const res = await h.dispatch({ goal, attempt_brief: "异常移除后派发" });
+  assert.equal(res.attempt, "att-003", "count(att-*)+1 与既有口径逐字一致");
+  assert.equal(basename(String(res.worktree?.path ?? "")), `${goal}-att-03`);
 });
 
 // ============================================================================

@@ -30,6 +30,26 @@ export class GraphExecutionBusyError extends GraphConflictError {
   }
 }
 
+/**
+ * g-329/g-610：attempt.md `result` 的**已知终态取值**（唯一共享清单）。
+ *
+ * 来源与写入点（逐一核对 `core/ops.ts`）：
+ *  - `cancelled`：`abandonAttempt`（`attempt.abandoned`）——引擎在公开证据/无 child 后写入；
+ *  - `detached`：`unbindGoalChild` 正常解绑（`attempt.unbound`）；
+ *  - `superseded`：解绑时被取代的旧 attempt（`attempt.superseded`）；
+ *  - `completed` / `failed` / `selected` / `merged` / `rejected`：评审/交付路径的**声明式**
+ *    终态（历史/外部写入；当前 core 没有直接写 attempt.md 的生产写入点）。
+ *
+ * 重要区分（g-610）：本表只回答「这个字符串是已知终态词吗」，**不等于**「已有可信证据
+ * 证明 child 已停」。派发门禁必须再把「声明式终态」与「引擎可证终态」分开：前者仅在
+ * `detached===true` 或存在可信结束事件（`subagent/end` 的 results_written 等）时才放行，
+ * 否则按状态未知 fail-closed。worktree 清理侧的 `isActive` 继续使用本表（行为不变）。
+ */
+export const ATTEMPT_TERMINAL_RESULTS = [
+  "completed", "failed", "selected", "merged", "rejected", "superseded",
+  "cancelled", "detached",
+] as const;
+
 export const STATUSES = [
   "draft",
   "planning",

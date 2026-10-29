@@ -16,7 +16,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -452,6 +452,158 @@ test("g-610 判据2：事件流已记录 spawn 结算（attempt.md 持久化失�
   assert.equal(ab.abandoned, true);
   const ev = readEvents(h.root).find((e) => e.event === "attempt.abandoned" && e.details.attempt === "att-001")!;
   assert.equal(ev.details.spawn_evidence?.settled_from_event, true);
+});
+
+/** 写一条原始 attempt.md（JSON frontmatter；用于构造损坏/异常元数据）。 */
+function writeRawAttempt(root: string, goal: string, att: string, content: string): string {
+  const dir = join(dirname(findGoalFile(root, goal)), "attempts", att);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "attempt.md");
+  writeFileSync(file, content, "utf8");
+  return file;
+}
+function attemptMetaObj(goal: string, att: string, extra: Record<string, unknown> = {}) {
+  return { id: att, goal, executor: "agent:fixture", result: "pending", ...extra };
+}
+function sideEffectSnapshot(h: any, goal: string) {
+  return {
+    attempts: goalDetail(h.root, goal).attempts.length,
+    events: readEvents(h.root).length,
+    spawned: h.spawned.length,
+    trees: existsSync(join(h.ws, ".worktrees"))
+      ? execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: h.ws, encoding: "utf8" })
+        .split(/\r?\n/).filter((l) => l.startsWith("worktree ")).sort()
+      : [],
+  };
+}
+
+test("g-610 判据2：att-* 元数据缺失/损坏/id·goal 不符一律 STATE_UNKNOWN，零副作用且 force 不绕", async () => {
+  const cases: Array<{ name: string; prepare: (h: any, goal: string) => void; expect: RegExp }> = [
+    {
+      name: "attempt.md 缺失",
+      prepare: (h, goal) => { mkdirSync(join(dirname(findGoalFile(h.root, goal)), "attempts", "att-001"), { recursive: true }); },
+      expect: /attempt\.md 缺失/,
+    },
+    {
+      name: "frontmatter 损坏/截断",
+      prepare: (h, goal) => { writeRawAttempt(h.root, goal, "att-001", "---\n{\"id\": \"att-001\"\n---\n\n truncated"); },
+      expect: /attempt\.md 无法解析/,
+    },
+    {
+      name: "meta.id 与目录名不符",
+      prepare: (h, goal) => { writeRawAttempt(h.root, goal, "att-001", `---\n${JSON.stringify({ ...attemptMetaObj(goal, "att-002") }, null, 2)}\n---\n\n`); },
+      expect: /id 与目录名不一致/,
+    },
+    {
+      name: "meta.goal 与本目标不符",
+      prepare: (h, goal) => { writeRawAttempt(h.root, goal, "att-001", `---\n${JSON.stringify({ ...attemptMetaObj("g-999", "att-001") }, null, 2)}\n---\n\n`); },
+      expect: /goal 与本目标不一致/,
+    },
+  ];
+  for (const c of cases) {
+    const h = makeHarness({ gitRepo: true });
+    const goal = mkGoal(h, "异常元数据：" + c.name, "feature");
+    c.prepare(h, goal);
+    const before = sideEffectSnapshot(h, goal);
+    for (const extra of [{}, { force: true }]) {
+      await assert.rejects(
+        () => start(h, { goal, attempt_brief: "after anomaly", ...extra }),
+        (e: any) => {
+          assert.equal(e.code, "EXECUTION_STATE_UNKNOWN", c.name);
+          assert.match(String(e.message), c.expect, c.name);
+          assert.ok(Array.isArray(e.activity) && e.activity[0]?.metadata_error, "activity 必须点名异常原因");
+          return true;
+        },
+        `${c.name} 必须 fail-closed（force 不绕）`,
+      );
+    }
+    assert.deepEqual(sideEffectSnapshot(h, goal), before, `${c.name}：拒绝不得新增 attempt/事件/child/worktree`);
+  }
+});
+
+test("g-610 判据2：声明式终态需可信结束证据；引擎可证三值/带 child 的声明终态分开处理", async () => {
+  const h = makeHarness({ gitRepo: true });
+  // ① 完全未知的 result（拼写/数字/缺失）——一律 unknown
+  const unknownGoals: Array<[string, any]> = [
+    ["typo", "Cancelled!"], ["number", 42], ["missing", undefined],
+  ];
+  for (const [name, value] of unknownGoals) {
+    const goal = mkGoal(h, "未知 result：" + name, "feature");
+    const meta: Record<string, unknown> = attemptMetaObj(goal, "att-001");
+    if (value === undefined) delete meta.result; else meta.result = value;
+    writeRawAttempt(h.root, goal, "att-001", `---\n${JSON.stringify(meta, null, 2)}\n---\n\n`);
+    await assert.rejects(
+      () => start(h, { goal, attempt_brief: "unknown result" }),
+      (e: any) => e.code === "EXECUTION_STATE_UNKNOWN" && /result/.test(String(e.message)),
+      `result=${String(value)} 不是已知终态词，必须拦截（${name}）`,
+    );
+  }
+
+  // ② 声明式终态（completed/failed）但**无**可信结束事件/未 detached ⇒ 仍 unknown
+  for (const value of ["completed", "failed", "selected", "merged", "rejected"]) {
+    const goal = mkGoal(h, "声明式无证据：" + value, "feature");
+    writeRawAttempt(h.root, goal, "att-001", `---\n${JSON.stringify(attemptMetaObj(goal, "att-001", { result: value }), null, 2)}\n---\n\n`);
+    await assert.rejects(
+      () => start(h, { goal, attempt_brief: "declared only" }),
+      (e: any) => e.code === "EXECUTION_STATE_UNKNOWN" && /声明式终态.*缺少可信结束事件/.test(String(e.message)),
+      `result=${value} 仅文字声明、无结束证据 ⇒ 不可证明已停`,
+    );
+  }
+
+  // ③ 声明式终态 + 可信 subagent/end results_written 事件（且无 child 绑定）⇒ 已结束，不占
+  const gEvidence = mkGoal(h, "声明式有结束事件", "feature");
+  writeRawAttempt(h.root, gEvidence, "att-001", `---\n${JSON.stringify(attemptMetaObj(gEvidence, "att-001", { result: "completed" }), null, 2)}\n---\n\n`);
+  appendEvent(h.root, {
+    actor: "system:subagent/end", event: "attempt.results_written", goal: gEvidence,
+    details: { attempt: "att-001", child_id: "child-old", source: "subagent/end", stop_reason: "completed" },
+  });
+  const gEvidenceOk: any = await start(h, { goal: gEvidence, attempt_brief: "after real end" });
+  assert.equal(gEvidenceOk.attempt, "att-002", "有 subagent/end 证据的 completed 不占执行绑定");
+
+  // ④ 声明式终态 + 引擎已处理事件（abandoned）⇒ 不占
+  const gAbandoned = mkGoal(h, "声明式有 abandon 事件", "feature");
+  writeRawAttempt(h.root, gAbandoned, "att-001", `---\n${JSON.stringify(attemptMetaObj(gAbandoned, "att-001", { result: "failed" }), null, 2)}\n---\n\n`);
+  appendEvent(h.root, {
+    actor: "human:gui", event: "attempt.abandoned", goal: gAbandoned,
+    details: { attempt: "att-001", reason: "historical" },
+  });
+  const gAbandonedOk: any = await start(h, { goal: gAbandoned, attempt_brief: "after abandoned evidence" });
+  assert.ok(gAbandonedOk.child_id);
+
+  // ⑤ 声明式终态但仍有 child_id ⇒ 必须按 child_bound 拦截（文字声明不能覆盖活跃 child）
+  const gChild = mkGoal(h, "completed 但仍有 child", "feature");
+  writeRawAttempt(h.root, gChild, "att-001", `---\n${JSON.stringify(attemptMetaObj(gChild, "att-001", { result: "completed", child_id: "child-still-there" }), null, 2)}\n---\n\n`);
+  await assert.rejects(
+    () => start(h, { goal: gChild, attempt_brief: "child still there" }),
+    (e: any) => e.code === "EXECUTION_ALREADY_ACTIVE",
+    "result=completed 不能覆盖仍存在的 child 绑定",
+  );
+
+  // ⑥ detached=true + 声明式终态（历史已处理）⇒ 不占；引擎可证三值也正常不占
+  const gDetached = mkGoal(h, "detached 历史", "feature");
+  writeRawAttempt(h.root, gDetached, "att-001", `---\n${JSON.stringify(attemptMetaObj(gDetached, "att-001", { result: "completed", detached: true }), null, 2)}\n---\n\n`);
+  const gDetachedOk: any = await start(h, { goal: gDetached, attempt_brief: "detached history" });
+  assert.ok(gDetachedOk.child_id);
+  const gTerm = mkGoal(h, "引擎可证三值", "feature");
+  for (const [i, value] of ["cancelled", "detached", "superseded"].entries()) {
+    const att = `att-00${i + 1}`;
+    writeRawAttempt(h.root, gTerm, att, `---\n${JSON.stringify(attemptMetaObj(gTerm, att, { result: value, detached: true }), null, 2)}\n---\n\n`);
+  }
+  const gTermOk: any = await start(h, { goal: gTerm, attempt_brief: "engine terminal" });
+  assert.ok(gTermOk.child_id);
+});
+
+test("g-610 判据2：attempt.md 存在但不可读（EISDIR 公开 seam）同样 unknown 拦截", async () => {
+  const h = makeHarness();
+  const goal = mkGoal(h, "不可读 attempt");
+  const dir = join(dirname(findGoalFile(h.root, goal)), "attempts", "att-001");
+  mkdirSync(join(dir, "attempt.md"), { recursive: true }); // attempt.md 是目录 ⇒ loadGoal EISDIR
+  const before = sideEffectSnapshot(h, goal);
+  await assert.rejects(
+    () => start(h, { goal, attempt_brief: "unreadable" }),
+    (e: any) => e.code === "EXECUTION_STATE_UNKNOWN" && /无法读取|无法解析/.test(String(e.message)),
+  );
+  assert.deepEqual(sideEffectSnapshot(h, goal), before);
 });
 
 test("g-610 判据2：startAttempt 事件写失败时零 attempt 落盘，修复后可重试同一编号", async () => {
