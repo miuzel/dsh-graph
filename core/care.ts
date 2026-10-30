@@ -929,6 +929,35 @@ export function applyCareDelivery(group: CareGroupState, tasks: CareTaskState[],
 export const CARE_OUTCOMES = ["progress", "no-progress", "unknown"] as const;
 export type CareOutcomeKind = (typeof CARE_OUTCOMES)[number];
 
+/**
+ * 结论**分类契约**（att-005 返工；来自一次真实误分类：child 只 sleep 300s、巡检前无新事件，
+ * 主管以「仍 running + 预计静默」为依据回传 progress，reminders 1→0）。
+ *
+ * 该现场说明：只列 `progress|no-progress|unknown` 三个取值、不解释各自边界，接口说明是不充分的。
+ * 这里把三值定义写成**单一真源**：`formatCareWakeMessage` 的唤醒正文与 `graph_care_outcome`
+ * 的工具描述都必须逐条包含这些子句（由 `g506-care-outcome-contract.test.ts` 守卫）。
+ *
+ * 边界（不得越界声称）：
+ * - 这是给**模型判断**的说明，不是机器语义校验：服务端仍只校验 evidence 非空等格式，
+ *   不得据此宣称「所有模型永不误判」或「已机器验证 evidence 真实性」；
+ * - 定义只描述**证据标准**，不按模型名/时间戳/sleep 等文本关键词自动判定；
+ * - 计数规则（unknown 不增不清、3 份新鲜 no-progress 升级、progress 归零但不解人类锁）不变。
+ */
+export const CARE_OUTCOME_CONTRACT_ZH = [
+  "progress = 自上次关照（或任务开始）以来**新增且可核实**的实质进展：具体完成的步骤、工具结果或产物/状态变化；证据必须指出这个新事实，重复或已报告过的旧进展不算新。",
+  "no-progress = 有**新鲜证据**表明反复无实质推进或问题仍未解决；仅仅长时间没有新输出、或处于正常等待，不构成 no-progress，也不得据此宣称卡死。",
+  "unknown = 证据不足/无法判断，或长时操作仍在正常等待（如 sleep、长构建/测试/网络）；按「未确认进展」处理，继续观察或询问子代理；只看根元数据无法知道进度时选 unknown。",
+  "仅「仍在 running」、仅时间经过、符合预期的静默都**不是** progress；progress 归零计数但不解除人类锁，unknown 不递增也不归零，只有达到上限份数（默认 3）的新鲜 no-progress 才升级人工。",
+] as const;
+
+/** {@link CARE_OUTCOME_CONTRACT_ZH} 的英文对称版本（en 描述不得含 CJK）。 */
+export const CARE_OUTCOME_CONTRACT_EN = [
+  "progress = NEW and verifiable substantive progress since the last care round (or task start): a concrete completed step, tool result, or artifact/state change; the evidence must point at that new fact, and repeated or already-reported progress is not new.",
+  "no-progress = FRESH evidence of repeated lack of substantive advance or an unresolved problem; a long silence with no new output, or a normal wait, is not no-progress and is never grounds for claiming a stall.",
+  "unknown = evidence is insufficient/unverifiable, or a long operation is still normally waiting (sleep, long build/test/network); treat it as unconfirmed progress, keep observing or ask the child; if only root-level metadata is available, choose unknown.",
+  "Merely \"still running\", merely elapsed time, and expected silence are NOT progress; progress resets the counter but never clears an existing human lock, unknown neither increases nor resets it, and only the configured limit (default 3) of fresh no-progress results escalates to the human.",
+] as const;
+
 export function normalizeCareOutcome(raw: unknown): CareOutcomeKind | null {
   return raw === "progress" || raw === "no-progress" || raw === "unknown" ? raw : null;
 }
@@ -1551,6 +1580,8 @@ export function formatCareWakeMessage(input: {
     lines.push("- 本插件**不会**自动中断/放弃/重启子代理；宿主干预 seam 若未验证，只作提醒，由主管按授权流程处理。");
     lines.push("- 有明确僵局证据才请求暂停并确认停稳；放弃重开须先确认旧 child 不运行并按既有准入与返工授权开新 attempt；");
     lines.push("- 无法安全解决 / 范围或判据冲突 ⇒ 停止相关执行并报告人类裁决，禁止无限自动重试。");
+    lines.push("结论分类（按定义判断，不得凭 elapsed/预期静默推断）：");
+    for (const clause of CARE_OUTCOME_CONTRACT_ZH) lines.push(`  · ${clause}`);
     lines.push(
       `- **必须**用工具 ${"graph_care_outcome"} 回传本次结论：inspection=${id} + 每个目标的 goal/attempt/child + outcome=progress|no-progress|unknown + 证据。未回复/unknown **不增加无进展计数**；同一任务连续 ${CARE_MAX_UNANSWERED_REMINDERS} 次无有效结论（含未回复）即停止自动提醒并等待人工；连续 ${input.maxStagnantRounds} 份新鲜 no-progress 才升级待人。`,
     );
@@ -1574,6 +1605,8 @@ export function formatCareWakeMessage(input: {
     lines.push("- This plugin NEVER auto-interrupts/abandons/restarts a child; unverified host intervention seams are advisory only and must go through authorized human gates.");
     lines.push("- Request a pause only with clear stall evidence, and confirm the child has stopped; abandoning/restarting requires the existing admission and rework authorization;");
     lines.push("- If it cannot be resolved safely or scope/criteria conflict, stop the execution and report to the human; never retry infinitely.");
+    lines.push("Outcome definitions (judge by these definitions; never infer from elapsed time or expected silence):");
+    for (const clause of CARE_OUTCOME_CONTRACT_EN) lines.push(`  · ${clause}`);
     lines.push(
       `- You MUST report this inspection via the ${"graph_care_outcome"} tool: inspection=${id} + each goal/attempt/child + outcome=progress|no-progress|unknown + evidence. No reply/unknown does NOT increase no-progress; ${CARE_MAX_UNANSWERED_REMINDERS} consecutive reminders without a valid conclusion stop automatic reminders and wait for a human; only ${input.maxStagnantRounds} fresh no-progress results escalate.`,
     );
