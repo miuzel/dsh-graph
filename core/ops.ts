@@ -3791,6 +3791,43 @@ export function setGoalDirective(
   saveGoal(file, doc);
 }
 
+/**
+ * g-612：设置/清空目标级预计任务预算（唯一可编辑真源 = goal frontmatter 的
+ * `meta.task_budget_seconds`；null/undefined = 继承项目/全局 care_threshold_seconds）。
+ *
+ * 只校验**整数秒 30–86400**（与既有 care 阈值同范围），非法值在写前拒绝、零事件；
+ * 写入走既有事件先行模式（goal.budget_set），不触碰描述/指令/判据等其他小节。
+ */
+export function setGoalBudget(
+  root: string,
+  goalId: string,
+  opts: { budget_seconds: unknown; actor: string },
+): { old_seconds: number | null; new_seconds: number | null } {
+  const raw = opts?.budget_seconds;
+  let next: number | null = null;
+  if (raw !== null && raw !== undefined) {
+    if (typeof raw !== "number" || !Number.isInteger(raw)
+      || raw < CARE_THRESHOLD_MIN_SECONDS || raw > CARE_THRESHOLD_MAX_SECONDS) {
+      throw new GraphError(`预算必须是 ${CARE_THRESHOLD_MIN_SECONDS}–${CARE_THRESHOLD_MAX_SECONDS} 的整数秒，或 null（继承）`);
+    }
+    next = raw;
+  }
+  const file = findGoalFile(root, goalId);
+  const doc = loadGoal(file);
+  const old = normalizeCareSeconds(doc.meta.task_budget_seconds);
+  if (old === next) return { old_seconds: old, new_seconds: next };
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.budget_set",
+    goal: goalId,
+    details: { old_seconds: old, new_seconds: next, source: "goal" },
+  });
+  if (next === null) delete doc.meta.task_budget_seconds;
+  else doc.meta.task_budget_seconds = next;
+  saveGoal(file, doc);
+  return { old_seconds: old, new_seconds: next };
+}
+
 /** 设置/替换目标的「目标描述」——覆盖 `## 目标描述` 小节内容（g-260）。
  *  事件先行：先追加 goal.description_set 事件，再写文件。
  *  仅改 goal.md 的「目标描述」小节正文，frontmatter 与其他小节字节级不变。
@@ -12114,6 +12151,8 @@ export interface BoardGoal {
   } | null;
   created_at?: string | null;
   attempt_started_at?: string | null;
+  /** g-612：goal 级预计任务预算（整数秒；null = 继承项目/全局 care_threshold_seconds）。 */
+  budget_seconds?: number | null;
   /** 被复用派生（g-a92e1406）：子代理被跨目标复用时，旧绑定目标标 reused_by = 新目标 id */
   reused_by?: string | null;
   cards?: Array<Record<string, any>>;
@@ -12250,6 +12289,7 @@ function buildBoardGoalItem(
       : null,
     created_at: String(meta.created_at ?? ""),
     attempt_started_at: attemptChild.started_at ?? null,
+    budget_seconds: normalizeCareSeconds(meta.task_budget_seconds),
     reused_by: null,
     pk_lanes: meta.pk?.lanes ?? 1,
     blocked_reason: meta.blocked_reason ?? null,

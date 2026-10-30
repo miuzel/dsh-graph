@@ -318,10 +318,10 @@ test("g-493 B1：九子项逐项落在可见文案里；定义逐字引用并标
   assert.ok(/Graph Engineering/.test(String(en["help.topic.definition"])), "en 定义必须点题 Graph Engineering");
   assert.ok(/nodes|edges|shared state/i.test(String(en["help.topic.definition"])), "en 定义必须给出节点/边/共享状态的对偶措辞");
   assert.ok(/verbatim/i.test(String(en["help.topic.definitionSource"])), "en 来源标注必须写明 verbatim（与 zh 逐字口径自洽）");
-  // 「共 52 个」计数红线（g-495 改判）：help.*.md 不再声明**工具**数（改为功能模块清单 +
-  // 当前开关状态），故原「必须保留两处 52」口径改判为「必须声明**模块**数 == 引擎模块注册表长度」。
-  // 工具侧真源不变：注册数仍须恰为 52（本目标不碰注册面）。
-  assert.equal(registeredToolNames.length, 52, "g-493 基线：注册真源应恰有 52 个工具");
+  // 「共 53 个」计数红线（g-495 改判）：help.*.md 不再声明**工具**数（改为功能模块清单 +
+  // 当前开关状态），故原「必须保留两处 53」口径改判为「必须声明**模块**数 == 引擎模块注册表长度」。
+  // 工具侧真源不变：注册数仍须恰为 53（本目标不碰注册面）。
+  assert.equal(registeredToolNames.length, 53, "g-493 基线：注册真源应恰有 53 个工具");
   const zhPrompt = readFileSync(helpZhPromptPath, "utf8");
   const enPrompt = readFileSync(helpEnPromptPath, "utf8");
   const zhModules = [...zhPrompt.matchAll(/共\s*(\d+)\s*个功能模块/g)].map((m) => Number(m[1]));
@@ -662,7 +662,7 @@ test("g-493 D2（g-495 返工项 B 负向对照·经**真实实现**）：把「
 // ================================================================ D3. 生命周期串一致性（g-495 返工项 4）
 
 test("g-493 D3（g-495 返工项 4）：生命周期串在 tool.graph_transition / usage.zh / usage.en 三处逐字一致（防漂移）", () => {
-  // att-002 只读前提验证结论：逐工具口径覆盖 50/52，**唯一真丢失**＝目标生命周期链
+  // att-002 只读前提验证结论：逐工具口径覆盖 50/53，**唯一真丢失**＝目标生命周期链
   //（baseline help.zh.md 有，而 tool.graph_transition 与 schema 均无）。方案 A：把序列追加到
   // `tool.graph_transition` 描述末尾 ⇒ 天然进入 harness 逐工具注入面。本断言钉住**三处不漂移**。
   const ZH_CYCLE = "draft→planning→collecting→ready→in_progress→review→delivered";

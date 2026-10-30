@@ -417,6 +417,16 @@
       'tags.save': '保存',
       'tags.saveFail': '标签保存失败',
 
+      // === 目标预算（g-612） ===
+      'budget.label': '⏱ 预计预算',
+      'budget.placeholder': '继承默认',
+      'budget.unit': '秒',
+      'budget.save': '保存',
+      'budget.inherit': '继承默认',
+      'budget.invalid': '预算必须是 30–86400 的整数秒',
+      'budget.saveFail': '预算保存失败',
+      'budget.saved': '已保存',
+
       // === Worktree 清理 ===
       'worktree.title': '🧹 可清理 worktree',
       'worktree.confirmDelete': '确认删除该 linked worktree？本地分支不会删除。',
@@ -1906,6 +1916,16 @@
       'tags.inputPlaceholderCompact': 'Tag name, Enter to save…',
       'tags.save': 'Save',
       'tags.saveFail': 'Failed to save tags',
+
+      // === Goal budget (g-612) ===
+      'budget.label': '⏱ Budget',
+      'budget.placeholder': 'Inherit default',
+      'budget.unit': 's',
+      'budget.save': 'Save',
+      'budget.inherit': 'Inherit default',
+      'budget.invalid': 'Budget must be an integer from 30 to 86400 seconds',
+      'budget.saveFail': 'Failed to save budget',
+      'budget.saved': 'Saved',
 
       // === Worktree cleanup ===
       'worktree.title': '🧹 Cleanable worktrees',

@@ -103,6 +103,7 @@ export async function loadHostPackages() {
  *   代替绝对 `config.root`，使同一宿主可服务多个私有 workspace（各自 `<ws>/.dsh-graph`）。
  * @param opts.sandboxWorkspace 相对 root 模式下的默认 workspace（默认即本夹具 ws）。
  * @param opts.projectYaml  覆盖启动时写入的 project.yaml（默认只写 supervisor.session）。
+ * @param opts.sessionQuery  在 SubagentRuntime 之前装载真实 `sessionQuery` 服务（cold resume 需要）。
  */
 export async function makeRealHost(opts: {
   gitRepo?: boolean;
@@ -111,6 +112,7 @@ export async function makeRealHost(opts: {
   relativeRoot?: boolean;
   sandboxWorkspace?: string;
   projectYaml?: string;
+  sessionQuery?: boolean;
 } = {}) {
   const P = await loadHostPackages();
   const wsBase = join(process.cwd(), "tmp", "g610");
@@ -136,6 +138,10 @@ export async function makeRealHost(opts: {
   }
   await P.persist.apply(ctx, P.persist.Config({ root: join(ws, ".sessions") }));
   new P.session.SessionStore(ctx);
+  if (opts.sessionQuery) {
+    const q = await import(pathToFileURL(join(P.S, "dsh-session-query", "lib", "index.js")).href);
+    new q.SessionQueryEngine(ctx);
+  }
   new P.projection.default(ctx);
   new P.systemPrompt.SystemPrompt(ctx, {});
   new P.tools.ToolRuntime(ctx, {});

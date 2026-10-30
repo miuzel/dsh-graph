@@ -520,6 +520,43 @@ export const CARE_PHASES = [
 ] as const;
 export type CarePhase = (typeof CARE_PHASES)[number];
 
+/** 预算来源（goal 覆盖，或项目/全局/受控默认阈值）。 */
+export type CareBudgetSource = "goal" | "project_explicit" | "global_explicit" | "global_default";
+
+/** 一轮运行的**开始**证据来源（精确与否必须如实标注）。 */
+export type CareRunStartSource = "attempt_record" | "agent_status" | "sample" | "unknown";
+/** 一轮运行的**停止**证据来源。 */
+export type CareRunStopSource = "agent_status" | "disposed" | "sample" | "unknown";
+
+/** g-612：同一 attempt 的一轮实际运行（自然墙钟，与关照倒计时无关）。 */
+export interface CareRunRecord {
+  /** 服务端生成的本轮 id（child/attempt/start 稳定派生）。 */
+  id: string;
+  goal: string;
+  attempt: string;
+  child: string;
+  /** 本轮开始（ms epoch）；未知时 null（绝不伪造）。 */
+  startedAt: number | null;
+  startSource: CareRunStartSource;
+  startExact: boolean;
+  /** 本轮停止（ms epoch）；仍在运行/未知时 null。 */
+  stoppedAt: number | null;
+  stopSource: CareRunStopSource | null;
+  stopExact: boolean;
+  /** 本轮开始/停止时实际采用的预算与来源（历史快照，不随当前 goal 值回填）。 */
+  budgetSeconds: number | null;
+  budgetSource: CareBudgetSource | null;
+  /** 已停止时的自然经过时间（ms）；未知时 null。 */
+  naturalMs: number | null;
+  /** 自然经过时间 − 预算（ms）；任一未知时 null。 */
+  deviationMs: number | null;
+  /** 是否超过预算；未知时 null。 */
+  overBudget: boolean | null;
+}
+
+/** 项目内历史保留的已停止运行上限（有界；完整事件仍在项目 events.jsonl）。 */
+export const CARE_RUN_HISTORY_LIMIT = 50;
+
 /** 单个被照料任务（child/attempt 粒度）的调度记录。 */
 export interface CareTaskState {
   child: string;
@@ -553,6 +590,19 @@ export interface CareTaskState {
   awaitingReply?: boolean;
   /** g-506 返工：进入人工裁决的原因（`null` = 未锁定）。 */
   humanReason?: "no_progress_limit" | "no_response_limit" | null;
+  /** g-612：goal 级预算（秒；null = 继承项目/全局 care_threshold_seconds）。 */
+  budgetSeconds?: number | null;
+  /** g-612：预算倒计时的最近有效基准（ms epoch；派发/主管消息/goal 预算变更）。 */
+  budgetBaseAt?: number | null;
+  /** g-612：当前倒计时是否由预算/消息重置派生（false = 关照后按复查间隔）。 */
+  budgetCountdown?: boolean;
+  /** g-612：上次实际采用的生效预算（秒）与来源（用于识别项目/全局默认变更）。 */
+  budgetEffectiveSeconds?: number | null;
+  budgetEffectiveSource?: CareBudgetSource | null;
+  /** g-612：本轮运行开始（ms epoch）；停止后清空。 */
+  runStartedAt?: number | null;
+  runStartSource?: CareRunStartSource | null;
+  runStartExact?: boolean;
 }
 
 /**
@@ -681,13 +731,31 @@ export type CareReason =
  * - 已关照 ⇒ 从上次关照起算**复查间隔**；
  * - 组级 `resetAt` 晚于上述基准 ⇒ 从重置时刻按当前间隔重新计满。
  */
+/** 生效预算：goal 覆盖 > 项目阈值 > 全局阈值 > 受控默认（由调用方 timing 提供）。 */
+export function careEffectiveBudgetSeconds(task: Pick<CareTaskState, "budgetSeconds">, timing: {
+  thresholdSeconds: number;
+  thresholdSource?: CareSource;
+}): { seconds: number; source: CareBudgetSource } {
+  const goal = normalizeCareSeconds(task.budgetSeconds);
+  if (goal !== null) return { seconds: goal, source: "goal" };
+  const source: CareBudgetSource = timing.thresholdSource === "project_explicit"
+    || timing.thresholdSource === "global_explicit"
+    || timing.thresholdSource === "global_default"
+    ? timing.thresholdSource
+    : "global_default";
+  return { seconds: Math.max(1, Math.floor(timing.thresholdSeconds)), source };
+}
+
 export function careTaskIntervalMs(task: CareTaskState, timing: {
   thresholdSeconds: number;
   recheckSeconds: number;
+  thresholdSource?: CareSource;
 }): number {
-  const thresholdMs = Math.max(1, Math.floor(timing.thresholdSeconds)) * 1000;
+  const budget = careEffectiveBudgetSeconds(task, timing);
+  const budgetMs = budget.seconds * 1000;
   const recheckMs = Math.max(1, Math.floor(timing.recheckSeconds)) * 1000;
-  if (task.lastCareAt === null) return thresholdMs;
+  // 首次关照、或主管新消息/预算变更重置后：按生效预算计时（goal 覆盖项目/全局默认）。
+  if (task.lastCareAt === null || task.budgetCountdown === true) return budgetMs;
   // 连续无有效结论的提醒至少间隔 300s（即使项目复查更短）——避免「短阈值 + 未回复」高频唤醒。
   const unanswered = (task.remindersSent ?? 0) > 0 || task.awaitingReply === true;
   return Math.max(recheckMs, unanswered ? CARE_NO_RESPONSE_COOLDOWN_MS : 0);
@@ -705,6 +773,7 @@ export function careTaskDueAt(task: CareTaskState, timing: {
   thresholdSeconds: number;
   recheckSeconds: number;
   resetAt: number | null;
+  thresholdSource?: CareSource;
 }): number {
   const resetAt = timing.resetAt;
   // B16：续期使用独立绝对锚点，绝不反推真实 startedAt/lastCareAt（避免工作耗时/cooldown 事实被篡改）。
@@ -714,7 +783,10 @@ export function careTaskDueAt(task: CareTaskState, timing: {
     }
     return task.scheduleDueAt;
   }
-  const base = task.lastCareAt === null ? task.startedAt : task.lastCareAt;
+  // 预算/消息重置使用独立基准；否则沿用 g506 的真实 lastCareAt/startedAt。
+  const base = task.budgetCountdown === true
+    ? (typeof task.budgetBaseAt === "number" && Number.isFinite(task.budgetBaseAt) ? task.budgetBaseAt : task.startedAt)
+    : (task.lastCareAt === null ? task.startedAt : task.lastCareAt);
   const interval = careTaskIntervalMs(task, timing);
   return resetAt !== null && resetAt > base ? resetAt + interval : base + interval;
 }
@@ -912,6 +984,7 @@ export function applyCareDelivery(group: CareGroupState, tasks: CareTaskState[],
         ...t,
         lastCareAt: now,
         scheduleDueAt: null, // 真实投递后由 lastCareAt + 有效区间重新计时
+        budgetCountdown: false, // 关照已投递 ⇒ 回到复查间隔，直到下一条主管消息/预算变更
         // 每次实际投递都计入「连续无有效结论」预算；收到 progress/no-progress 有效结论后归零。
         remindersSent: (t.remindersSent ?? 0) + 1,
         awaitingReply: true,
@@ -993,7 +1066,7 @@ export function applyCareOutcome(
     matched = true;
     // 任何回传都表示本轮巡检已有回复（即使 unknown 没有有效结论）；unknown 不递增/不归零无进展计数，
     // 但保留 remindersSent，供「连续无有效结论」预算在下一轮继续累计。
-    if (outcome.kind === "unknown") return { ...t, awaitingReply: false, scheduleDueAt: null };
+    if (outcome.kind === "unknown") return { ...t, awaitingReply: false, scheduleDueAt: null, budgetCountdown: false };
     if (outcome.kind === "progress") {
       counted = true;
       return {
@@ -1004,6 +1077,7 @@ export function applyCareOutcome(
         remindersSent: 0, // 有效结论 ⇒ 未回复预算归零
         awaitingReply: false,
         scheduleDueAt: null,
+        budgetCountdown: false,
         // humanLocked / humanReason 原样保留：progress 绝不解除已有人工锁
       };
     }
@@ -1018,6 +1092,7 @@ export function applyCareOutcome(
       remindersSent: 0, // no-progress 是有效结论 ⇒ 未回复预算归零（无进展预算独立累计）
       awaitingReply: false,
       scheduleDueAt: null,
+      budgetCountdown: false,
     };
   });
   const anyLocked = nextTasks.some((t) => t.humanLocked === true || (t.stagnantRounds ?? 0) >= maxRounds);
@@ -1116,6 +1191,7 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
   now: number;
   thresholdSeconds: number;
   recheckSeconds: number;
+  thresholdSource?: CareSource;
 }): { group: CareGroupState; tasks: CareTaskState[] } {
   if (group.paused !== true) {
     return { group: { ...group }, tasks: tasks.map((t) => ({ ...t })) }; // 幂等
@@ -1123,8 +1199,17 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
   const nextTasks = tasks.map((t) => {
     const frozen = t.frozenRemainingMs;
     if (frozen === null || t.humanLocked === true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
+    // g-612：预算变更后需要「已消耗关照时间（不含暂停段）」；resume 时把基准推进到
+    // now - 已消耗量，使暂停期间的真实墙钟绝不进入关照倒计时。
+    const nominal = careTaskIntervalMs(t, inputs);
+    const consumed = Math.max(0, nominal - Math.max(0, frozen));
     // B16：只写独立调度锚点，真实 startedAt/lastCareAt 永不反推。
-    return { ...t, frozenRemainingMs: null, scheduleDueAt: inputs.now + frozen };
+    return {
+      ...t,
+      frozenRemainingMs: null,
+      scheduleDueAt: inputs.now + Math.max(0, frozen),
+      budgetBaseAt: inputs.now - consumed,
+    };
   });
   return {
     group: {
@@ -1454,7 +1539,39 @@ export interface CareStatusProjection {
     awaiting_reply: boolean;
     last_care_at: number | null;
     last_progress_at: number | null;
+    /** goal 级预算（秒；null = 继承默认）。 */
+    budget_seconds: number | null;
+    /** 本任务当前生效预算（goal 或项目/全局/默认阈值）。 */
+    effective_budget_seconds: number;
+    budget_source: CareBudgetSource;
+    budget_base_at: number | null;
+    budget_countdown: boolean;
+    /** 本轮运行（自然墙钟；与关照倒计时分开）。 */
+    run_started_at: number | null;
+    run_start_source: CareRunStartSource | null;
+    run_start_exact: boolean;
+    run_natural_ms: number | null;
   }>;
+  /** 最近有界运行历史（仅本项目；旧快照/未观测为已知空/未知，不伪造）。 */
+  runs: Array<{
+    id: string;
+    goal: string;
+    attempt: string;
+    child: string;
+    started_at: number | null;
+    start_source: CareRunStartSource;
+    start_exact: boolean;
+    stopped_at: number | null;
+    stop_source: CareRunStopSource | null;
+    stop_exact: boolean;
+    budget_seconds: number | null;
+    budget_source: CareBudgetSource | null;
+    natural_ms: number | null;
+    deviation_ms: number | null;
+    over_budget: boolean | null;
+  }>;
+  /** 已停止运行的历史保留上限。 */
+  run_history_limit: number;
   escalate_tasks: string[];
   awaiting_human: boolean;
   pending_inspections: Array<{
@@ -1485,11 +1602,17 @@ export function careStatusProjection(args: {
   tasks: CareTaskState[];
   pendingInspections: CareInspection[];
   lastOutcome: CareOutcomeRecord | null;
+  runs?: CareRunRecord[];
   warnings?: string[];
 }): CareStatusProjection {
   const byKey = new Map(args.tasks.map((t) => [`${t.child}\u0000${t.attempt}`, t]));
   const tasks = args.decision.tasks.map((s) => {
     const st = byKey.get(`${s.child}\u0000${s.attempt}`);
+    const budget = careEffectiveBudgetSeconds(st ?? { budgetSeconds: null }, {
+      thresholdSeconds: args.configured.threshold_seconds,
+      thresholdSource: args.configured.threshold_source,
+    });
+    const runStartedAt = st?.runStartedAt ?? null;
     return {
       ...s,
       started_at: st?.startedAt ?? args.now,
@@ -1500,6 +1623,17 @@ export function careStatusProjection(args: {
       awaiting_reply: st?.awaitingReply === true,
       last_care_at: st?.lastCareAt ?? null,
       last_progress_at: st?.lastProgressAt ?? null,
+      budget_seconds: typeof st?.budgetSeconds === "number" && Number.isFinite(st.budgetSeconds) ? st.budgetSeconds : null,
+      effective_budget_seconds: budget.seconds,
+      budget_source: budget.source,
+      budget_base_at: typeof st?.budgetBaseAt === "number" && Number.isFinite(st.budgetBaseAt) ? st.budgetBaseAt : null,
+      budget_countdown: st?.budgetCountdown === true,
+      run_started_at: typeof runStartedAt === "number" && Number.isFinite(runStartedAt) ? runStartedAt : null,
+      run_start_source: st?.runStartSource ?? null,
+      run_start_exact: st?.runStartExact === true,
+      run_natural_ms: typeof runStartedAt === "number" && Number.isFinite(runStartedAt)
+        ? Math.max(0, args.now - runStartedAt)
+        : null,
     };
   });
   return {
@@ -1518,6 +1652,24 @@ export function careStatusProjection(args: {
     paused_remaining_ms: args.group.paused === true ? carePausedRemainingMs(args.tasks) : args.group.pausedRemainingMs,
     revision: args.group.revision,
     tasks,
+    runs: (Array.isArray(args.runs) ? args.runs.slice(-CARE_RUN_HISTORY_LIMIT) : []).map((r) => ({
+      id: r.id,
+      goal: r.goal,
+      attempt: r.attempt,
+      child: r.child,
+      started_at: r.startedAt,
+      start_source: r.startSource,
+      start_exact: r.startExact,
+      stopped_at: r.stoppedAt,
+      stop_source: r.stopSource,
+      stop_exact: r.stopExact,
+      budget_seconds: r.budgetSeconds,
+      budget_source: r.budgetSource,
+      natural_ms: r.naturalMs,
+      deviation_ms: r.deviationMs,
+      over_budget: r.overBudget,
+    })),
+    run_history_limit: CARE_RUN_HISTORY_LIMIT,
     escalate_tasks: args.decision.escalateTasks,
     awaiting_human: args.decision.escalateTasks.length > 0 || args.tasks.some((t) => t.humanLocked === true),
     pending_inspections: args.pendingInspections.map((i) => ({

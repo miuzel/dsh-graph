@@ -58,7 +58,7 @@ const EXACT = [
   "/api/dsh-graph/set-criteria", "/api/dsh-graph/relations", "/api/dsh-graph/accept", "/api/dsh-graph/resolve-accept",
   "/api/dsh-graph/worktrees", "/api/dsh-graph/worktrees/clean", "/api/dsh-graph/transition", "/api/dsh-graph/order",
   "/api/dsh-graph/move-goal", "/api/dsh-graph/edit-description", "/api/dsh-graph/rename-goal", "/api/dsh-graph/memory/list",
-  "/api/dsh-graph/memory/add", "/api/dsh-graph/memory/delete", "/api/dsh-graph/memory/toggle-tools", "/api/dsh-graph/set-goal-tags",
+  "/api/dsh-graph/memory/add", "/api/dsh-graph/memory/delete", "/api/dsh-graph/memory/toggle-tools", "/api/dsh-graph/set-goal-tags", "/api/dsh-graph/set-goal-budget",
   "/api/dsh-graph/set-goal-type", "/api/dsh-graph/add-card", "/api/dsh-graph/card", "/api/dsh-graph/shared-cards",
   "/api/dsh-graph/create-shared-card", "/api/dsh-graph/attach-shared-card", "/api/dsh-graph/unreference-shared-card",
   "/api/dsh-graph/delete-shared-card", "/api/dsh-graph/convert-card-to-shared", "/api/dsh-graph/convert-card-to-owned",

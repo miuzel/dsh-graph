@@ -26,6 +26,7 @@ import {
   setCriteria,
   updateCriteria,
   setGoalTags,
+  setGoalBudget,
   transition,
   validate,
   rebuild,
@@ -253,6 +254,7 @@ import {
   makeCareAuditEntry,
   formatCareAudit,
 } from "./core/ops.js";
+import { careEffectiveBudgetSeconds, careTaskIntervalMs, CARE_RUN_HISTORY_LIMIT } from "./core/care.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
 import { sT, TOOL_CATEGORIES, TOOL_TAXONOMY, helpToolTaxonomyProblems } from "./lib/server-i18n.js";
@@ -1918,12 +1920,21 @@ export function createCareRuntime(options = {}) {
   const CARE_STATE_VERSION = 1;
   const makeEntry = (root) => ({
     root,
+    startedAt: now(),
     supervisorId: null,
     supervisorAgent: null,
     group: newCareGroupState(),
     tasks: new Map(),
     inspections: new Map(),
     messageIndex: new Map(),
+    /** g-612：已观察到的 supervisor→child message.id（幂等；有界）。 */
+    seenMessageIds: new Map(),
+    /** g-612：child 未在 tasks 中时先记录的主管消息基准（idle 唤醒路径）。 */
+    pendingMessageBases: new Map(),
+    /** g-612：child 未在 tasks 中时先观察到的 running 起点（status 事件精确时点）。 */
+    pendingRunStarts: new Map(),
+    /** g-612：已停止 run 的有界历史（项目内）。 */
+    runs: [],
     timer: null,
     timerDueAt: null,
     retryNotBefore: null,
@@ -1955,6 +1966,7 @@ export function createCareRuntime(options = {}) {
       group,
       tasks,
       inspections: [...pending, ...resolved],
+      runs: Array.isArray(entry.runs) ? entry.runs.slice(-CARE_RUN_HISTORY_LIMIT) : [],
       transportFailures: entry.transportFailures ?? 0,
       lastOutcome: entry.lastOutcome ?? null,
       seq: entry.seq ?? 0,
@@ -1986,6 +1998,44 @@ export function createCareRuntime(options = {}) {
       remindersSent: Math.max(0, Math.floor(numberOr(raw.remindersSent, 0))),
       awaitingReply: raw.awaitingReply === true,
       humanReason: reason,
+      // g-612：旧快照无这些字段 ⇒ null/undefined 继承，绝不伪造历史。
+      budgetSeconds: normalizeCareSeconds(raw.budgetSeconds),
+      budgetBaseAt: raw.budgetBaseAt === null || raw.budgetBaseAt === undefined ? null : numberOr(raw.budgetBaseAt, null),
+      budgetCountdown: raw.budgetCountdown === true,
+      budgetEffectiveSeconds: normalizeCareSeconds(raw.budgetEffectiveSeconds),
+      budgetEffectiveSource: ["goal", "project_explicit", "global_explicit", "global_default"].includes(String(raw.budgetEffectiveSource))
+        ? raw.budgetEffectiveSource : null,
+      runStartedAt: raw.runStartedAt === null || raw.runStartedAt === undefined ? null : numberOr(raw.runStartedAt, null),
+      runStartSource: ["attempt_record", "agent_status", "sample", "unknown"].includes(String(raw.runStartSource))
+        ? raw.runStartSource : null,
+      runStartExact: raw.runStartExact === true,
+    };
+  };
+  const normalizePersistedRun = (raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    const id = String(raw.id ?? "");
+    const child = String(raw.child ?? "");
+    const attempt = String(raw.attempt ?? "");
+    const goal = String(raw.goal ?? "");
+    if (!id || !child || !attempt || !goal) return null;
+    const numOrNull = (v) => (v === null || v === undefined ? null : numberOr(v, null));
+    return {
+      id,
+      goal, attempt, child,
+      startedAt: numOrNull(raw.startedAt),
+      startSource: ["attempt_record", "agent_status", "sample", "unknown"].includes(String(raw.startSource))
+        ? raw.startSource : "unknown",
+      startExact: raw.startExact === true,
+      stoppedAt: numOrNull(raw.stoppedAt),
+      stopSource: ["agent_status", "disposed", "sample", "unknown"].includes(String(raw.stopSource))
+        ? raw.stopSource : null,
+      stopExact: raw.stopExact === true,
+      budgetSeconds: normalizeCareSeconds(raw.budgetSeconds),
+      budgetSource: ["goal", "project_explicit", "global_explicit", "global_default"].includes(String(raw.budgetSource))
+        ? raw.budgetSource : null,
+      naturalMs: numOrNull(raw.naturalMs),
+      deviationMs: numOrNull(raw.deviationMs),
+      overBudget: typeof raw.overBudget === "boolean" ? raw.overBudget : null,
     };
   };
   const normalizePersistedInspection = (raw) => {
@@ -2059,6 +2109,25 @@ export function createCareRuntime(options = {}) {
       const t = normalizePersistedTask(raw);
       if (t) entry.tasks.set(`${t.child}\u0000${t.attempt}`, t);
     }
+    entry.runs = [];
+    for (const raw of Array.isArray(state.runs) ? state.runs : []) {
+      const run = normalizePersistedRun(raw);
+      if (run) entry.runs.push(run);
+    }
+    entry.runs = entry.runs.slice(-CARE_RUN_HISTORY_LIMIT);
+    // g-612：重启后同一 message.id 仍幂等（只存 id/时间，不存消息正文）。
+    entry.seenMessageIds = new Map();
+    for (const ev of events) {
+      if (!ev || ev.event !== "care.message") continue;
+      const mid = String(ev?.details?.message_id ?? "");
+      if (!mid) continue;
+      const at = numberOr(ev?.details?.at, numberOr(ev?.ts, 0));
+      entry.seenMessageIds.set(mid, at);
+      if (entry.seenMessageIds.size > 512) {
+        const oldest = entry.seenMessageIds.keys().next().value;
+        if (oldest !== undefined) entry.seenMessageIds.delete(oldest);
+      }
+    }
     entry.inspections = new Map();
     entry.messageIndex = new Map();
     for (const raw of Array.isArray(state.inspections) ? state.inspections : []) {
@@ -2130,6 +2199,25 @@ export function createCareRuntime(options = {}) {
       if (agent.status === "running") return "running";
       return null;
     } catch { return null; }
+  };
+
+  /** g-612：按 child 身份定位所属 care entry（root + 主管 ownership 双重校验）。 */
+  const entryOfChildAgent = (agent) => {
+    const childId = agent?.session?.id ?? agent?.id ?? null;
+    if (!childId) return null;
+    const agents = getService("agents");
+    if (!agents || typeof agents.isOwnedBy !== "function") return null;
+    const root = rootOfAgent(agent);
+    if (!root) return null;
+    const entry = entries.get(root);
+    if (!entry) return null;
+    const sup = entry.supervisorAgent ?? supervisorOf(entry.root).agent;
+    if (!sup) return null;
+    try {
+      if (agents.isOwnedBy(childId, sup) !== true) return null;
+    } catch { return null; }
+    if (!entry.supervisorId) entry.supervisorId = sup?.session?.id ?? sup?.id ?? null;
+    return entry;
   };
 
   // ── g-506 返工：晚 claim / 晚加入 workspace 的自举布防（见文件头「自举」小节） ──────────
@@ -2255,6 +2343,28 @@ export function createCareRuntime(options = {}) {
     return out;
   };
 
+  /** g-612：从 board payload 的 attempt_binding 定位 child 的当前 goal/attempt（只读）。 */
+  const bindingForChild = (entry, childId) => {
+    if (!entry || !childId) return null;
+    let payload = null;
+    try { payload = typeof readBoardPayload === "function" ? readBoardPayload(entry.root) : null; } catch { payload = null; }
+    const goals = enumerateBoardGoals(payload);
+    if (!goals) return null;
+    for (const g of goals) {
+      const b = g?.attempt_binding;
+      if (!b || String(b.child_id ?? "") !== String(childId)) continue;
+      if (String(g?.status) !== "in_progress") continue;
+      if (String(b.parent_session_id ?? "") !== String(entry.supervisorId ?? "")) continue;
+      return {
+        goal: String(g?.id ?? ""),
+        attempt: String(b.attempt ?? ""),
+        bindingVersion: Number(b.binding_version) || 0,
+        budgetSeconds: normalizeCareSeconds(g?.budget_seconds),
+      };
+    }
+    return null;
+  };
+
   /**
    * 采样当前组的**真实运行中任务**（catalog ∩ live registry ∩ ownership ∩ running）。
    * `ok=false` ⇒ 运行态不可确认（fail-safe：不投递）。
@@ -2302,12 +2412,135 @@ export function createCareRuntime(options = {}) {
         child: childId,
         bindingVersion: Number(binding.binding_version) || 0,
         startedAt,
+        budgetSeconds: normalizeCareSeconds(g?.budget_seconds),
       });
     }
     return { ok: true, tasks };
   };
 
   const taskKey = (t) => `${t.child}\u0000${t.attempt}`;
+
+  // ── g-612：run 墙钟 / 主管消息 / 预算变更（均为纯状态更新 + 事件先行） ──────────────
+  const snapshotWithTask = (entry, updated) => {
+    const key = taskKey(updated);
+    const tasks = [...entry.tasks.values()].map((t) => (taskKey(t) === key ? updated : t));
+    if (!tasks.some((t) => taskKey(t) === key)) tasks.push(updated);
+    return careStateSnapshot(entry, { tasks });
+  };
+  const pushRun = (entry, run) => {
+    entry.runs.push(run);
+    if (entry.runs.length > CARE_RUN_HISTORY_LIMIT) entry.runs.splice(0, entry.runs.length - CARE_RUN_HISTORY_LIMIT);
+  };
+  const runBudgetOf = (task, timing) => careEffectiveBudgetSeconds(task, timing);
+  const runIdOf = (task, startedAt) => `care-run:${task.child}:${task.attempt}:${startedAt ?? "unknown"}`;
+  const appendRunEvent = (entry, phase, run) => {
+    try { appendCareEvent(entry, "care.run", { phase, run }); } catch { /* 历史事件失败不阻断调度 */ }
+  };
+  const appendRunStarted = (_entry, _task, _timing) => {
+    // run 起止作为 care_state 的一部分随既有 care.* 事件持久化；
+    // 不新增高频事件类型（避免打爆既有「无事件」断言与事件日志）。
+  };
+
+  const closeTaskRun = (entry, task, opts) => {
+    if (!task || (task.runStartedAt == null && !task.runStartSource)) return task;
+    const startedAt = task.runStartedAt ?? null;
+    const stoppedAt = opts.stoppedAt ?? now();
+    const budget = runBudgetOf(task, opts.timing);
+    const naturalMs = startedAt == null ? null : Math.max(0, stoppedAt - startedAt);
+    const deviationMs = naturalMs == null ? null : naturalMs - budget.seconds * 1000;
+    const run = {
+      id: runIdOf(task, startedAt),
+      goal: task.goal,
+      attempt: task.attempt,
+      child: task.child,
+      startedAt,
+      startSource: task.runStartSource ?? "unknown",
+      startExact: task.runStartExact === true,
+      stoppedAt,
+      stopSource: opts.stopSource ?? "sample",
+      stopExact: opts.stopExact === true,
+      budgetSeconds: budget.seconds,
+      budgetSource: budget.source,
+      naturalMs,
+      deviationMs,
+      overBudget: deviationMs == null ? null : deviationMs > 0,
+    };
+    pushRun(entry, run);
+    return { ...task, runStartedAt: null, runStartSource: null, runStartExact: false };
+  };
+  const applySupervisorMessageToTask = (entry, task, opts) => {
+    const budget = runBudgetOf(task, opts.timing);
+    const budgetMs = budget.seconds * 1000;
+    const updated = {
+      ...task,
+      budgetBaseAt: opts.at,
+      budgetCountdown: true,
+      budgetEffectiveSeconds: budget.seconds,
+      budgetEffectiveSource: budget.source,
+      ...(entry.group.paused === true
+        ? { frozenRemainingMs: budgetMs, scheduleDueAt: null }
+        : { frozenRemainingMs: null, scheduleDueAt: opts.at + budgetMs }),
+    };
+    try {
+      appendCareEvent(entry, "care.message", {
+        message_id: String(opts.messageId ?? ""),
+        goal: task.goal,
+        attempt: task.attempt,
+        child: task.child,
+        at: opts.at,
+        budget_seconds: budget.seconds,
+        budget_source: budget.source,
+      }, snapshotWithTask(entry, updated));
+    } catch { /* 事件失败不阻断基准更新 */ }
+    return updated;
+  };
+  const applyBudgetChangeToTask = (entry, task, opts) => {
+    const inBudgetPhase = task.budgetCountdown === true || task.lastCareAt === null;
+    const oldBudget = task.budgetEffectiveSeconds ?? runBudgetOf(task, opts.timing).seconds;
+    const oldNominal = inBudgetPhase ? oldBudget * 1000 : careTaskIntervalMs(task, opts.timing);
+    const budget = runBudgetOf(task, opts.timing);
+    let updated = {
+      ...task,
+      budgetEffectiveSeconds: budget.seconds,
+      budgetEffectiveSource: budget.source,
+    };
+    if (entry.group.paused === true) {
+      // 仅当当前仍在「首次预算倒计时/消息重置后」阶段才重算；已投递后的复查间隔不因预算编辑而重置。
+      if (inBudgetPhase) {
+        const frozen = typeof task.frozenRemainingMs === "number" ? task.frozenRemainingMs : oldNominal;
+        const consumed = Math.max(0, oldNominal - Math.max(0, frozen));
+        updated = {
+          ...updated,
+          budgetCountdown: true,
+          budgetBaseAt: opts.at - consumed,
+          frozenRemainingMs: Math.max(0, budget.seconds * 1000 - consumed),
+          scheduleDueAt: null,
+        };
+      }
+    } else if (inBudgetPhase) {
+      const base = task.budgetBaseAt ?? task.runStartedAt ?? task.startedAt;
+      updated = {
+        ...updated,
+        budgetCountdown: true,
+        budgetBaseAt: base,
+        scheduleDueAt: base + budget.seconds * 1000,
+        frozenRemainingMs: null,
+      };
+    }
+    try {
+      appendCareEvent(entry, "care.budget", {
+        goal: task.goal,
+        attempt: task.attempt,
+        child: task.child,
+        at: opts.at,
+        old_budget_seconds: oldBudget,
+        budget_seconds: budget.seconds,
+        budget_source: budget.source,
+        paused: entry.group.paused === true,
+      }, snapshotWithTask(entry, updated));
+    } catch { /* 事件失败不阻断调度 */ }
+    return updated;
+  };
 
   /** B15 补充：已投递巡检的目标结束/换绑 ⇒ 自动 expire，不阻塞其他仍活任务；
    *  不撤回已发消息，过期后的真实结果仍按 inspection_not_open 拒绝。 */
@@ -2339,15 +2572,63 @@ export function createCareRuntime(options = {}) {
   };
 
   /** 用最新采样对账任务表：结束/换 attempt ⇒ 移除；绑定换代 ⇒ 重置计数（新任务语义）。 */
-  const reconcileTasks = (entry, sampled, thresholdSeconds, at = now()) => {
+  const reconcileTasks = (entry, sampled, timing, at = now()) => {
     const next = new Map();
     for (const s of sampled) {
       const key = taskKey(s);
       const prev = entry.tasks.get(key);
+      const goalBudget = normalizeCareSeconds(s.budgetSeconds);
+      const pendingRun = entry.pendingRunStarts.get(s.child);
+      const pendingMsg = entry.pendingMessageBases.get(s.child);
       if (prev && prev.bindingVersion === s.bindingVersion) {
-        next.set(key, prev);
+        const goalChanged = (prev.budgetSeconds ?? null) !== (goalBudget ?? null);
+        let t = { ...prev, budgetSeconds: goalBudget };
+        if (t.runStartedAt == null && pendingRun) {
+          t = { ...t, runStartedAt: pendingRun.at, runStartSource: "agent_status", runStartExact: pendingRun.exact !== false };
+          entry.pendingRunStarts.delete(s.child);
+          appendRunStarted(entry, t, timing);
+        } else if (t.runStartedAt == null) {
+          if (s.startedAt >= entry.startedAt) {
+            t = { ...t, runStartedAt: s.startedAt, runStartSource: "attempt_record", runStartExact: false };
+            appendRunStarted(entry, t, timing);
+          } else {
+            t = { ...t, runStartSource: "unknown", runStartExact: false };
+          }
+        }
+        if (pendingMsg && pendingMsg.attempt === s.attempt && pendingMsg.bindingVersion === s.bindingVersion) {
+          t = applySupervisorMessageToTask(entry, t, { at: pendingMsg.at, messageId: pendingMsg.messageId, timing });
+          entry.pendingMessageBases.delete(s.child);
+        }
+        if (t.budgetBaseAt == null) t = { ...t, budgetBaseAt: t.startedAt };
+        const eff = runBudgetOf(t, timing);
+        if (t.budgetEffectiveSeconds == null) {
+          t = { ...t, budgetEffectiveSeconds: eff.seconds, budgetEffectiveSource: eff.source };
+          if ((t.budgetCountdown === true || t.lastCareAt === null) && t.scheduleDueAt == null) {
+            if (entry.group.paused === true) {
+              if (t.frozenRemainingMs == null) t = { ...t, frozenRemainingMs: eff.seconds * 1000 };
+            } else {
+              t = { ...t, scheduleDueAt: (t.budgetBaseAt ?? t.startedAt) + eff.seconds * 1000 };
+            }
+          }
+        } else if (t.budgetEffectiveSeconds !== eff.seconds || t.budgetEffectiveSource !== eff.source) {
+          t = applyBudgetChangeToTask(entry, t, { at, timing, forceCountdown: goalChanged });
+        }
+        next.set(key, t);
       } else {
-        next.set(key, {
+        let runStartedAt = pendingRun?.at ?? null;
+        let runStartSource = pendingRun ? "agent_status" : null;
+        let runStartExact = pendingRun ? pendingRun.exact !== false : false;
+        if (runStartedAt == null) {
+          if (s.startedAt >= entry.startedAt) {
+            runStartedAt = s.startedAt;
+            runStartSource = "attempt_record";
+          } else {
+            runStartSource = "unknown";
+          }
+          runStartExact = false;
+        }
+        if (pendingRun) entry.pendingRunStarts.delete(s.child);
+        let t = {
           child: s.child,
           attempt: s.attempt,
           goal: s.goal,
@@ -2358,12 +2639,50 @@ export function createCareRuntime(options = {}) {
           stagnantRounds: 0,
           humanLocked: false,
           lastCareAt: null,
-          frozenRemainingMs: entry.group.paused === true
-            ? Math.max(0, s.startedAt + Math.max(1, Math.floor(thresholdSeconds)) * 1000 - at)
-            : null,
+          frozenRemainingMs: null,
           scheduleDueAt: null,
-        });
+          budgetSeconds: goalBudget,
+          budgetBaseAt: null,
+          budgetCountdown: true,
+          budgetEffectiveSeconds: null,
+          budgetEffectiveSource: null,
+          runStartedAt,
+          runStartSource,
+          runStartExact,
+        };
+        if (pendingMsg && pendingMsg.attempt === s.attempt && pendingMsg.bindingVersion === s.bindingVersion) {
+          t = applySupervisorMessageToTask(entry, t, { at: pendingMsg.at, messageId: pendingMsg.messageId, timing });
+          entry.pendingMessageBases.delete(s.child);
+        }
+        if (t.budgetBaseAt == null) {
+          // 首次培训（同一 attempt 尚无已停止 run）：预算基准取 attempt 派发时刻（s.startedAt），
+          // 与 g506 既有语义一致；cold resume 后的新 run 才用新 run 起点。主管消息已单独覆盖。
+          const hadPriorRun = entry.runs.some((r) => r.child === s.child && r.attempt === s.attempt);
+          t = { ...t, budgetBaseAt: hadPriorRun ? (t.runStartedAt ?? s.startedAt) : s.startedAt };
+        }
+        const eff = runBudgetOf(t, timing);
+        t = { ...t, budgetEffectiveSeconds: eff.seconds, budgetEffectiveSource: eff.source };
+        if (entry.group.paused === true) {
+          // 新任务在暂停期间被采样：冻结「从预算基准起已消耗后的剩余」（g506 语义）；
+          // 但若刚有主管消息（pending message 已置满额），保留消息重置后的完整预算。
+          const base = t.budgetBaseAt ?? s.startedAt;
+          const remaining = Math.max(0, eff.seconds * 1000 - Math.max(0, at - base));
+          t = {
+            ...t,
+            frozenRemainingMs: typeof t.frozenRemainingMs === "number" ? t.frozenRemainingMs : remaining,
+            scheduleDueAt: null,
+          };
+        } else if (t.scheduleDueAt == null) {
+          t = { ...t, scheduleDueAt: (t.budgetBaseAt ?? s.startedAt) + eff.seconds * 1000 };
+        }
+        next.set(key, t);
+        appendRunStarted(entry, t, timing);
       }
+    }
+    // 未再采样的任务（停止/换绑/消失）：关闭活动 run；停止时刻只能是采样上界，标 sample/非精确。
+    for (const [key, old] of entry.tasks) {
+      if (next.has(key)) continue;
+      closeTaskRun(entry, old, { stoppedAt: at, stopSource: "sample", stopExact: false, timing });
     }
     entry.tasks = next;
     return next;
@@ -2427,6 +2746,18 @@ export function createCareRuntime(options = {}) {
     return { cfg, global, resolution, projection };
   };
 
+  /** CareEffectiveProjection（snake_case）→ core 计时函数所需的 camelCase timing。 */
+  const timingOf = (projection) => ({
+    thresholdSeconds: projection?.threshold_seconds ?? CARE_DEFAULTS.thresholdSeconds,
+    recheckSeconds: projection?.recheck_seconds ?? CARE_DEFAULTS.recheckSeconds,
+    thresholdSource: projection?.threshold_source,
+  });
+  const timingForEntry = (entry) => {
+    try { return timingOf(readConfig(entry).projection); } catch {
+      return timingOf({ threshold_seconds: CARE_DEFAULTS.thresholdSeconds, recheck_seconds: CARE_DEFAULTS.recheckSeconds, threshold_source: "global_default" });
+    }
+  };
+
   const warningsOf = (cfg, global) => {
     const warnings = [];
     if (cfg?.supervisor?.care_malformed === true) warnings.push("project_care_malformed");
@@ -2459,7 +2790,7 @@ export function createCareRuntime(options = {}) {
     let sampled = { ok: false, tasks: [] };
     if (agent) sampled = sampleTasks(entry, agent);
     if (sampled.ok) {
-      reconcileTasks(entry, sampled.tasks, projection.threshold_seconds);
+      reconcileTasks(entry, sampled.tasks, timingOf(projection));
       expireStaleInspections(entry, sampled.tasks);
     }
     const caps = capabilitiesOf(agent, sampled.ok ? sampled.tasks : []);
@@ -2669,7 +3000,7 @@ export function createCareRuntime(options = {}) {
         if (!sampledNow.ok) return "state_unknown";
         const capsNow = capabilitiesOf(agent, sampledNow.tasks);
         if (!capsNow.minimal) return "capability_missing";
-        reconcileTasks(entry, sampledNow.tasks, nowCfg.projection.threshold_seconds, now());
+        reconcileTasks(entry, sampledNow.tasks, timingOf(nowCfg.projection), now());
         expireStaleInspections(entry, sampledNow.tasks);
         const idleNow = statusOf(agent) === "idle" ? true : statusOf(agent) === "running" ? false : null;
         const openNow = [...entry.inspections.values()].some((i) => careInspectionOpen(i, now()));
@@ -2985,6 +3316,7 @@ export function createCareRuntime(options = {}) {
       tasks: [...entry.tasks.values()],
       pendingInspections: pending,
       lastOutcome: entry.lastOutcome,
+      runs: entry.runs,
       warnings: computed.warnings,
     });
   };
@@ -3028,7 +3360,7 @@ export function createCareRuntime(options = {}) {
     try { decisionOf(entry); } catch { /* 采样失败按空组处理（下方 readConfig 仍会如实拒绝） */ }
     let computed;
     try { computed = readConfig(entry); } catch { return { ok: false, code: "config_unavailable" }; }
-    const timing = { now: now(), thresholdSeconds: computed.projection.threshold_seconds, recheckSeconds: computed.projection.recheck_seconds };
+    const timing = { now: now(), thresholdSeconds: computed.projection.threshold_seconds, recheckSeconds: computed.projection.recheck_seconds, thresholdSource: computed.projection.threshold_source };
     const tasks = [...entry.tasks.values()];
     let nextGroup = entry.group;
     let nextTasks = tasks;
@@ -3258,6 +3590,40 @@ export function createCareRuntime(options = {}) {
   onEvent("agent/inbox/inserted", (payload) => {
     try {
       const agent = payload?.agent;
+      // g-612：目标 child 的 inbox 收到主管新消息（含 running steer / idle 唤醒）。
+      const childEntry = entryOfChildAgent(agent);
+      if (childEntry) {
+        const msg = payload?.message;
+        const mid = String(msg?.id ?? "");
+        const src = msg?.source;
+        if (!mid || !src || src.kind !== "agent-message"
+          || String(src.senderSessionId ?? "") !== String(childEntry.supervisorId ?? "")) return;
+        if (childEntry.seenMessageIds.has(mid)) return; // 同一 message.id 幂等
+        childEntry.seenMessageIds.set(mid, now());
+        if (childEntry.seenMessageIds.size > 512) {
+          const oldest = childEntry.seenMessageIds.keys().next().value;
+          if (oldest !== undefined) childEntry.seenMessageIds.delete(oldest);
+        }
+        const childId = String(agent?.session?.id ?? agent?.id ?? "");
+        const binding = bindingForChild(childEntry, childId);
+        if (binding && binding.goal && binding.attempt) {
+          const key = `${childId}\u0000${binding.attempt}`;
+          const task = childEntry.tasks.get(key);
+          if (task && task.bindingVersion === binding.bindingVersion) {
+            childEntry.tasks.set(key, applySupervisorMessageToTask(childEntry, task, {
+              at: now(), messageId: mid, timing: timingForEntry(childEntry),
+            }));
+          } else {
+            childEntry.pendingMessageBases.set(childId, { at: now(), messageId: mid, ...binding });
+            if (childEntry.pendingMessageBases.size > 64) {
+              const oldest = childEntry.pendingMessageBases.keys().next().value;
+              if (oldest !== undefined) childEntry.pendingMessageBases.delete(oldest);
+            }
+          }
+          if (task || childEntry.timer !== null) scheduleEntry(childEntry);
+        }
+        return;
+      }
       const entry = entryOfAgent(agent);
       if (!entry) return;
       const id = entry.messageIndex.get(payload?.message?.id);
@@ -3301,6 +3667,46 @@ export function createCareRuntime(options = {}) {
   onEvent("agent/status", (payload) => {
     try {
       const agent = payload?.agent;
+      // g-612：目标 child 的 running/idle 是**本轮自然墙钟**的公开事件时点；
+      // 只用于 run 起止/采样重排，绝不把它当成关照倒计时或把 idle 当成永久结束。
+      const childEntry = entryOfChildAgent(agent);
+      if (childEntry) {
+        const childId = String(agent?.session?.id ?? agent?.id ?? "");
+        const status = payload?.status;
+        const at = now();
+        const timing = timingForEntry(childEntry);
+        let task = null;
+        let key = null;
+        for (const [k, t] of childEntry.tasks) {
+          if (t.child === childId) { task = t; key = k; break; }
+        }
+        if (status === "running") {
+          if (task) {
+            if (task.runStartedAt == null) {
+              const updated = { ...task, runStartedAt: at, runStartSource: "agent_status", runStartExact: true };
+              childEntry.tasks.set(key, updated);
+              appendRunStarted(childEntry, updated, timing);
+            }
+          } else {
+            childEntry.pendingRunStarts.set(childId, { at, exact: true });
+            if (childEntry.pendingRunStarts.size > 64) {
+              const oldest = childEntry.pendingRunStarts.keys().next().value;
+              if (oldest !== undefined) childEntry.pendingRunStarts.delete(oldest);
+            }
+          }
+          if (task || childEntry.timer !== null) scheduleEntry(childEntry);
+        } else if (status === "idle") {
+          childEntry.pendingRunStarts.delete(childId);
+          if (task) {
+            const closed = closeTaskRun(childEntry, task, {
+              stoppedAt: at, stopSource: "agent_status", stopExact: true, timing,
+            });
+            childEntry.tasks.set(key, closed);
+          }
+          if (task || childEntry.timer !== null) scheduleEntry(childEntry);
+        }
+        return;
+      }
       // 快路径：已绑定本 root 的主管 ⇒ 重排即可。
       const bound = entryOfAgent(agent);
       if (bound) { scheduleEntry(bound); return; }
@@ -3335,7 +3741,27 @@ export function createCareRuntime(options = {}) {
 
   onEvent("agent/disposed", (payload) => {
     try {
-      const entry = entryOfAgent(payload?.agent);
+      const agent = payload?.agent;
+      const root = rootOfAgent(agent);
+      const childEntry = root ? entries.get(root) : null;
+      const childId = String(agent?.session?.id ?? agent?.id ?? "");
+      if (childEntry && childId) {
+        let task = null;
+        let key = null;
+        for (const [k, t] of childEntry.tasks) {
+          if (t.child === childId) { task = t; key = k; break; }
+        }
+        childEntry.pendingRunStarts.delete(childId);
+        childEntry.pendingMessageBases.delete(childId);
+        if (task) {
+          const closed = closeTaskRun(childEntry, task, {
+            stoppedAt: now(), stopSource: "disposed", stopExact: true, timing: timingForEntry(childEntry),
+          });
+          childEntry.tasks.set(key, closed);
+          scheduleEntry(childEntry);
+        }
+      }
+      const entry = entryOfAgent(agent);
       if (!entry) return;
       entry.supervisorAgent = null;
       scheduleEntry(entry);
@@ -3360,6 +3786,28 @@ export function createCareRuntime(options = {}) {
     } catch { /* 忽略 */ }
   });
 
+  /** g-612：goal 预算编辑后立即按最近有效基准重算；paused 时保留冻结口径。 */
+  const notifyGoalBudgetChanged = (rootArg, goal, budgetSeconds) => {
+    const root = boardRootKey(rootArg);
+    if (!root) return { ok: false, code: "workspace_unresolved" };
+    const entry = entries.get(root);
+    if (!entry) return { ok: true, changed: false, reason: "no_entry" };
+    const budget = normalizeCareSeconds(budgetSeconds);
+    const timing = timingForEntry(entry);
+    const at = now();
+    let changed = false;
+    for (const [key, task] of entry.tasks) {
+      if (task.goal !== goal) continue;
+      const updated = applyBudgetChangeToTask(entry, { ...task, budgetSeconds: budget }, {
+        at, timing, forceCountdown: true,
+      });
+      entry.tasks.set(key, updated);
+      changed = true;
+    }
+    if (changed) scheduleEntry(entry);
+    return { ok: true, changed };
+  };
+
   return {
     start,
     dispose,
@@ -3367,6 +3815,7 @@ export function createCareRuntime(options = {}) {
     statusFor,
     control,
     submitOutcome,
+    notifyGoalBudgetChanged,
     entryOfRoot,
     // g-506 返工：生产事件链（成功 claim / 真实主管事件）显式布防入口；幂等、只读校验、失败不抛。
     armForRoot,
@@ -7067,6 +7516,32 @@ export function apply(ctx, config) {
       },
     },
     {
+      // g-612：goal 级预计任务预算（唯一可编辑真源 = goal meta.task_budget_seconds）。
+      // 沿用现有目标更新权限/actor 规则：不额外限制为只有 live supervisor 可调用。
+      def: {
+        name: "graph_set_goal_budget",
+        description: sT("tool.graph_set_goal_budget"),
+        parameters: params({
+          goal: str,
+          budget_seconds: {
+            type: "integer",
+            minimum: 30,
+            maximum: 86400,
+            nullable: true,
+            description: "目标级预算（整数秒，30–86400）；null = 清空并继承项目/全局 care_threshold_seconds。未设置时也继承。",
+          },
+        }, ["goal", "budget_seconds"]),
+      },
+      run: (a, ex) => {
+        const r = rootFor(ex);
+        const result = setGoalBudget(r, a.goal, { budget_seconds: a.budget_seconds, actor: actorOf(ex) });
+        if (careRuntime && typeof careRuntime.notifyGoalBudgetChanged === "function") {
+          try { careRuntime.notifyGoalBudgetChanged(r, a.goal, result.new_seconds); } catch { /* 关照运行时降级不影响写入 */ }
+        }
+        return { ok: true, ...result };
+      },
+    },
+    {
       def: {
         name: "graph_set_goal_type",
         description: "设置目标类型（feature/bug/task/improvement/patch/chore；patch/chore 为微小改动快速通道），只更新 meta.type 并记 goal.type_changed 事件（old_type/new_type/actor）；不改 status/version/执行。非法类型安全回退 task；相同类型为 no-op。",
@@ -8689,6 +9164,29 @@ export function apply(ctx, config) {
           json(res, 200, { ok: true, ...result });
         } catch (e) {
           const code = e instanceof GraphConflictError ? 409 : (e instanceof GraphError ? 400 : 500);
+          json(res, code, { error: String(e?.message ?? e) });
+        }
+      },
+    },
+    {
+      // g-612：goal 级预算（唯一真源 = goal meta.task_budget_seconds；null 清空继承）。
+      // 与既有目标写入口相同：经 g507 admit 门禁 + human:gui actor；无额外仅 supervisor 限制。
+      path: "/api/dsh-graph/set-goal-budget",
+      handler: async (req, res) => {
+        try {
+          if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+          const body = await readBody(req);
+          const { goal } = body;
+          if (!goal) return json(res, 400, { error: "missing goal" });
+          if (!Object.hasOwn(body, "budget_seconds")) return json(res, 400, { error: "missing budget_seconds" });
+          const r = rootForReq(req, body);
+          const result = setGoalBudget(r, goal, { budget_seconds: body.budget_seconds, actor: "human:gui" });
+          if (careRuntime && typeof careRuntime.notifyGoalBudgetChanged === "function") {
+            try { careRuntime.notifyGoalBudgetChanged(r, goal, result.new_seconds); } catch { /* 降级不阻断 */ }
+          }
+          json(res, 200, { ok: true, ...result });
+        } catch (e) {
+          const code = e instanceof GraphError ? 400 : 500;
           json(res, code, { error: String(e?.message ?? e) });
         }
       },
