@@ -2114,7 +2114,18 @@ export function createCareRuntime(options = {}) {
       const run = normalizePersistedRun(raw);
       if (run) entry.runs.push(run);
     }
-    entry.runs = entry.runs.slice(-CARE_RUN_HISTORY_LIMIT);
+    // g-612：从独立的 care.run 停止事件恢复历史（即使最后快照/后续无 care 事件也不丢）。
+    const seenRunIds = new Set(entry.runs.map((r) => r.id));
+    for (const ev of events) {
+      if (!ev || ev.event !== "care.run") continue;
+      const run = normalizePersistedRun(ev?.details?.run);
+      if (!run || seenRunIds.has(run.id)) continue;
+      seenRunIds.add(run.id);
+      entry.runs.push(run);
+    }
+    entry.runs = entry.runs
+      .sort((a, b) => (a.stoppedAt ?? a.startedAt ?? 0) - (b.stoppedAt ?? b.startedAt ?? 0))
+      .slice(-CARE_RUN_HISTORY_LIMIT);
     // g-612：重启后同一 message.id 仍幂等（只存 id/时间，不存消息正文）。
     entry.seenMessageIds = new Map();
     for (const ev of events) {
@@ -2466,7 +2477,13 @@ export function createCareRuntime(options = {}) {
       overBudget: deviationMs == null ? null : deviationMs > 0,
     };
     pushRun(entry, run);
-    return { ...task, runStartedAt: null, runStartSource: null, runStartExact: false };
+    const cleared = { ...task, runStartedAt: null, runStartSource: null, runStartExact: false };
+    // g-612：run 停止必须在正常重启前持久保存（纯 metadata，不含消息正文）。
+    // 这是新增的合法 care 事件；既有 care.* 结论/计数由测试按事件类型显式区分，不删断言。
+    try {
+      appendCareEvent(entry, "care.run", { phase: "stopped", run }, snapshotWithTask(entry, cleared));
+    } catch { /* 事件失败仍保留内存历史，不阻断调度 */ }
+    return cleared;
   };
   const applySupervisorMessageToTask = (entry, task, opts) => {
     const budget = runBudgetOf(task, opts.timing);

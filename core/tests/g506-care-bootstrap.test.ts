@@ -644,7 +644,12 @@ test("g506 bootstrap 主管更替：新 claim 后只唤醒新主管，旧 pendin
     await scheduler.advanceTo(clock.now() + 1);
     assert.equal(sent2.length, 1, "新主管收到属于新绑定的巡检");
     assert.equal(sent1.length, 1, "旧主管不得再收到");
-    assert.equal(careEvents(events).length, 2);
+    // 原断言「恰好两次关照巡检」仍是业务结论；g-612 新增纯 metadata 的 care.run 停止事件，
+    // 不能把巡检与 run 历史混成一个计数（否则无法区分「多发了巡检」与「只多了 run 停止记录」）。
+    const allCare = careEvents(events);
+    assert.equal(allCare.filter((e) => e.event === "care.inspection").length, 2, "恰好两次关照巡检（原结论保留）");
+    assert.ok(allCare.filter((e) => e.event === "care.run" && e.details?.phase === "stopped").length >= 1,
+      "g-612：旧任务停止必须留下 care.run 停止 metadata");
   } finally {
     runtime.dispose();
     host.adapter.releaseAll();

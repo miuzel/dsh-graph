@@ -104,6 +104,8 @@ export async function loadHostPackages() {
  * @param opts.sandboxWorkspace 相对 root 模式下的默认 workspace（默认即本夹具 ws）。
  * @param opts.projectYaml  覆盖启动时写入的 project.yaml（默认只写 supervisor.session）。
  * @param opts.sessionQuery  在 SubagentRuntime 之前装载真实 `sessionQuery` 服务（cold resume 需要）。
+ * @param opts.workspace  复用既有 workspace（重启夹具：同一 `.dsh-graph`/goal 事件跨宿主实例）。
+ * @param opts.sessionId  主管会话 id（重启夹具必须换新 id，避免持久 session 重名）。
  */
 export async function makeRealHost(opts: {
   gitRepo?: boolean;
@@ -113,11 +115,14 @@ export async function makeRealHost(opts: {
   sandboxWorkspace?: string;
   projectYaml?: string;
   sessionQuery?: boolean;
+  workspace?: string;
+  sessionId?: string;
 } = {}) {
   const P = await loadHostPackages();
   const wsBase = join(process.cwd(), "tmp", "g610");
   mkdirSync(wsBase, { recursive: true });
-  const ws = mkdtempSync(join(wsBase, "real-"));
+  const ws = opts.workspace ?? mkdtempSync(join(wsBase, "real-"));
+  mkdirSync(ws, { recursive: true });
   if (opts.gitRepo) {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
     writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n.sessions/\n");
@@ -187,7 +192,7 @@ export async function makeRealHost(opts: {
       execute: async () => ({}),
     });
   }
-  const parent = await loop.create("sess-super", { provider: "fake", model: "fake-model" }, { cwd: ws });
+  const parent = await loop.create(opts.sessionId ?? "sess-super", { provider: "fake", model: "fake-model" }, { cwd: ws });
   writeFileSync(join(root, "project.yaml"), opts.projectYaml ?? `supervisor:\n  session: ${parent.id}\n`, "utf8");
 
   let webState: any = null;
