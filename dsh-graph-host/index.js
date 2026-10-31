@@ -3051,13 +3051,21 @@ export function createCareRuntime(options = {}) {
           }
         }
         // g-612 返工：新一轮从**起点生效预算**开始记录只读历史；续跑轮保留既有起点/变化。
+        // g-612 att010：只有**起点可证**（真实 agent_status / attempt_record）才允许建立初始预算。
+        // 旧快照/仅采样看到 running 但无法证实何时开始 ⇒ 起点与预算历史都保持 unknown：
+        // 绝不把采样 now / 当前 goal 值回填成既往 run 的初始，也不让稍后第一条消息/预算编辑
+        // 冒充初始（recordBudgetChange 对空历史不追加）。
         if (newRun) {
-          const effAtStart = runBudgetOf(t, timing);
-          t = {
-            ...t,
-            budgetHistory: [{ at: t.runStartedAt ?? at, seconds: effAtStart.seconds, source: effAtStart.source }],
-            budgetHistoryTruncated: false,
-          };
+          if (t.runStartedAt != null) {
+            const effAtStart = runBudgetOf(t, timing);
+            t = {
+              ...t,
+              budgetHistory: [{ at: t.runStartedAt, seconds: effAtStart.seconds, source: effAtStart.source }],
+              budgetHistoryTruncated: false,
+            };
+          } else {
+            t = { ...t, budgetHistory: [], budgetHistoryTruncated: false };
+          }
         }
         if (pendingMsg && pendingMsg.attempt === s.attempt && pendingMsg.bindingVersion === s.bindingVersion) {
           t = applySupervisorMessageToTask(entry, t, { at: pendingMsg.at, messageId: pendingMsg.messageId, timing });
@@ -3141,12 +3149,18 @@ export function createCareRuntime(options = {}) {
         const eff = runBudgetOf(t, timing);
         t = { ...t, budgetEffectiveSeconds: eff.seconds, budgetEffectiveSource: eff.source };
         // g-612 返工：新一轮的只读预算历史从**起点生效预算**开始（不是停止时/当前 goal 值）。
-        if (!Array.isArray(t.budgetHistory) || t.budgetHistory.length === 0) {
-          t = {
-            ...t,
-            budgetHistory: [{ at: t.runStartedAt ?? at, seconds: eff.seconds, source: eff.source }],
-            budgetHistoryTruncated: false,
-          };
+        // g-612 att010：起点不可证（旧快照/仅采样 running）⇒ 保持空历史（initial/source unknown），
+        // 不用采样 now + 当前预算补造既往 run 的初始预算。
+        if (t.runStartedAt != null) {
+          if (!Array.isArray(t.budgetHistory) || t.budgetHistory.length === 0) {
+            t = {
+              ...t,
+              budgetHistory: [{ at: t.runStartedAt, seconds: eff.seconds, source: eff.source }],
+              budgetHistoryTruncated: false,
+            };
+          }
+        } else {
+          t = { ...t, budgetHistory: [], budgetHistoryTruncated: false };
         }
         if (entry.group.paused === true) {
           // 新任务在暂停期间被采样：冻结「从预算基准起已消耗后的剩余」（g506 语义）；
