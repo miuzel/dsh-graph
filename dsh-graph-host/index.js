@@ -1935,6 +1935,14 @@ export function createCareRuntime(options = {}) {
     pendingRunStarts: new Map(),
     /** g-612：已停止 run 的有界历史（项目内）。 */
     runs: [],
+    /**
+     * g-612：同一 child+attempt+bindingVersion **短暂停止（natural idle）后的计数**。
+     * 键 `${child}\0${attempt}`；不是「任务仍在运行」的证据，也绝不参与调度/倒计时；
+     * 只在该身份以同一 bindingVersion 重新 running 时恢复
+     * `humanLocked/humanReason/stagnantRounds/remindersSent/awaitingReply`。
+     * 人工锁条目只在真实绑定换代（bindingVersion 变化）或合法人类操作后消失，不被容量回收。
+     */
+    dormant: new Map(),
     timer: null,
     timerDueAt: null,
     retryNotBefore: null,
@@ -1965,6 +1973,8 @@ export function createCareRuntime(options = {}) {
       supervisor: entry.supervisorId ?? null,
       group,
       tasks,
+      /** g-612：idle 后保留的逐任务计数（同 bindingVersion 复跑时恢复；有界）。 */
+      dormant: [...(opts.dormant ?? entry.dormant?.values?.() ?? [])].filter(Boolean),
       inspections: [...pending, ...resolved],
       runs: Array.isArray(entry.runs) ? entry.runs.slice(-CARE_RUN_HISTORY_LIMIT) : [],
       transportFailures: entry.transportFailures ?? 0,
@@ -2105,15 +2115,45 @@ export function createCareRuntime(options = {}) {
       lastControlRequestId: typeof g.lastControlRequestId === "string" ? g.lastControlRequestId : null,
     };
     entry.tasks = new Map();
-    for (const raw of Array.isArray(state.tasks) ? state.tasks : []) {
-      const t = normalizePersistedTask(raw);
-      if (t) entry.tasks.set(`${t.child}\u0000${t.attempt}`, t);
-    }
     entry.runs = [];
     for (const raw of Array.isArray(state.runs) ? state.runs : []) {
       const run = normalizePersistedRun(raw);
       if (run) entry.runs.push(run);
     }
+    for (const raw of Array.isArray(state.tasks) ? state.tasks : []) {
+      let t = normalizePersistedTask(raw);
+      if (!t) continue;
+      // g-612：快照里的「开放 run」属于**上一个宿主**；本宿主没观察过它的停止。
+      // 一律以「停止时点未知」（stoppedAt=null / stopSource=unknown）留档，绝不拿重启 now() 补造，
+      // 也不保留 runStartedAt 让下一轮 reconcile 以同一 run id 二次 close（B 的重复/拉长成因）。
+      if (t.runStartedAt != null || t.runStartSource) {
+        const run = {
+          id: runIdOf(t, t.runStartedAt),
+          goal: t.goal, attempt: t.attempt, child: t.child,
+          startedAt: t.runStartedAt ?? null,
+          startSource: t.runStartSource ?? "unknown",
+          startExact: t.runStartExact === true,
+          stoppedAt: null,
+          stopSource: "unknown",
+          stopExact: false,
+          budgetSeconds: t.budgetEffectiveSeconds ?? t.budgetSeconds ?? null,
+          budgetSource: t.budgetEffectiveSource ?? null,
+          naturalMs: null, deviationMs: null, overBudget: null,
+        };
+        if (!entry.runs.some((r) => r.id === run.id)) entry.runs.push(run);
+        t = { ...t, runStartedAt: null, runStartSource: null, runStartExact: false };
+      }
+      entry.tasks.set(`${t.child}\u0000${t.attempt}`, t);
+    }
+    entry.dormant = new Map();
+    for (const raw of Array.isArray(state.dormant) ? state.dormant : []) {
+      const d = normalizePersistedTask(raw);
+      if (!d) continue;
+      entry.dormant.set(`${d.child}\u0000${d.attempt}`, {
+        ...d, runStartedAt: null, runStartSource: null, runStartExact: false,
+      });
+    }
+    trimDormant(entry);
     // g-612：从独立的 care.run 停止事件恢复历史（即使最后快照/后续无 care 事件也不丢）。
     const seenRunIds = new Set(entry.runs.map((r) => r.id));
     for (const ev of events) {
@@ -2439,8 +2479,79 @@ export function createCareRuntime(options = {}) {
     return careStateSnapshot(entry, { tasks });
   };
   const pushRun = (entry, run) => {
-    entry.runs.push(run);
+    // g-612：run id 由 child/attempt/起点稳定派生 ⇒ 同一轮只能存在一条；
+    // 后续观察（如未知停止）只更新同一条，绝不重复追加（B 的「重启后同 id 两条」）。
+    const at = entry.runs.findIndex((r) => r.id === run.id);
+    if (at >= 0) entry.runs[at] = run;
+    else entry.runs.push(run);
     if (entry.runs.length > CARE_RUN_HISTORY_LIMIT) entry.runs.splice(0, entry.runs.length - CARE_RUN_HISTORY_LIMIT);
+  };
+  const DORMANT_LIMIT = 64;
+  /**
+   * g-612：dormant 容量回收**不得**吞掉用户明确的人工锁/未答计数。
+   * 只回收未锁的陈旧条目；已锁条目只随真实绑定换代（reconcile 的 bindingVersion 分支）
+   * 或合法人类/attempt 操作消失 —— 宁可少量内存也不静默解锁后自动重启巡检。
+   */
+  const trimDormant = (entry) => {
+    if (!(entry.dormant instanceof Map) || entry.dormant.size <= DORMANT_LIMIT) return;
+    for (const [key, d] of [...entry.dormant]) {
+      if (entry.dormant.size <= DORMANT_LIMIT) break;
+      if (d?.humanLocked === true) continue;
+      entry.dormant.delete(key);
+    }
+  };
+  const dormantOf = (task) => ({
+    child: task.child,
+    attempt: task.attempt,
+    goal: task.goal,
+    bindingVersion: Number(task.bindingVersion) || 0,
+    startedAt: Number(task.startedAt) || 0,
+    lastProgressAt: task.lastProgressAt ?? null,
+    lastProgressFingerprint: task.lastProgressFingerprint ?? null,
+    stagnantRounds: Math.max(0, Math.floor(Number(task.stagnantRounds) || 0)),
+    humanLocked: task.humanLocked === true,
+    humanReason: task.humanReason ?? null,
+    lastCareAt: task.lastCareAt ?? null,
+    frozenRemainingMs: null,
+    scheduleDueAt: null,
+    remindersSent: Math.max(0, Math.floor(Number(task.remindersSent) || 0)),
+    awaitingReply: task.awaitingReply === true,
+    budgetSeconds: task.budgetSeconds ?? null,
+    budgetBaseAt: null,
+    budgetCountdown: false,
+    budgetEffectiveSeconds: task.budgetEffectiveSeconds ?? null,
+    budgetEffectiveSource: task.budgetEffectiveSource ?? null,
+    runStartedAt: null,
+    runStartSource: null,
+    runStartExact: false,
+  });
+  const rememberDormant = (entry, task) => {
+    if (!task) return;
+    entry.dormant.set(taskKey(task), dormantOf(task));
+    trimDormant(entry);
+  };
+  const reviveFromDormant = (entry, key, bindingVersion) => {
+    const d = entry.dormant.get(key);
+    if (!d) return null;
+    if ((Number(d.bindingVersion) || 0) !== (Number(bindingVersion) || 0)) {
+      // 真实绑定已换代 ⇒ 旧任务的锁/计数不得继承给新任务。
+      entry.dormant.delete(key);
+      return null;
+    }
+    entry.dormant.delete(key);
+    return d;
+  };
+  /** 公开 registry 对「该 child 现在是否仍在运行」的唯一证据；未知绝不当作已停止。 */
+  const childRunEvidence = (childId) => {
+    const agents = getService("agents");
+    if (!agents || typeof agents.get !== "function") return "unknown";
+    let child = null;
+    try { child = agents.get(String(childId)); } catch { return "unknown"; }
+    if (!child) return "gone"; // 本宿主 registry 已不存在该 child（停止时刻仍未知）
+    const st = statusOf(child);
+    if (st === "running") return "running";
+    if (st === "idle") return "idle";
+    return "unknown";
   };
   const runBudgetOf = (task, timing) => careEffectiveBudgetSeconds(task, timing);
   const runIdOf = (task, startedAt) => `care-run:${task.child}:${task.attempt}:${startedAt ?? "unknown"}`;
@@ -2452,12 +2563,18 @@ export function createCareRuntime(options = {}) {
     // 不新增高频事件类型（避免打爆既有「无事件」断言与事件日志）。
   };
 
+  /**
+   * 关闭一轮运行并留档（事件先行；纯 metadata，不含消息正文）。
+   * - `opts.stoppedAt` 省略 ⇒ now()；显式 `null` ⇒ **停止时点未知**（不伪造，natural/over 均为 null）。
+   * - `opts.tasks` ⇒ 事件快照使用的任务表（对账路径用最新采样，避免把陈旧开放任务写进快照）。
+   * - `opts.dormant` ⇒ 同时把该任务的锁/计数记入有界 dormant 表（同 bindingVersion 复跑时恢复）。
+   */
   const closeTaskRun = (entry, task, opts) => {
     if (!task || (task.runStartedAt == null && !task.runStartSource)) return task;
     const startedAt = task.runStartedAt ?? null;
-    const stoppedAt = opts.stoppedAt ?? now();
+    const stoppedAt = Object.prototype.hasOwnProperty.call(opts, "stoppedAt") ? opts.stoppedAt : now();
     const budget = runBudgetOf(task, opts.timing);
-    const naturalMs = startedAt == null ? null : Math.max(0, stoppedAt - startedAt);
+    const naturalMs = startedAt == null || stoppedAt == null ? null : Math.max(0, stoppedAt - startedAt);
     const deviationMs = naturalMs == null ? null : naturalMs - budget.seconds * 1000;
     const run = {
       id: runIdOf(task, startedAt),
@@ -2478,12 +2595,79 @@ export function createCareRuntime(options = {}) {
     };
     pushRun(entry, run);
     const cleared = { ...task, runStartedAt: null, runStartSource: null, runStartExact: false };
-    // g-612：run 停止必须在正常重启前持久保存（纯 metadata，不含消息正文）。
-    // 这是新增的合法 care 事件；既有 care.* 结论/计数由测试按事件类型显式区分，不删断言。
+    if (opts.dormant) rememberDormant(entry, cleared);
+    // g-612：run 停止必须在正常重启前持久保存；未知时点如实标注 unknown（不补造 now）。
+    const snapshot = Array.isArray(opts.tasks)
+      ? careStateSnapshot(entry, { tasks: opts.tasks })
+      : snapshotWithTask(entry, cleared);
     try {
-      appendCareEvent(entry, "care.run", { phase: "stopped", run }, snapshotWithTask(entry, cleared));
+      appendCareEvent(entry, "care.run", { phase: stoppedAt == null ? "ended_unknown" : "stopped", run }, snapshot);
     } catch { /* 事件失败仍保留内存历史，不阻断调度 */ }
     return cleared;
+  };
+  /**
+   * 观察不可及的一轮运行：主管更替/ownership 变化/状态未知时**不能**声称 child 已停止。
+   * 只把开放 run 留档为「仍在追踪但暂不可确认」（stoppedAt=null、stopSource=null），
+   * 移出任务表（不参与调度/倒计时），并继续用公开 registry 观察；真停止但拿不到精确事件时
+   * 才以 stopSource=unknown / stoppedAt=null 收尾（不伪造时刻、不算精确 elapsed）。
+   */
+  const unobservedTaskRun = (entry, task, opts) => {
+    const at = opts.at ?? now();
+    const budget = runBudgetOf(task, opts.timing);
+    const run = {
+      id: runIdOf(task, task.runStartedAt),
+      goal: task.goal,
+      attempt: task.attempt,
+      child: task.child,
+      startedAt: task.runStartedAt ?? null,
+      startSource: task.runStartSource ?? "unknown",
+      startExact: task.runStartExact === true,
+      stoppedAt: null,
+      stopSource: null,
+      stopExact: false,
+      budgetSeconds: budget.seconds,
+      budgetSource: budget.source,
+      naturalMs: null,
+      deviationMs: null,
+      overBudget: null,
+    };
+    pushRun(entry, run);
+    const cleared = { ...task, runStartedAt: null, runStartSource: null, runStartExact: false };
+    rememberDormant(entry, cleared);
+    const snapshot = Array.isArray(opts.tasks)
+      ? careStateSnapshot(entry, { tasks: opts.tasks })
+      : careStateSnapshot(entry, { tasks: [...entry.tasks.values()].filter((t) => taskKey(t) !== taskKey(task)) });
+    try {
+      appendCareEvent(entry, "care.run", { phase: "unobserved", reason: opts.reason ?? "unobserved", run }, snapshot);
+    } catch { /* 事件失败仍保留内存历史，不阻断调度 */ }
+    return run;
+  };
+  /**
+   * 对「开放 run」（stoppedAt/stopSource 均为 null）按公开 registry 继续观察：
+   * - 仍 running ⇒ 保持开放（绝不因为主管更替/重启就宣称停止）；
+   * - 本宿主明确 idle 或 registry 已无该 child ⇒ 可证「已不在运行」，但停止时点未知 ⇒
+   *   stopSource=unknown / stoppedAt=null（不拿观察时刻冒充精确停止）；
+   * - 状态未知（statusOf 无法判定）⇒ 保持开放，下一轮再试。
+   * 同一 run id 只收尾一次（幂等）。
+   */
+  const observeOpenRuns = (entry, at) => {
+    let changed = false;
+    const activeRunIds = new Set(
+      [...entry.tasks.values()].filter((t) => t.runStartedAt != null).map((t) => runIdOf(t, t.runStartedAt)),
+    );
+    for (const run of [...entry.runs]) {
+      if (run.stoppedAt !== null || run.stopSource !== null) continue;
+      if (activeRunIds.has(run.id)) continue;
+      const evidence = childRunEvidence(run.child);
+      if (evidence === "running" || evidence === "unknown") continue;
+      const closed = { ...run, stoppedAt: null, stopSource: "unknown", stopExact: false, naturalMs: null, deviationMs: null, overBudget: null };
+      pushRun(entry, closed);
+      try {
+        appendCareEvent(entry, "care.run", { phase: "ended_unknown", run: closed, observed_at: at });
+      } catch { /* 事件失败仍保留内存历史 */ }
+      changed = true;
+    }
+    return changed;
   };
   const applySupervisorMessageToTask = (entry, task, opts) => {
     const budget = runBudgetOf(task, opts.timing);
@@ -2645,17 +2829,23 @@ export function createCareRuntime(options = {}) {
           runStartExact = false;
         }
         if (pendingRun) entry.pendingRunStarts.delete(s.child);
+        // g-612：同一 child+attempt+bindingVersion 在短暂 idle 后复跑 ⇒ 恢复既有锁/计数；
+        // 绑定换代（bindingVersion 变化）⇒ 旧计数不继承（新任务语义）。
+        const revived = reviveFromDormant(entry, key, s.bindingVersion);
         let t = {
           child: s.child,
           attempt: s.attempt,
           goal: s.goal,
           bindingVersion: s.bindingVersion,
           startedAt: s.startedAt,
-          lastProgressAt: null,
-          lastProgressFingerprint: null,
-          stagnantRounds: 0,
-          humanLocked: false,
-          lastCareAt: null,
+          lastProgressAt: revived?.lastProgressAt ?? null,
+          lastProgressFingerprint: revived?.lastProgressFingerprint ?? null,
+          stagnantRounds: revived?.stagnantRounds ?? 0,
+          humanLocked: revived?.humanLocked === true,
+          humanReason: revived?.humanReason ?? null,
+          remindersSent: revived?.remindersSent ?? 0,
+          awaitingReply: revived?.awaitingReply === true,
+          lastCareAt: revived?.lastCareAt ?? null,
           frozenRemainingMs: null,
           scheduleDueAt: null,
           budgetSeconds: goalBudget,
@@ -2696,12 +2886,32 @@ export function createCareRuntime(options = {}) {
         appendRunStarted(entry, t, timing);
       }
     }
-    // 未再采样的任务（停止/换绑/消失）：关闭活动 run；停止时刻只能是采样上界，标 sample/非精确。
+    // 未再采样的任务（停止/换绑/消失/主管更替）：
+    // - 有公开运行证据（仍在 running / 状态不可判）⇒ **绝不**声称已停止：开放 run 记「暂不可确认」，
+    //   任务移出调度表但保留计数，待真实停止可见时再以未知时点收尾（B：主管更替 ≠ child 停止）；
+    // - 本宿主可见结束（idle / registry 已无该 child）但没有精确事件 ⇒ 未知停止（不补造 now）；
+    // - 计数一律进入 dormant（同 child+attempt+bindingVersion 复跑时恢复；A）。
+    const sampledTasks = [...next.values()];
     for (const [key, old] of entry.tasks) {
       if (next.has(key)) continue;
-      closeTaskRun(entry, old, { stoppedAt: at, stopSource: "sample", stopExact: false, timing });
+      if (old.runStartedAt == null && !old.runStartSource) {
+        rememberDormant(entry, old);
+        continue;
+      }
+      const evidence = childRunEvidence(old.child);
+      if (evidence === "running" || evidence === "unknown") {
+        unobservedTaskRun(entry, old, {
+          at, timing, tasks: sampledTasks,
+          reason: evidence === "running" ? "ownership_or_binding_changed" : "status_unknown",
+        });
+      } else {
+        closeTaskRun(entry, old, {
+          stoppedAt: null, stopSource: "unknown", stopExact: false, timing, tasks: sampledTasks, dormant: true,
+        });
+      }
     }
     entry.tasks = next;
+    observeOpenRuns(entry, at);
     return next;
   };
 
@@ -3715,8 +3925,10 @@ export function createCareRuntime(options = {}) {
         } else if (status === "idle") {
           childEntry.pendingRunStarts.delete(childId);
           if (task) {
+            // g-612：自然 idle = 本轮运行结束（精确时点来自公开 status），但任务计数必须留给
+            // 同一 child+attempt+bindingVersion 的冷唤醒（A）；任务仍在快照 tasks 中，下一轮对账再移出调度。
             const closed = closeTaskRun(childEntry, task, {
-              stoppedAt: at, stopSource: "agent_status", stopExact: true, timing,
+              stoppedAt: at, stopSource: "agent_status", stopExact: true, timing, dormant: true,
             });
             childEntry.tasks.set(key, closed);
           }
@@ -3772,7 +3984,7 @@ export function createCareRuntime(options = {}) {
         childEntry.pendingMessageBases.delete(childId);
         if (task) {
           const closed = closeTaskRun(childEntry, task, {
-            stoppedAt: now(), stopSource: "disposed", stopExact: true, timing: timingForEntry(childEntry),
+            stoppedAt: now(), stopSource: "disposed", stopExact: true, timing: timingForEntry(childEntry), dormant: true,
           });
           childEntry.tasks.set(key, closed);
           scheduleEntry(childEntry);

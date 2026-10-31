@@ -233,6 +233,18 @@ function careEvents(events: any[]) {
   return events.filter((e) => String(e?.event ?? "").startsWith("care."));
 }
 
+/**
+ * g-612 返工 C：保留 g-506 原有「care.* 事件恰为两次巡检」的安全结论。
+ * g-612 只允许**显式** care.run（纯 metadata 的 run 观察/结束记录）；
+ * 除此之外任何 care.* 事件（escalated/delivery_failed/outcome/…）都不得出现，序列必须精确等价原两次 inspection。
+ */
+function assertCareEventProtection(careEventList: any[]) {
+  const nonRun = careEventList.filter((e) => e.event !== "care.run");
+  assert.equal(nonRun.length, 2, "除显式 care.run 外，care.* 事件仍必须恰为两条（原约束）");
+  assert.deepEqual(nonRun.map((e) => e.event), ["care.inspection", "care.inspection"],
+    "非 care.run 事件序列必须精确等价原来的两次巡检");
+}
+
 // ───────────────────────────── 夹具：createCareRuntime（假时钟） ─────────────────────────────
 function makeRuntime(host: any, opts: {
   clock: ReturnType<typeof fakeClock>;
@@ -644,12 +656,18 @@ test("g506 bootstrap 主管更替：新 claim 后只唤醒新主管，旧 pendin
     await scheduler.advanceTo(clock.now() + 1);
     assert.equal(sent2.length, 1, "新主管收到属于新绑定的巡检");
     assert.equal(sent1.length, 1, "旧主管不得再收到");
-    // 原断言「恰好两次关照巡检」仍是业务结论；g-612 新增纯 metadata 的 care.run 停止事件，
-    // 不能把巡检与 run 历史混成一个计数（否则无法区分「多发了巡检」与「只多了 run 停止记录」）。
+    // 原断言「恰好两次关照巡检」仍是业务结论；g-612 只给**显式 care.run** 开例外，
+    // 其余任何 care.* 事件仍必须精确等价原两次 inspection（C：不得因新功能放宽安全断言）。
     const allCare = careEvents(events);
-    assert.equal(allCare.filter((e) => e.event === "care.inspection").length, 2, "恰好两次关照巡检（原结论保留）");
-    assert.ok(allCare.filter((e) => e.event === "care.run" && e.details?.phase === "stopped").length >= 1,
-      "g-612：旧任务停止必须留下 care.run 停止 metadata");
+    assertCareEventProtection(allCare);
+    const runEvents = allCare.filter((e) => e.event === "care.run");
+    assert.ok(runEvents.length >= 1, "g-612：旧任务离开采样必须留下 care.run 观察 metadata");
+    assert.ok(runEvents.every((e) => e.details?.run?.stoppedAt == null),
+      "主管更替/不再可确认时不得伪造停止时刻（stoppedAt 必须留空）");
+    // C 负向对照：在**同一真实事件序列**上注入一条额外异常 care.escalated ⇒ 同一保护断言必须判红。
+    const mutated = [...allCare, { event: "care.escalated", details: { reason: "injected-extra" } }];
+    assert.throws(() => assertCareEventProtection(mutated), /care\.\*|care\.escalated|两条/,
+      "额外异常 care.* 事件必须被保护断言判红（不是 sentinel/提前退出）");
   } finally {
     runtime.dispose();
     host.adapter.releaseAll();
@@ -947,5 +965,159 @@ test("g506 生产路径负向：绕过 claim 工具直写 project.yaml 且无事
     host.adapter.releaseAll();
     for (const fn of h.cleanups) { try { fn(); } catch { /* ignore */ } }
     try { await sup.whenIdle?.(); } catch { /* ignore */ }
+  }
+});
+
+// ═════════════════════════════ 12. g-612 A/B：锁与计数跨 idle→冷唤醒/重启保持；主管更替不伪造停止 ═════════════════════════════
+/**
+ * g-612 返工 A：同一 child+attempt+bindingVersion 的 3 次新鲜 no-progress 人工锁与无进展计数，
+ * 必须跨「自然 idle（真实 child turn 结束，非手工改图）→ 正常 dispose/recreate → 同 child 冷唤醒」保持；
+ * 复跑后越过阈值也不得自动出现第 4 次巡检。真实绑定换代（bindingVersion 变化）按新任务语义重置。
+ */
+test("g-612 A 人工锁跨自然 idle→正常重启→同 child 冷唤醒保持；不自动第 4 次巡检；新绑定不继承", async () => {
+  const host = await makeRealHost();
+  const { ws, root } = boardWithCare(120, 30);
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const first = makeRuntime(host, { clock, scheduler, defaultWorkspace: () => null, discoveryMaxAttempts: 0 });
+  let supId = "";
+  let childId = "";
+  try {
+    first.runtime.start();
+    const sup = (await host.reg.create({ sessionId: "sup-g612a", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: ws } })).agent;
+    supId = sup.id;
+    const sent = trackSends(sup);
+    const child = await makeRunningChild(host, sup, ws, "A612");
+    childId = child.id;
+    writeRealGoal(root, { child: child.id, parent: sup.id, startedAt: new Date(clock.now() - 130_000).toISOString() });
+    claimSupervisor(root, sup.id, "agent:sup-g612a");
+    first.runtime.armForRoot(root);
+
+    const submitNoProgress = (inspection: string) => first.runtime.submitOutcome({
+      root, supervisor: sup.id, inspection, goal: "g-001", attempt: "att-001", child: child.id,
+      outcome: "no-progress", evidence: `g612 A same failing test (${inspection})`,
+    });
+    for (let round = 1; round <= 3; round += 1) {
+      await scheduler.advanceTo(clock.now() + (round === 1 ? 1 : 31_000));
+      assert.equal(first.events.filter((e: any) => e.event === "care.inspection").length, round, `第 ${round} 轮由 timer 投递`);
+      const inspId = first.events.filter((e: any) => e.event === "care.inspection").at(-1)?.details?.inspection;
+      const res = submitNoProgress(String(inspId));
+      assert.equal(res.ok, true);
+      assert.equal(res.counted, true);
+      if (round < 3) await waitFor(() => sup.status === "idle", `supervisor idle after round ${round}`, 3000);
+    }
+    assert.equal(first.runtime.statusFor(root).phase, "awaiting_human");
+    assert.equal(first.runtime.statusFor(root).tasks[0].human_locked, true);
+
+    // 自然 idle：真实 child turn 结束（绝不手改状态/图文件）
+    host.adapter.releaseAll();
+    await waitFor(() => child.status !== "running", "child natural idle", 5000);
+    await scheduler.advanceTo(clock.now() + 61_000);
+    const idle = first.runtime.statusFor(root);
+    assert.equal((idle.tasks ?? []).some((t: any) => t.child === child.id), false, "idle 后任务不参与调度/无倒计时");
+    assert.equal(first.events.filter((e: any) => e.event === "care.inspection").length, 3, "idle 本身不新增巡检");
+    const idleSnap = first.events.filter((e: any) => e.event === "care.run").at(-1)?.details?.care_state;
+    assert.equal((idleSnap?.dormant ?? []).find((d: any) => d.child === child.id)?.humanLocked, true,
+      "idle 的 run metadata 快照必须保留人工锁（历史不改写、崩溃/重启可恢复）");
+  } finally {
+    first.runtime.dispose();
+  }
+
+  // 正常 dispose + recreate（同一 workspace/root，事件真源恢复）
+  const clock2 = fakeClock(clock.now() + 1_000);
+  const scheduler2 = fakeScheduler(clock2);
+  const second = makeRuntime(host, { clock: clock2, scheduler: scheduler2, defaultWorkspace: () => null, discoveryMaxAttempts: 0, idPrefix: "g612a-r" });
+  try {
+    second.runtime.start();
+    const sup = host.reg.get(supId);
+    const sent2 = trackSends(sup);
+    second.runtime.armForRoot(root);
+    assert.equal((second.runtime.statusFor(root).tasks ?? []).some((t: any) => t.child === childId), false,
+      "重启后 idle 任务仍不参与调度");
+
+    // 同一 child 的真实冷唤醒（新 turn；同一 attempt/bindingVersion）
+    host.adapter.hold("A612-RESUME");
+    host.reg.get(childId).send(host.llm.createUserMessage({ content: [{ type: "text", text: "A612-RESUME" }], source: { kind: "user" } }), "next-turn", true);
+    await waitFor(() => host.reg.get(childId)?.status === "running", "child cold resumed", 5000);
+    const resumed = second.runtime.statusFor(root);
+    const t = (resumed.tasks ?? []).find((x: any) => x.child === childId);
+    assert.ok(t, "冷唤醒后任务必须重新进入采样");
+    assert.equal(t.human_locked, true, "自然 idle→冷唤醒不得静默清人工锁");
+    assert.equal(t.stagnant_rounds, 3, "冷唤醒不得清无进展计数");
+    assert.equal(resumed.phase, "awaiting_human");
+    // 越过阈值（真实 timer 驱动，若有第 4 次会自动出现）
+    await scheduler2.advanceTo(clock2.now() + 600_000);
+    assert.equal(second.events.filter((e: any) => e.event === "care.inspection").length, 0, "复跑后不得自动第 4 次巡检");
+    assert.equal(sent2.length, 0, "主管不得收到第 4 次唤醒");
+
+    // 真实绑定换代（attempt binding_version 1→2）⇒ 新任务语义：不继承旧锁/计数，可重新关照
+    writeRealGoal(root, { child: childId, parent: supId, startedAt: new Date(clock2.now() - 130_000).toISOString(), bindingVersion: 2 });
+    const rebound = second.runtime.statusFor(root);
+    const nb = (rebound.tasks ?? []).find((x: any) => x.child === childId);
+    assert.ok(nb, "新绑定仍被采样");
+    assert.equal(nb.human_locked, false, "新绑定不得继承错误任务的锁");
+    assert.equal(nb.stagnant_rounds, 0, "新绑定不得继承旧计数");
+    await scheduler2.advanceTo(clock2.now() + 200_000);
+    assert.ok(second.events.filter((e: any) => e.event === "care.inspection").length >= 1, "新绑定按既有契约可重新关照");
+  } finally {
+    second.runtime.dispose();
+    host.adapter.releaseAll();
+  }
+});
+
+/**
+ * g-612 返工 A 变体：3 次未回复（no-response limit）进入的同一把人工锁，同样必须跨
+ * 自然 idle→冷唤醒保持，且不得把「未回复」伪算成 no-progress 或自动第 4 次提醒。
+ */
+test("g-612 A' 三次未回复人工锁跨自然 idle→冷唤醒保持；不自动第 4 次提醒", async () => {
+  const host = await makeRealHost();
+  const { ws, root } = boardWithCare(120, 30);
+  const clock = fakeClock();
+  const scheduler = fakeScheduler(clock);
+  const { runtime, events } = makeRuntime(host, { clock, scheduler, defaultWorkspace: () => null, discoveryMaxAttempts: 0 });
+  try {
+    runtime.start();
+    const sup = (await host.reg.create({ sessionId: "sup-g612nr", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: ws } })).agent;
+    const sent = trackSends(sup);
+    const child = await makeRunningChild(host, sup, ws, "NR612");
+    writeRealGoal(root, { child: child.id, parent: sup.id, startedAt: new Date(clock.now() - 130_000).toISOString() });
+    claimSupervisor(root, sup.id, "agent:sup-g612nr");
+    runtime.armForRoot(root);
+    // 完全不回复：每超过一次 300s 冷却/新鲜度推进一个周期，最多 3 次实际提醒
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      await runtime.sweep();
+      await waitFor(() => sup.status === "idle", `turn ${cycle}`, 3000);
+      clock.advance(301_000);
+    }
+    let st = runtime.statusFor(root);
+    assert.equal(st.phase, "awaiting_human");
+    assert.equal(st.reason, "no_response_limit");
+    assert.equal(st.tasks[0].human_locked, true);
+    assert.equal(st.tasks[0].human_reason, "no_response_limit");
+    assert.equal(st.tasks[0].reminders_sent, 3, "三次未回复");
+    assert.equal(st.tasks[0].stagnant_rounds, 0, "未回复绝不算 no-progress");
+    assert.equal(events.filter((e: any) => e.event === "care.inspection").length, 3);
+
+    // 自然 idle → 对账移出调度 → 同一 child 冷唤醒
+    host.adapter.releaseAll();
+    await waitFor(() => child.status !== "running", "child natural idle", 5000);
+    await scheduler.advanceTo(clock.now() + 61_000);
+    assert.equal((runtime.statusFor(root).tasks ?? []).length, 0, "idle 后不参与调度");
+    host.adapter.hold("NR612-RESUME");
+    child.send(host.llm.createUserMessage({ content: [{ type: "text", text: "NR612-RESUME" }], source: { kind: "user" } }), "next-turn", true);
+    await waitFor(() => child.status === "running", "child cold resumed", 5000);
+    st = runtime.statusFor(root);
+    const t = (st.tasks ?? []).find((x: any) => x.child === child.id);
+    assert.ok(t);
+    assert.equal(t.human_locked, true, "未回复人工锁不得被冷唤醒清掉");
+    assert.equal(t.human_reason, "no_response_limit");
+    assert.equal(t.reminders_sent, 3, "三次未回复计数保持");
+    assert.equal(t.stagnant_rounds, 0);
+    await scheduler.advanceTo(clock.now() + 900_000);
+    assert.equal(events.filter((e: any) => e.event === "care.inspection").length, 3, "不得自动第 4 次提醒");
+    assert.equal(sent.length, 3);
+  } finally {
+    runtime.dispose();
+    host.adapter.releaseAll();
   }
 });
