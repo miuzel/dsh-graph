@@ -114,7 +114,9 @@ test("D2：旧 open inspection 的晚 unknown 不覆盖新消息预算目标/实
     assert.ok(Number(tMsg.budget_base_at) >= messageAt - 2_000, "新消息必须建立新 budgetBaseAt");
     assert.equal(tMsg.budget_countdown, true, "新消息后应处于预算倒计时");
     assert.ok(Math.abs(Number(tMsg.budget_due_at) - expectedMsgBudget) <= 2_000, `预算目标应为 base+30s（expected=${expectedMsgBudget} actual=${tMsg.budget_due_at}）`);
-    assert.ok(Math.abs(Number(tMsg.cooldown_due_at) - lastCareRecheck) <= 2_000, `冷却截止应为 lastCare+300（actual=${tMsg.cooldown_due_at}）`);
+    // 公开 cooldown 字段只报可证值（这里只有 lastCare+300 回退值）⇒ null；内部冷却仍生效，
+    // 由下方实际 deadline = max(预算, lastCare+300) 与投递断言钉住。
+    assert.equal(tMsg.cooldown_due_at, null, "只有回退值 ⇒ 公开冷却截止不可证 ⇒ null");
     assert.ok(Math.abs(msgDueAt - expectedActual) <= 2_000, `实际 deadline 应为 max(预算,冷却)（expected=${expectedActual} actual=${msgDueAt}）`);
     assert.notEqual(Math.abs(msgDueAt - expectedMsgBudget) <= 2_000, true, "不得把更早预算目标伪装成实际 deadline");
     assert.equal(tMsg.human_locked, false);

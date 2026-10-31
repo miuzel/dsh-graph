@@ -95,8 +95,9 @@ test("D1 用户裁定：首次关照后 unknown → goal 预算 30→120 预算�
     assert.equal(tEdit.budget_countdown, true, "按 owner 规则应重新进入预算倒计时（预算目标已立即重算）");
     assert.ok(Math.abs(Number(tEdit.budget_due_at) - expectedBudget) <= 2_000,
       `预算目标必须立即重算为 base+120s（expected≈${expectedBudget}，实得 ${tEdit.budget_due_at}）`);
-    assert.ok(Math.abs(Number(tEdit.cooldown_due_at) - recheckDue) <= 2_000,
-      `冷却截止必须仍为 lastCare+300（expected≈${recheckDue}，实得 ${tEdit.cooldown_due_at}）`);
+    // 公开 cooldown 字段只报可证值：这里只有 lastCare+300 回退值（合法旧快照可能带暂停偏移）
+    // ⇒ null；内部冷却仍是 lastCare+300，由下方 expectedActual 与 dueAt 断言钉住。
+    assert.equal(tEdit.cooldown_due_at, null, "只有回退值 ⇒ 公开冷却截止不可证 ⇒ null");
     assert.ok(Math.abs(dueAt - expectedActual) <= 2_000,
       `实际可执行截止必须=max(预算,冷却)（expected≈${expectedActual}，实得 dueAt=${dueAt}，dueInMs=${tEdit.dueInMs}）`);
     assert.notEqual(Math.abs(dueAt - expectedBudget) <= 2_000, true,

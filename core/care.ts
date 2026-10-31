@@ -894,21 +894,39 @@ export function careTaskBudgetDueAtReportable(task: CareTaskState, timing: {
 /**
  * **公开投影**口径的未有效结论冷却截止（`care/status.tasks[].cooldown_due_at`）。
  *
- * 与预算字段同理：只报**可证**的时刻，绝不显示会提前/虚假触发的绝对时间。
- * ① 暂停中：冷却剩余被冻结，绝对时刻要 resume 才能确定 ⇒ `null`（真值在冻结剩余里）。
- * ② 已过期（`<= now`）：它已经不再是「下一次冷却截止」；旧快照缺 `frozenCooldownRemainingMs`
- *    时相对时间规则会补一个等于恢复时刻/更早的回退值，显示出来就是谎值 ⇒ `null`。
- * 其余（未来绝对时刻）照旧返回；调度侧 `careCooldownDueAt` 完全不受影响。
+ * 与预算字段同一条原则：只报**可证**的时刻，证不了就 `null`（未知），绝不显示可能错误/过期的
+ * 绝对时间。内部 `careCooldownDueAt`（含 `lastCareAt + 300s` 回退）与 `careTaskDueAt`/`next_due`/
+ * timer 完全不受影响——本函数只决定公开字段。
+ *
+ * `null` 的情形：
+ * ① 暂停中：冷却剩余被冻结，绝对时刻要 resume 才能确定（真值在冻结剩余里）。
+ * ② 不处于冷却：没有冷却截止可言。
+ * ③ **没有可靠的调整后截止**（`cooldownDueAt` 缺失）：此时唯一可用的是 `lastCareAt + 300s`
+ *    回退值——它不含历史暂停偏移（合法旧快照/长停 resume 后可能早已过期或偏移），**即便仍在未来
+ *    也不能当作已证明的冷却截止**。
+ * ④ 值等于回退值（`lastCareAt + 300s`）：可能是 resume 在缺冻结冷却分量时写下的保守补值，
+ *    与真值不可区分 ⇒ 只做「 withhold 」，不据此断言。
+ * ⑤ 已过期（`<= now`）：它已不是「下一次冷却截止」。
+ * 其余（有可靠调整后截止、且在未来）照旧返回。
  */
 export function careCooldownDueAtReportable(task: CareTaskState, reportable: {
   paused?: boolean;
   now?: number;
 } = {}): number | null {
-  if (reportable.paused === true) return null;
-  const due = careCooldownDueAt(task);
-  if (due === null) return null;
-  if (typeof reportable.now === "number" && Number.isFinite(reportable.now) && due <= reportable.now) return null;
-  return due;
+  if (reportable.paused === true) return null; // ①
+  if (!careCooldownActive(task)) return null; // ②
+  const persisted = typeof task.cooldownDueAt === "number" && Number.isFinite(task.cooldownDueAt)
+    ? task.cooldownDueAt
+    : null;
+  if (persisted === null) return null; // ③ 只剩不含暂停偏移的回退值 ⇒ 不可证
+  if (typeof task.lastCareAt === "number" && Number.isFinite(task.lastCareAt)
+    && persisted === task.lastCareAt + CARE_NO_RESPONSE_COOLDOWN_MS) {
+    return null; // ④ 与回退补值不可区分 ⇒ 保守未知（只减不增，不据此断言）
+  }
+  if (typeof reportable.now === "number" && Number.isFinite(reportable.now) && persisted <= reportable.now) {
+    return null; // ⑤ 已过期
+  }
+  return persisted;
 }
 
 /**
@@ -1749,9 +1767,9 @@ export interface CareStatusProjection {
      */
     budget_due_at: number | null;
     /**
-     * 未有效结论冷却截止；`null` = **没有可证的未来冷却截止**：当前不处于冷却（不额外强加
-     * 300s）、暂停中（剩余被冻结，绝对时刻要 resume 才能确定）、该绝对时刻已过期、或来自旧快照的
-     * 回退补值（不可证）。绝不显示会提前/虚假触发的谎值；真实可执行截止始终看 `next_due_at`。
+     * 未有效结论冷却截止；`null` = **没有可证的冷却截止**：不处于冷却、暂停中（剩余被冻结）、
+     * 只有不含暂停偏移的 `lastCareAt+300s` 回退值（旧快照/长停 resume 后不可证）、值等于该回退
+     * 补值、或该时刻已过期。绝不显示会提前/虚假触发的谎值；真实可执行截止始终看 `next_due_at`。
      */
     cooldown_due_at: number | null;
     /** 本轮运行（自然墙钟；与关照倒计时分开）。 */

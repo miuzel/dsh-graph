@@ -188,7 +188,9 @@ test("g-612 冷却四象限②：t30 unknown 后 budget 30→120（base=t0）⇒
     assert.equal(tAfter.reminders_sent, 1);
     assert.equal(tAfter.human_locked, false);
     const lastCare = Number(tAfter.last_care_at);
-    assert.ok(Math.abs(Number(tAfter.cooldown_due_at) - (lastCare + 300_000)) <= 1_000);
+    // 公开 cooldown 字段只报**可证**值：本状态只有 lastCare+300 回退值（合法旧快照可能带
+    // 未持久化的暂停偏移）⇒ 不可证 ⇒ null；内部冷却仍生效，由下方 actual=t330 与投递边界钉住。
+    assert.equal(tAfter.cooldown_due_at, null, "只有回退值 ⇒ 公开冷却截止不可证 ⇒ null");
 
     // 预算 30→120：预算目标立即重算，但实际截止 = max(t120, t330)=t330。
     setGoalBudget(s.h.root, s.goal, { budget_seconds: 120, actor: "human:gui" });
@@ -201,8 +203,10 @@ test("g-612 冷却四象限②：t30 unknown 后 budget 30→120（base=t0）⇒
     const cooldownDue = Number(tEdit.cooldown_due_at);
     const actual = Number(tEdit.dueAt);
     assert.ok(Math.abs(budgetDue - (t0 + 120_000)) <= 2_000, `预算目标=base+120（实得 ${budgetDue}）`);
-    assert.ok(Math.abs(cooldownDue - (lastCare + 300_000)) <= 1_000);
-    assert.ok(Math.abs(actual - Math.max(budgetDue, cooldownDue)) <= 1_000, "实际截止=max(预算,冷却)");
+    // 公开 cooldown 字段只报可证值（此处只有 lastCare+300 回退值）⇒ null；
+    // 内部冷却仍是 lastCare+300，实际截止断言直接用 t330 的口径钉住。
+    assert.equal(tEdit.cooldown_due_at, null, "只有回退值 ⇒ 公开冷却截止不可证 ⇒ null");
+    assert.ok(Math.abs(actual - Math.max(budgetDue, lastCare + 300_000)) <= 1_000, "实际截止=max(预算,内部冷却)");
     assert.ok(Math.abs(actual - (lastCare + 300_000)) <= 1_000, "实际截止必须是 t330");
     assert.equal(Number(s.status().next_due_at), actual, "status.next_due_at 必须显示实际截止");
     assert.notEqual(Math.abs(actual - budgetDue) <= 1_000, true, "不得把预算目标 t120 伪装成实际截止");
@@ -260,8 +264,9 @@ test("g-612 冷却四象限③：t30 unknown 后 t40 主管真实 sendMessage + 
     const cooldownDue = Number(tMsg.cooldown_due_at);
     const actual = Number(tMsg.dueAt);
     assert.ok(Math.abs(budgetDue - (msgAt + 120_000)) <= 2_000, `预算目标=messageAt+120（实得 ${budgetDue}）`);
-    assert.ok(Math.abs(cooldownDue - (lastCare + 300_000)) <= 1_000);
-    assert.ok(Math.abs(actual - Math.max(budgetDue, cooldownDue)) <= 1_000);
+    assert.equal(tMsg.cooldown_due_at, null, "回退值不可证 ⇒ 公开冷却截止 null（内部冷却仍 300s）");
+    assert.ok(Math.abs(actual - Math.max(budgetDue, lastCare + 300_000)) <= 1_000,
+      "实际截止仍 = max(预算目标, 内部冷却 lastCare+300)");
     assert.ok(actual > budgetDue + 1_000, "实际截止必须晚于预算目标（冷却优先）");
     assert.equal(Number(s.status().next_due_at), actual);
     await s.advanceTo(budgetDue + 1_000);
@@ -292,7 +297,8 @@ test("g-612 冷却四象限④：t30 unknown 后 budget 600 晚于冷却 ⇒ 实
     // 预算时长仍可见，真实 next_due/投递必须完全不受显示修复影响（本测试后半段钉住）。
     assert.equal(t.budget_due_at, null, "晚于冷却的预算目标不可严格证明为纯预算 ⇒ null");
     assert.equal(Number(t.effective_budget_seconds), 600, "预算时长仍必须可见（600s）");
-    assert.ok(cooldownDue < actual, "实际截止必须晚于冷却");
+    assert.equal(t.cooldown_due_at, null, "回退值不可证 ⇒ 公开冷却截止 null");
+    assert.ok(cooldownDue < actual && lastCare + 300_000 < actual, "实际截止必须晚于内部冷却");
     assert.ok(Math.abs(actual - (t0 + 600_000)) <= 1_000, "实际截止必须取更晚预算，不被 300 截短");
     assert.equal(Number(s.status().next_due_at), actual, "next_due_at 仍显示真实可执行截止");
     const before = s.inspections().length;
