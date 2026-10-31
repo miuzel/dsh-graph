@@ -528,9 +528,17 @@ export type CareRunStartSource = "attempt_record" | "agent_status" | "sample" | 
 /** 一轮运行的**停止**证据来源。 */
 export type CareRunStopSource = "agent_status" | "disposed" | "sample" | "unknown";
 
+/** g-612：一次**生效预算变化**（只读历史；不是可编辑的第二个预算真源）。 */
+export interface CareBudgetChange {
+  /** 变化生效时刻（ms epoch）。 */
+  at: number;
+  seconds: number;
+  source: CareBudgetSource;
+}
+
 /** g-612：同一 attempt 的一轮实际运行（自然墙钟，与关照倒计时无关）。 */
 export interface CareRunRecord {
-  /** 服务端生成的本轮 id（child/attempt/start 稳定派生）。 */
+  /** 服务端生成的本轮 id（start 可证时由 child/attempt/start 稳定派生；start 未知时唯一派生）。 */
   id: string;
   goal: string;
   attempt: string;
@@ -543,15 +551,26 @@ export interface CareRunRecord {
   stoppedAt: number | null;
   stopSource: CareRunStopSource | null;
   stopExact: boolean;
-  /** 本轮开始/停止时实际采用的预算与来源（历史快照，不随当前 goal 值回填）。 */
+  /**
+   * 本轮**起始**生效预算与来源（历史快照，不随当前 goal 值回填）。
+   * 运行中预算变化见 `budgetChanges`；停止时的 goal 值绝不冒充整轮预算。
+   */
   budgetSeconds: number | null;
   budgetSource: CareBudgetSource | null;
-  /** 已停止时的自然经过时间（ms）；未知时 null。 */
+  /** 本轮开始后**生效预算变化时间线**（不含起点；按发生顺序；有界）。 */
+  budgetChanges?: CareBudgetChange[];
+  /** 已停止时的自然经过时间（ms）；任一未知时 null。跨未观测空窗时仍为墙钟差，见 `naturalExact`。 */
   naturalMs: number | null;
-  /** 自然经过时间 − 预算（ms）；任一未知时 null。 */
+  /** 自然经过时间 − **起始**预算（ms）；任一未知时 null（语义见 `deviationBasis`）。 */
   deviationMs: number | null;
-  /** 是否超过预算；未知时 null。 */
+  /** 是否超过**起始**预算；未知时 null。 */
   overBudget: boolean | null;
+  /** 正常 runtime 重建等导致的**未观测空窗**（`true` = 该轮 elapsed 非全程连续可证）。 */
+  observationInterrupted?: boolean;
+  /** 可证的未观测区间（care 时钟；端点不可证时为空数组，绝不补造）。 */
+  observationGaps?: Array<{ from: number; to: number }>;
+  /** `naturalMs` 是否由连续观测 + 精确起止支撑；未知/跨空窗/非精确起止 ⇒ `false`/`null`。 */
+  naturalExact?: boolean | null;
 }
 
 /** 项目内历史保留的已停止运行上限（有界；完整事件仍在项目 events.jsonl）。 */
@@ -603,6 +622,18 @@ export interface CareTaskState {
   runStartedAt?: number | null;
   runStartSource?: CareRunStartSource | null;
   runStartExact?: boolean;
+  /** g-612：本任务最近一次被真实采样/观察为运行中的时刻（care 时钟；用于如实标注观察空窗）。 */
+  lastObservedAt?: number | null;
+  /** g-612：本轮生效预算变化时间线（起点不在此；只在值/来源真正变化时追加；有界）。 */
+  budgetHistory?: CareBudgetChange[];
+  /**
+   * g-612：**调整后**的未有效结论冷却绝对截止（ms epoch；只读调度状态）。
+   * 暂停/长停后冷却剩余必须在 resume 后继续有效，不能被 `lastCareAt+300s` 的旧绝对时刻吃掉；
+   * `null`/缺省 ⇒ 回退到既有 `lastCareAt + CARE_NO_RESPONSE_COOLDOWN_MS` 口径。
+   */
+  cooldownDueAt?: number | null;
+  /** g-612：暂停时冻结的**冷却分量剩余**（ms；与 `frozenRemainingMs` 的预算分量分开保存）。 */
+  frozenCooldownRemainingMs?: number | null;
 }
 
 /**
@@ -779,11 +810,15 @@ export function careCooldownActive(task: Pick<CareTaskState, "remindersSent" | "
 }
 
 /**
- * 未有效结论冷却截止（ms epoch）；不处于冷却或没有可证 `lastCareAt` ⇒ `null`
+ * 未有效结论冷却截止（ms epoch）；不处于冷却或没有可证起点 ⇒ `null`
  *（绝不拿 now 伪造冷却起点）。`CARE_NO_RESPONSE_COOLDOWN_MS` 是唯一 300s 语义源。
+ *
+ * g-612 返工：暂停/长停后的**调整后**冷却截止优先（`cooldownDueAt`，只读调度状态），
+ * 否则回退既有 `lastCareAt + 300s`。预算编辑/主管新消息不得用旧绝对时刻把这个剩余吃掉。
  */
-export function careCooldownDueAt(task: Pick<CareTaskState, "remindersSent" | "awaitingReply" | "lastCareAt">): number | null {
+export function careCooldownDueAt(task: Pick<CareTaskState, "remindersSent" | "awaitingReply" | "lastCareAt" | "cooldownDueAt">): number | null {
   if (!careCooldownActive(task)) return null;
+  if (typeof task.cooldownDueAt === "number" && Number.isFinite(task.cooldownDueAt)) return task.cooldownDueAt;
   if (task.lastCareAt === null || !Number.isFinite(task.lastCareAt)) return null;
   return task.lastCareAt + CARE_NO_RESPONSE_COOLDOWN_MS;
 }
@@ -1028,6 +1063,9 @@ export function applyCareDelivery(group: CareGroupState, tasks: CareTaskState[],
         // 每次实际投递都计入「连续无有效结论」预算；收到 progress/no-progress 有效结论后归零。
         remindersSent: (t.remindersSent ?? 0) + 1,
         awaitingReply: true,
+        // 本次投递建立新的冷却起点（只读调度状态；后续暂停/重建保留剩余）。
+        cooldownDueAt: now + CARE_NO_RESPONSE_COOLDOWN_MS,
+        frozenCooldownRemainingMs: null,
       };
     }),
   };
@@ -1118,6 +1156,9 @@ export function applyCareOutcome(
         awaitingReply: false,
         scheduleDueAt: null,
         budgetCountdown: false,
+        // 有效结论 ⇒ 冷却结束；不得把旧调整后截止留给下一轮（下一轮投递会重建）。
+        cooldownDueAt: null,
+        frozenCooldownRemainingMs: null,
         // humanLocked / humanReason 原样保留：progress 绝不解除已有人工锁
       };
     }
@@ -1133,6 +1174,8 @@ export function applyCareOutcome(
       awaitingReply: false,
       scheduleDueAt: null,
       budgetCountdown: false,
+      cooldownDueAt: null,
+      frozenCooldownRemainingMs: null,
     };
   });
   const anyLocked = nextTasks.some((t) => t.humanLocked === true || (t.stagnantRounds ?? 0) >= maxRounds);
@@ -1196,13 +1239,24 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
 }): { group: CareGroupState; tasks: CareTaskState[] } {
   if (group.paused === true) return { group: { ...group }, tasks: tasks.map((t) => ({ ...t })) };
   const nextTasks = tasks.map((t) => {
-    if (t.humanLocked === true) return { ...t, frozenRemainingMs: null }; // 人工锁任务本无倒计时
+    if (t.humanLocked === true) {
+      return { ...t, frozenRemainingMs: null, frozenCooldownRemainingMs: null }; // 人工锁任务本无倒计时
+    }
     const due = careTaskDueAt(t, {
       thresholdSeconds: inputs.thresholdSeconds,
       recheckSeconds: inputs.recheckSeconds,
       resetAt: group.resetAt,
     });
-    return { ...t, frozenRemainingMs: Math.max(0, due - inputs.now), scheduleDueAt: null };
+    // 冷却分量单独冻结：resume 后即使 goal 预算/主管消息重算预算目标，冻结剩余冷却也不能被
+    // 暂停墙钟悄悄吃掉（reviewer 实测：长暂停后 lastCareAt+300s 绝对时刻早已过去）。
+    const cooldownDue = careCooldownDueAt(t);
+    const cooldownRemaining = cooldownDue === null ? null : Math.max(0, cooldownDue - inputs.now);
+    return {
+      ...t,
+      frozenRemainingMs: Math.max(0, due - inputs.now),
+      frozenCooldownRemainingMs: cooldownRemaining,
+      scheduleDueAt: null,
+    };
   });
   // 没有任何可执行（未锁）任务 ⇒ 如实无倒计时，绝不回退 threshold 伪造数字。
   const remaining = carePausedRemainingMs(nextTasks);
@@ -1238,17 +1292,33 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
   }
   const nextTasks = tasks.map((t) => {
     const frozen = t.frozenRemainingMs;
-    if (frozen === null || t.humanLocked === true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
+    if (frozen === null || t.humanLocked === true) {
+      return { ...t, frozenRemainingMs: null, frozenCooldownRemainingMs: null, scheduleDueAt: null };
+    }
     // g-612：预算变更后需要「已消耗关照时间（不含暂停段）」；resume 时把基准推进到
     // now - 已消耗量，使暂停期间的真实墙钟绝不进入关照倒计时。
     const nominal = careTaskIntervalMs(t, inputs);
     const consumed = Math.max(0, nominal - Math.max(0, frozen));
+    // g-612 返工：暂停冻结的**冷却分量**在 resume 后按新 now 恢复为调整后绝对截止；
+    // 即使随后 goal 预算编辑/主管新消息重算预算目标，也无法把这段冻结剩余提前丢弃。
+    const frozenCooldown = typeof t.frozenCooldownRemainingMs === "number" && Number.isFinite(t.frozenCooldownRemainingMs)
+      ? Math.max(0, t.frozenCooldownRemainingMs)
+      : null;
+    const active = careCooldownActive(t);
+    const adjustedCooldownDue = active
+      ? (frozenCooldown !== null
+        ? inputs.now + frozenCooldown
+        // 旧快照没有冷却分量：至少不得因暂停把可证剩余退回到已过去的绝对时刻。
+        : Math.max(careCooldownDueAt(t) ?? inputs.now, inputs.now))
+      : null;
     // B16：只写独立调度锚点，真实 startedAt/lastCareAt 永不反推。
     return {
       ...t,
       frozenRemainingMs: null,
+      frozenCooldownRemainingMs: null,
       scheduleDueAt: inputs.now + Math.max(0, frozen),
       budgetBaseAt: inputs.now - consumed,
+      cooldownDueAt: adjustedCooldownDue,
     };
   });
   return {
@@ -1282,12 +1352,18 @@ export function resetCare(group: CareGroupState, tasks: CareTaskState[], inputs:
 }): { group: CareGroupState; tasks: CareTaskState[] } {
   const nextTasks = tasks.map((t) => {
     if (group.paused !== true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
-    if (t.humanLocked === true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
+    if (t.humanLocked === true) return { ...t, frozenRemainingMs: null, frozenCooldownRemainingMs: null, scheduleDueAt: null };
     // 暂停中重置按「生效区间」计满：未有效结论冷却存在时不得低于 300s（预算更晚则取预算）。
     const nominal = careCooldownActive(t)
       ? Math.max(careTaskIntervalMs(t, inputs), CARE_NO_RESPONSE_COOLDOWN_MS)
       : careTaskIntervalMs(t, inputs);
-    return { ...t, frozenRemainingMs: nominal, scheduleDueAt: null };
+    return {
+      ...t,
+      frozenRemainingMs: nominal,
+      // 重置也刷新冷却分量：resume 后调整后截止不得沿用重置前的旧冻结剩余。
+      frozenCooldownRemainingMs: careCooldownActive(t) ? CARE_NO_RESPONSE_COOLDOWN_MS : null,
+      scheduleDueAt: null,
+    };
   });
   const remaining = group.paused === true ? carePausedRemainingMs(nextTasks) : group.pausedRemainingMs;
   return {
@@ -1625,10 +1701,20 @@ export interface CareStatusProjection {
     stop_source: CareRunStopSource | null;
     stop_exact: boolean;
     budget_seconds: number | null;
-    budget_source: CareBudgetSource | null;
+    budget_source: CareBudgetSource | "unknown";
+    /** 起始预算之后的变化时间线（只读；起点见 started_at/budget_seconds）。 */
+    budget_changes: CareBudgetChange[];
     natural_ms: number | null;
     deviation_ms: number | null;
+    /** 偏差口径（当前仅 `initial`：相对起始预算）；null = 偏差不可算。 */
+    deviation_basis: "initial" | null;
     over_budget: boolean | null;
+    /** 正常 runtime 重建造成的未观测空窗（elapsed 非全程连续可证）。 */
+    observation_interrupted: boolean;
+    /** 可证空窗区间（端点不可证时为空，不补造）。 */
+    observation_gaps: Array<{ from: number; to: number }>;
+    /** elapsed 是否由连续观测 + 精确起止支撑；未知 ⇒ null。 */
+    natural_exact: boolean | null;
   }>;
   /** 已停止运行的历史保留上限。 */
   run_history_limit: number;
@@ -1733,11 +1819,20 @@ export function careStatusProjection(args: {
       stopped_at: r.stoppedAt,
       stop_source: r.stopSource,
       stop_exact: r.stopExact,
+      // 起始预算/来源（历史快照）；变化时间线见 budget_changes；停止时 goal 值不回填。
       budget_seconds: r.budgetSeconds,
-      budget_source: r.budgetSource,
+      budget_source: r.budgetSource ?? "unknown",
+      budget_changes: (Array.isArray(r.budgetChanges) ? r.budgetChanges : []).map((c) => ({
+        at: c.at, seconds: c.seconds, source: c.source,
+      })),
       natural_ms: r.naturalMs,
+      // 偏差语义显式：相对**起始**预算；预算变化时间线单独给出，绝不冒充整轮单值。
       deviation_ms: r.deviationMs,
+      deviation_basis: r.deviationMs === null ? null : "initial",
       over_budget: r.overBudget,
+      observation_interrupted: r.observationInterrupted === true,
+      observation_gaps: (Array.isArray(r.observationGaps) ? r.observationGaps : []).map((g) => ({ from: g.from, to: g.to })),
+      natural_exact: r.naturalExact === null || r.naturalExact === undefined ? null : r.naturalExact === true,
     })),
     run_history_limit: CARE_RUN_HISTORY_LIMIT,
     escalate_tasks: args.decision.escalateTasks,
