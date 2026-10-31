@@ -1355,6 +1355,41 @@ export function pauseCare(group: CareGroupState, tasks: CareTaskState[], inputs:
 }
 
 /**
+ * 旧版（g506/05f）**合法暂停快照**里未有效结论冷却的冻结剩余（ms）。
+ *
+ * 旧版 `pauseCare` 没有 `frozenCooldownRemainingMs` 字段，但它真实写下了 `group.pausedAt` 与
+ * 任务的 `lastCareAt`（两者都是**事实**，不能被 resume 反推）。据此可严格重建暂停那一刻的剩余：
+ * `max(0, lastCareAt + 300s - pausedAt)`。绝不把旧 `frozenRemainingMs`（可能由更长复查间隔主导，
+ * 独立 review 实测 3590s）当作冷却，也绝不用 `now` 吃掉暂停期间流逝的墙钟。
+ *
+ * 边界（不可证 ⇒ `null`，调用方按**保守完整 300s** 处理，绝不提前）：
+ * - `pausedAt`/`lastCareAt` 缺失或非有限数（正常旧版 pause 必写两者；仅缺字段/损坏快照会缺）；
+ * - 时序不合理：`pausedAt < lastCareAt` 或 `pausedAt > now`。
+ *
+ * 暂停中发生过 reset（`resetAt >= lastCareAt`）时，按既有「暂停中 reset 刷新满 300s」语义把该
+ * 候选纳入并 clip 到 300s —— 只会更长（绝不提前），也不会无限延长。
+ */
+export function legacyPausedCooldownRemainingMs(
+  task: Pick<CareTaskState, "lastCareAt">,
+  pausedAt: number | null,
+  inputs: { now?: number; resetAt?: number | null } = {},
+): number | null {
+  if (typeof pausedAt !== "number" || !Number.isFinite(pausedAt)) return null;
+  const now = inputs.now;
+  if (typeof now === "number" && Number.isFinite(now) && pausedAt > now) return null;
+  const lastCareAt = task.lastCareAt;
+  if (typeof lastCareAt !== "number" || !Number.isFinite(lastCareAt)) return null;
+  if (pausedAt < lastCareAt) return null;
+  const remainingFrom = (from: number): number => Math.max(0, from + CARE_NO_RESPONSE_COOLDOWN_MS - pausedAt);
+  let remaining = remainingFrom(lastCareAt);
+  const resetAt = inputs.resetAt;
+  if (typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt >= lastCareAt) {
+    remaining = Math.max(remaining, Math.min(CARE_NO_RESPONSE_COOLDOWN_MS, remainingFrom(resetAt)));
+  }
+  return Math.min(CARE_NO_RESPONSE_COOLDOWN_MS, remaining);
+}
+
+/**
  * **继续**：从**各自冻结的剩余时间**计时（不是重新计满）。
  *
  * 实现：写独立每任务 `scheduleDueAt = now + frozenRemaining` 绝对锚点，**不修改**
@@ -1385,11 +1420,13 @@ export function resumeCare(group: CareGroupState, tasks: CareTaskState[], inputs
       ? Math.max(0, t.frozenCooldownRemainingMs)
       : null;
     const active = careCooldownActive(t);
+    // g-612 att007：旧快照没有冻结冷却分量时，用**可证** `pausedAt`/`lastCareAt` 重建暂停前剩余；
+    // 不可证 ⇒ 保守按完整 300s（绝不提前、也不把复查主导的 frozenRemaining 当冷却）。
     const adjustedCooldownDue = active
-      ? (frozenCooldown !== null
-        ? inputs.now + frozenCooldown
-        // 旧快照没有冷却分量：至少不得因暂停把可证剩余退回到已过去的绝对时刻。
-        : Math.max(careCooldownDueAt(t) ?? inputs.now, inputs.now))
+      ? inputs.now + (frozenCooldown !== null
+        ? frozenCooldown
+        : (legacyPausedCooldownRemainingMs(t, group.pausedAt, { now: inputs.now, resetAt: group.resetAt })
+          ?? CARE_NO_RESPONSE_COOLDOWN_MS))
       : null;
     // B16：只写独立调度锚点，真实 startedAt/lastCareAt 永不反推。
     return {

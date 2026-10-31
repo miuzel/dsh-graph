@@ -10,6 +10,13 @@
  * 不得一律 null）与 C8（暂停中正常重建 runtime 仍如实 null）。C1/C2/C3 与 reviewer 原断言一致。
  *
  * 真实 0.2.1-rc.2 宿主栈 + 生产 createCareRuntime + fake adapter + 假时钟；不联网/真实 provider。
+ *
+ * att-007（负责人裁定「修好再评审」）：真实已交付 05f 旧 runtime 证明「旧暂停快照缺
+ * `frozenCooldownRemainingMs` ⇒ resume 写成 now ⇒ 预算编辑后提前投递」。修复后旧快照用
+ * **可证** `group.pausedAt` + `task.lastCareAt` 重建冻结冷却剩余（`max(0,lastCare+300s-pausedAt)`）：
+ * · C10/C12 的公开 `cooldown_due_at` 从「回退值不可证=null」改为「已重建=数字」（投递边界不变）；
+ * · C11 被真实旧 runtime 证伪的错误期望 `next_due<=base+60` 改为 `max(base+60, resume+有效冷却290s)`，
+ *   并补齐 deadline−1s 零投递 / +1s 恰一次；不削弱任何 g506 已验收安全断言。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -545,9 +552,12 @@ test("REVIEW-C10（legacy upgrade）：旧版暂停快照（缺冻结冷却分�
     assert.equal(r.budget_due_at, null, "旧版 resume 的 max 锚点不可分离 ⇒ 纯预算 null");
     assert.equal(Number(r.effective_budget_seconds), 30, "预算时长仍可见");
     assert.equal(Number(st.next_due_at), resumeAt + frozen, "next_due 仍是冻结剩余接续（旧规则，未被显示修复拖动）");
-    // 旧快照缺 frozen 冷却分量 ⇒ 相对时间规则会补一个等于恢复时刻的回退值；它已不是未来的
-    // 冷却截止（历史歧义，no claim）⇒ 公开投影如实返回 null，不写假冷却截止。
-    assert.equal(r.cooldown_due_at, null, "旧快照回退补值不是可证的未来冷却截止 ⇒ null");
+    // g-612 att007：旧快照虽缺 frozen 冷却分量，但真实 `pausedAt`/`lastCareAt` 可证 ⇒ resume 由
+    // `max(0, lastCare+300s-pausedAt)` 重建冻结剩余；公开冷却截止是可证的未来时刻（不再是 null），
+    // 且正是保留该冻结剩余的关键（旧实现把它写成 now，导致预算编辑后提前投递）。
+    assert.ok(Number.isFinite(Number(r.cooldown_due_at)), "可证 pausedAt/lastCareAt ⇒ 冷却截止必须重建为数字");
+    assert.ok(Math.abs(Number(r.cooldown_due_at) - (resumeAt + frozen)) <= 1_000,
+      "冷却截止 = resume + 冻结冷却剩余（290s），不是已过去的 lastCare+300 绝对时刻");
     const before = s.inspections().length;
     await sched2.advanceTo(resumeAt + frozen - 1_000);
     assert.equal(s.inspections().length, before, "旧快照最终截止前 1s 不得投递");
@@ -559,7 +569,7 @@ test("REVIEW-C10（legacy upgrade）：旧版暂停快照（缺冻结冷却分�
   }
 });
 
-test("REVIEW-C11（legacy upgrade）：预算占大头的旧快照（frozen 3600s）resume 后改预算 60 ⇒ next_due 不被拖成 3600", async () => {
+test("REVIEW-C11（legacy upgrade）：预算占大头的旧快照（frozen 3600s）resume 后改预算 60 ⇒ next_due=max(base+60, resume+有效冷却290s)，不被拖成 3600", async () => {
   const s = await setup(30);
   let care2: any = null;
   try {
@@ -590,7 +600,8 @@ test("REVIEW-C11（legacy upgrade）：预算占大头的旧快照（frozen 3600
     const legacyS = Number(task2().dueAt);
     assert.ok(legacyS >= resumeAt + frozenSynthetic - 1_000, "resume 先按旧规则从 3600s 冻结接续");
 
-    // 显式 goal 预算编辑 60：公开实际 next_due 必须按「base+60 与冷却较晚者」，不得被冻结 3600 拖动。
+    // 显式 goal 预算编辑 60：真实用户规则 = max(新预算(base+60), resume+可证冻结冷却 290s)，
+    // 既不得提前到 base+60（旧测试的错误期望），也不得被旧 3600s 冻结拖动。
     const base = Number(task2().budget_base_at);
     const set: any = await s.tool("graph_set_goal_budget").execute({ goal: s.goal, budget_seconds: 60 }, s.exec());
     assert.equal(set.new_seconds, 60);
@@ -599,22 +610,34 @@ test("REVIEW-C11（legacy upgrade）：预算占大头的旧快照（frozen 3600
     const t: any = task2();
     const st: any = status2();
     const expectedBudget = base + 60_000;
-    console.log(`[C11] resumeAt=${resumeAt} base=${base} legacyS=${legacyS} budget_due=${t.budget_due_at} cooldown=${t.cooldown_due_at} next_due=${st.next_due_at} expectedBudget=${expectedBudget}`);
-    assert.ok(Number(st.next_due_at) <= expectedBudget + 2_000,
-      `next_due 必须回到 base+60s 口径（≤${expectedBudget + 2_000}），不得被冻结 3600s 拖成 ${legacyS}`);
+    const cooldownRemaining = Math.max(0, lastCare + 300_000 - pausedAt);
+    const expectedNext = Math.max(expectedBudget, resumeAt + cooldownRemaining);
+    console.log(`[C11] resumeAt=${resumeAt} base=${base} legacyS=${legacyS} budget_due=${t.budget_due_at} cooldown=${t.cooldown_due_at} next_due=${st.next_due_at} expectedBudget=${expectedBudget} expectedNext=${expectedNext}`);
+    assert.ok(cooldownRemaining >= 289_000 && cooldownRemaining <= 291_000, "前置：真实无有效结论冷却剩余≈290s");
+    assert.ok(Number.isFinite(Number(st.next_due_at)), "next_due 必须是数字");
+    assert.ok(Math.abs(Number(st.next_due_at) - expectedNext) <= 1_000,
+      `next_due 必须=max(base+60s, resume+有效冷却${cooldownRemaining / 1000}s)=${expectedNext}（实得 ${st.next_due_at}），不得提前也不得被冻结 3600s 拖动`);
+    assert.ok(Number(st.next_due_at) > expectedBudget + 1_000, "不得提前到 base+60s 忽略冷却");
     assert.ok(Number(st.next_due_at) < resumeAt + frozenSynthetic - 60_000, "next_due 不得仍是 3600s 冻结");
-    // 旧快照的调整后冷却本身不可证（回退补值）⇒ 即使显式编辑已把预算锚点重写为纯 base+60s，
-    // 状态仍无法排除「与旧混合来源不可区分」⇒ 公开预算目标保守 null；当前版本状态下编辑后为
-    // 数字（C1/g612-d1 覆盖）。真实 next_due 已在上面钉住不被 3600 拖动。
-    assert.equal(t.budget_due_at, null, "旧快照下编辑后仍无法严格证明 ⇒ 保守 null（不谎报）");
+    // 可分离为纯预算（锚点 base+60s 严格早于可证冷却截止）⇒ 公开预算目标应给真值。
+    assert.ok(Number.isFinite(Number(t.budget_due_at)), "预算目标 base+60s 严格早于冷却 ⇒ 可证 ⇒ 数字（不再保守 null）");
+    assert.ok(Math.abs(Number(t.budget_due_at) - expectedBudget) <= 1_000, "budget_due_at=base+60s");
+    assert.ok(Number.isFinite(Number(t.cooldown_due_at)), "冻结冷却由可证 pausedAt/lastCareAt 重建 ⇒ 数字");
+    assert.ok(Math.abs(Number(t.cooldown_due_at) - (resumeAt + cooldownRemaining)) <= 1_000, "cooldown_due_at=resume+290s");
     assert.equal(Number(s.status()?.next_due_at ?? st.next_due_at), Number(st.next_due_at));
+    // 强保护：deadline−1s 零投递、+1s 恰一次（从错误提前到准确到点的完整语义）。
+    const before = s.inspections().length;
+    await sched2.advanceTo(expectedNext - 1_000);
+    assert.equal(s.inspections().length, before, "冻结冷却到期前 1s 不得投递");
+    await sched2.advanceTo(expectedNext + 1_000);
+    assert.equal(s.inspections().length, before + 1, "冻结冷却到期后 1s 恰投递一次");
   } finally {
     try { care2?.dispose?.(); } catch {}
     await s.shutdown();
   }
 });
 
-test("REVIEW-C12（legacy upgrade，短暂停）：旧版暂停快照无 cooldownDueAt，resume 后回退值仍在未来也不得给数", async () => {
+test("REVIEW-C12（legacy upgrade，短暂停）：旧版暂停快照无 cooldownDueAt，resume 由可证 pausedAt/lastCareAt 重建（比旧回退值更晚）", async () => {
   const s = await setup(30);
   let care2: any = null;
   try {
@@ -649,8 +672,13 @@ test("REVIEW-C12（legacy upgrade，短暂停）：旧版暂停快照无 cooldow
     const fallback = lastCare + 300_000;
     console.log(`[C12] resumeAt=${resumeAt} frozen=${frozen} now=${st.server_now} fallback=${fallback} budget_due=${r.budget_due_at} cooldown_due=${r.cooldown_due_at} next_due=${st.next_due_at}`);
     assert.ok(fallback > resumeAt, "前置：旧回退值此刻仍在未来（所以「未来」不等于可证）");
-    assert.equal(r.cooldown_due_at, null, "回退值不含暂停偏移 ⇒ 公开冷却截止不可证 ⇒ null（即便在未来）");
-    assert.equal(r.budget_due_at, null, "同一快照的预算目标也不可分离 ⇒ null");
+    // g-612 att007：旧回退值 `lastCare+300s` 不含暂停偏移（暂停 60s ⇒ 比真值早 60s）；
+    // 由**可证** pausedAt/lastCareAt 重建的冻结剩余 290s 才是真值，且严格晚于该回退值。
+    assert.ok(Number.isFinite(Number(r.cooldown_due_at)), "可证 pausedAt/lastCareAt ⇒ 公开冷却截止必须给重建真值");
+    assert.ok(Math.abs(Number(r.cooldown_due_at) - (resumeAt + frozen)) <= 1_000,
+      "冷却截止 = resume + 真实冻结剩余 290s");
+    assert.ok(Number(r.cooldown_due_at) > fallback, "重建截止晚于不含暂停偏移的回退值（旧回退值会提前 60s）");
+    assert.equal(r.budget_due_at, null, "同一快照的预算目标不可分离（锚点=冷却截止）⇒ null");
     assert.equal(Number(r.effective_budget_seconds), 30, "预算时长仍可见");
     assert.equal(Number(st.next_due_at), resumeAt + frozen, "next_due 仍是冻结剩余接续（旧规则不变）");
     const before = s.inspections().length;
