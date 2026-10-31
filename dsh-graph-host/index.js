@@ -253,7 +253,16 @@ import {
   makeCareAuditEntry,
   formatCareAudit,
 } from "./core/ops.js";
-import { careCooldownDueAt, careEffectiveBudgetSeconds, careTaskBudgetDueAt, careTaskIntervalMs, CARE_RUN_HISTORY_LIMIT } from "./core/care.js";
+import {
+  careCooldownActive,
+  careCooldownDueAt,
+  careEffectiveBudgetSeconds,
+  careTaskBudgetDueAt,
+  careTaskIntervalMs,
+  legacyPausedCooldownRemainingMs,
+  CARE_NO_RESPONSE_COOLDOWN_MS,
+  CARE_RUN_HISTORY_LIMIT,
+} from "./core/care.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
 import { sT, TOOL_CATEGORIES, TOOL_TAXONOMY, helpToolTaxonomyProblems } from "./lib/server-i18n.js";
@@ -2599,7 +2608,11 @@ export function createCareRuntime(options = {}) {
     // 新一轮开始会重建预算历史；dormant 只保留锁/计数/冷却剩余。
     budgetHistory: undefined,
     cooldownDueAt: task.cooldownDueAt ?? null,
-    frozenCooldownRemainingMs: null,
+    // g-612 att008：暂停时冻结的**冷却剩余**必须随 idle→dormant 一起保留（不是只留可能已被
+    // 暂停墙钟耗尽的绝对 cooldownDueAt）；resume 再据此换回 resume 时刻的调整后 deadline。
+    frozenCooldownRemainingMs: typeof task.frozenCooldownRemainingMs === "number" && Number.isFinite(task.frozenCooldownRemainingMs)
+      ? Math.max(0, task.frozenCooldownRemainingMs)
+      : null,
   });
   const rememberDormant = (entry, task) => {
     if (!task) return;
@@ -2709,7 +2722,11 @@ export function createCareRuntime(options = {}) {
       runStartExact: false,
       budgetHistory: undefined,
       cooldownDueAt: task.cooldownDueAt ?? null,
-      frozenCooldownRemainingMs: null,
+      // g-612 att008：暂停中自然 idle ⇒ dormant 必须带走**暂停时冻结的冷却剩余**
+      //（否则 resume 后只有早已被暂停墙钟耗掉的绝对时刻，冷却被静默丢失）。
+      frozenCooldownRemainingMs: typeof task.frozenCooldownRemainingMs === "number" && Number.isFinite(task.frozenCooldownRemainingMs)
+        ? Math.max(0, task.frozenCooldownRemainingMs)
+        : null,
     };
     if (opts.dormant) rememberDormant(entry, cleared);
     // g-612：run 停止必须在正常重启前持久保存；未知时点如实标注 unknown（不补造 now）。
@@ -2827,6 +2844,13 @@ export function createCareRuntime(options = {}) {
    * 没有可证截止 ⇒ 0（绝不伪造 now 作为冷却起点）。
    */
   const cooldownRemainingAt = (task, refAt) => {
+    // g-612 att008：暂停冻结的剩余是**暂停那一刻**的真值（含 idle→dormant 带过来的分量），
+    // 优先于可能已被暂停墙钟耗尽/偏移的绝对 cooldownDueAt。
+    if (!careCooldownActive(task)) return 0;
+    const frozen = typeof task.frozenCooldownRemainingMs === "number" && Number.isFinite(task.frozenCooldownRemainingMs)
+      ? Math.max(0, task.frozenCooldownRemainingMs)
+      : null;
+    if (frozen !== null) return frozen;
     const due = careCooldownDueAt(task);
     if (due === null) return 0;
     return Math.max(0, due - refAt);
@@ -3056,6 +3080,13 @@ export function createCareRuntime(options = {}) {
           lastCareAt: revived?.lastCareAt ?? null,
           frozenRemainingMs: null,
           scheduleDueAt: null,
+          // g-612 att008：idle→dormant 带走的冷却（resume 已换回调整后绝对截止）必须被续轮继承；
+          // resume 之前的暂停冻结剩余（先消息再 resume 分支）也一并继承，由暂停/恢复逻辑消费。
+          cooldownDueAt: revived?.cooldownDueAt ?? null,
+          frozenCooldownRemainingMs: typeof revived?.frozenCooldownRemainingMs === "number"
+            && Number.isFinite(revived.frozenCooldownRemainingMs)
+            ? Math.max(0, revived.frozenCooldownRemainingMs)
+            : null,
           budgetSeconds: goalBudget,
           budgetBaseAt: null,
           budgetCountdown: true,
@@ -3765,6 +3796,37 @@ export function createCareRuntime(options = {}) {
   };
 
   /**
+   * g-612 att008：整组暂停/继续必须同时作用**已 idle 的 dormant 任务**（它们不在调度表里）。
+   * 只调整冷却剩余 metadata，绝不把 dormant 放回 `entry.tasks`（不采样、不投递、界面不出现假倒计时）。
+   * - pause：把当前可证冷却截止折成「暂停起点剩余」；
+   * - resume：把冻结剩余换回 `resume 时刻 + 剩余` 的可追溯调整后截止，供之后真实主管消息冷唤醒时
+   *   与重算后的预算取较晚者；旧 1b 快照缺冻结分量时用可证 `pausedAt/lastCareAt` 重建（同 att007）。
+   * 人工锁/无冷却条目原样保留（sticky，不重置、不清计数）。
+   */
+  const adjustDormantCooldown = (dormant, action, at, group) => {
+    const next = new Map();
+    let changed = false;
+    for (const [key, d] of dormant) {
+      if (!d || d.humanLocked === true || !careCooldownActive(d)) { next.set(key, d); continue; }
+      if (action === "pause") {
+        const due = careCooldownDueAt(d);
+        if (due === null) { next.set(key, d); continue; }
+        next.set(key, { ...d, frozenCooldownRemainingMs: Math.max(0, due - at) });
+        changed = true;
+        continue;
+      }
+      // resume
+      const frozen = typeof d.frozenCooldownRemainingMs === "number" && Number.isFinite(d.frozenCooldownRemainingMs)
+        ? Math.max(0, d.frozenCooldownRemainingMs)
+        : (legacyPausedCooldownRemainingMs(d, group?.pausedAt ?? null, { now: at, resetAt: group?.resetAt ?? null })
+          ?? CARE_NO_RESPONSE_COOLDOWN_MS);
+      next.set(key, { ...d, cooldownDueAt: at + frozen, frozenCooldownRemainingMs: null });
+      changed = true;
+    }
+    return { dormant: next, changed };
+  };
+
+  /**
    * 暂停/继续/重置（REST 控制入口；**只作用当前主管当前工作区整组**）。
    * 事件先行；幂等（重复 pause/resume 不递增 revision）；可选 expected_revision 防陈旧点击。
    */
@@ -3820,8 +3882,24 @@ export function createCareRuntime(options = {}) {
       nextGroup = { ...r.group, lastControlRequestId: requestId, lastControlAction: "reset" };
       nextTasks = r.tasks;
     }
+    // g-612 att008：暂停/继续同样作用于**已 idle 的 dormant 任务**的冷却剩余 metadata。
+    // 只改 dormant（不可调度），事件先行时把调整后的完整 dormant 快照一起提交；
+    // 事件写失败 ⇒ 不应用（内存状态保持事件已提交的旧值）。
+    let nextDormant = entry.dormant;
+    let dormantCooldownChanged = false;
+    if (action === "pause" || action === "resume") {
+      const adjustedDormant = adjustDormantCooldown(entry.dormant, action, timing.now, entry.group);
+      if (adjustedDormant.changed) {
+        nextDormant = adjustedDormant.dormant;
+        dormantCooldownChanged = true;
+      }
+    }
     // g-506 返工 B5：事件先行 + 完整状态快照（paused/剩余/reset/未答计数/人工锁/inflight）。
-    const controlState = careStateSnapshot(entry, { group: nextGroup, tasks: nextTasks });
+    const controlState = careStateSnapshot(entry, {
+      group: nextGroup,
+      tasks: nextTasks,
+      dormant: [...nextDormant.values()],
+    });
     if (action === "reset") controlState.transportFailures = 0;
     try {
       appendCareEvent(entry, "care.control", {
@@ -3837,6 +3915,7 @@ export function createCareRuntime(options = {}) {
     }
     entry.group = nextGroup;
     entry.tasks = new Map(nextTasks.map((t) => [taskKey(t), t]));
+    if (dormantCooldownChanged) entry.dormant = nextDormant;
     if (action === "reset") entry.transportFailures = 0;
     scheduleEntry(entry);
     return { ok: true, idempotent: false, status: statusFor(root) };
