@@ -12,8 +12,10 @@ import {
   applyCareDelivery,
   applyCareInspectionOutcome,
   careStatusProjection,
+  careTaskBudgetDueAt,
   careTaskDueAt,
   careTaskIntervalMs,
+  careCooldownDueAt,
   createCareInspection,
   newCareGroupState,
   pauseCare,
@@ -247,4 +249,40 @@ test("g-612 旧巡检被显式事件取代：晚到结论 stale（只审计、�
   assert.equal(idem.ok, true);
   assert.equal(idem.ok && idem.idempotent, true);
   assert.equal(idem.ok && idem.stale, true);
+});
+
+test("g-612 300s 冷却单一真源：实际截止=max(预算目标,lastCare+300)；无冷却不加 300；晚预算不截短；暂停冻结实际剩余", () => {
+  const timing = { thresholdSeconds: 300, recheckSeconds: 300, resetAt: null as number | null, thresholdSource: "project_explicit" as const };
+  const now = 5_000_000;
+  // 预算目标 t=base+120；冷却是 lastCare+300（更晚）⇒ 实际取冷却。
+  const t = task(now, {
+    startedAt: now - 200_000, lastCareAt: now - 30_000, remindersSent: 1, awaitingReply: false,
+    budgetSeconds: 120, budgetEffectiveSeconds: 120, budgetBaseAt: now - 60_000, budgetCountdown: true,
+    scheduleDueAt: null,
+  });
+  const budgetDue = careTaskBudgetDueAt(t, timing);
+  const cooldownDue = careCooldownDueAt(t);
+  assert.equal(budgetDue, now + 60_000, "预算目标=base+120");
+  assert.equal(cooldownDue, now + 270_000, "冷却截止=lastCare+300");
+  assert.equal(careTaskDueAt(t, timing), now + 270_000, "实际截止=较晚冷却（反变异：去掉 max 会得 t120）");
+  // 无冷却 ⇒ 不额外强加 300，也不看 lastCare。
+  const noCooldown = { ...t, remindersSent: 0, awaitingReply: false };
+  assert.equal(careCooldownDueAt(noCooldown), null);
+  assert.equal(careTaskDueAt(noCooldown, timing), now + 60_000, "无冷却时实际=预算目标");
+  // 预算 600 晚于冷却 ⇒ 取预算，不被 300 截短。
+  const later = { ...t, budgetSeconds: 600, budgetEffectiveSeconds: 600 };
+  assert.ok(careTaskBudgetDueAt(later, timing) > cooldownDue);
+  assert.equal(careTaskDueAt(later, timing), careTaskBudgetDueAt(later, timing), "预算更晚时不得被冷却截短");
+  // 未回复（awaitingReply=true 但 reminders=0 的合法状态）同样进入冷却判据。
+  assert.equal(careCooldownDueAt({ ...t, remindersSent: 0, awaitingReply: true }), now + 270_000);
+  // 无可证 lastCareAt ⇒ 冷却为 null（绝不伪造 now 作为冷却起点）。
+  assert.equal(careCooldownDueAt({ ...t, lastCareAt: null }), null);
+
+  // 暂停冻结「实际剩余」=270s；暂停墙钟 1 小时不消耗；resume 按剩余接续。
+  const g = newCareGroupState();
+  const paused = pauseCare(g, [t], { now, thresholdSeconds: 300, recheckSeconds: 300 });
+  assert.equal(paused.tasks[0].frozenRemainingMs, 270_000, "暂停冻结 max(预算,冷却) 实际剩余");
+  const resumed = resumeCare(paused.group, paused.tasks, { now: now + 3_600_000, thresholdSeconds: 300, recheckSeconds: 300 });
+  assert.equal(careTaskDueAt(resumed.tasks[0], { ...timing, resetAt: resumed.group.resetAt }), now + 3_600_000 + 270_000, "resume 从剩余接续（不吃暂停墙钟）");
+  assert.equal(resumed.tasks[0].frozenRemainingMs, null);
 });

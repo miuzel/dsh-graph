@@ -769,7 +769,30 @@ export function carePausedRemainingMs(tasks: Array<Pick<CareTaskState, "humanLoc
   return frozen.length > 0 ? Math.min(...frozen) : null;
 }
 
-export function careTaskDueAt(task: CareTaskState, timing: {
+/**
+ * 该任务当前是否处于「连续无有效结论（未回复/unknown）」状态 ⇒ 需要 300s 最小冷却。
+ * 唯一判据沿用 g506 既有字段：`remindersSent > 0` 或 `awaitingReply === true`
+ *（progress/no-progress 有效结论会把两者归零；humanLock 不参与此判据）。
+ */
+export function careCooldownActive(task: Pick<CareTaskState, "remindersSent" | "awaitingReply">): boolean {
+  return (task.remindersSent ?? 0) > 0 || task.awaitingReply === true;
+}
+
+/**
+ * 未有效结论冷却截止（ms epoch）；不处于冷却或没有可证 `lastCareAt` ⇒ `null`
+ *（绝不拿 now 伪造冷却起点）。`CARE_NO_RESPONSE_COOLDOWN_MS` 是唯一 300s 语义源。
+ */
+export function careCooldownDueAt(task: Pick<CareTaskState, "remindersSent" | "awaitingReply" | "lastCareAt">): number | null {
+  if (!careCooldownActive(task)) return null;
+  if (task.lastCareAt === null || !Number.isFinite(task.lastCareAt)) return null;
+  return task.lastCareAt + CARE_NO_RESPONSE_COOLDOWN_MS;
+}
+
+/**
+ * 预算目标截止（**不含**未有效结论冷却）：调度锚点 / 预算基准 + 生效区间（goal 或项目默认）。
+ * 供投影区分「预算目标」与「最终可执行截止」。
+ */
+export function careTaskBudgetDueAt(task: CareTaskState, timing: {
   thresholdSeconds: number;
   recheckSeconds: number;
   resetAt: number | null;
@@ -789,6 +812,23 @@ export function careTaskDueAt(task: CareTaskState, timing: {
     : (task.lastCareAt === null ? task.startedAt : task.lastCareAt);
   const interval = careTaskIntervalMs(task, timing);
   return resetAt !== null && resetAt > base ? resetAt + interval : base + interval;
+}
+
+/**
+ * 最终可执行截止（单一调度真源）：预算目标与未有效结论冷却取**较晚者**。
+ * 负责人裁定（2026-10-31）：预算编辑/主管新消息立即重算预算目标，但若任务仍处于
+ * 未回复/unknown 冷却，下一次提醒不得早于 `lastCareAt + 300s`；无冷却时不额外强加 300s，
+ * 预算目标更晚时也不会被截短。UI/`care/status` 与调度器共用本函数（无双真源）。
+ */
+export function careTaskDueAt(task: CareTaskState, timing: {
+  thresholdSeconds: number;
+  recheckSeconds: number;
+  resetAt: number | null;
+  thresholdSource?: CareSource;
+}): number {
+  const budgetDue = careTaskBudgetDueAt(task, timing);
+  const cooldownDue = careCooldownDueAt(task);
+  return cooldownDue === null ? budgetDue : Math.max(budgetDue, cooldownDue);
 }
 
 export function decideCare(inputs: CareInputs, capable = true): CareDecision {
@@ -1243,7 +1283,11 @@ export function resetCare(group: CareGroupState, tasks: CareTaskState[], inputs:
   const nextTasks = tasks.map((t) => {
     if (group.paused !== true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
     if (t.humanLocked === true) return { ...t, frozenRemainingMs: null, scheduleDueAt: null };
-    return { ...t, frozenRemainingMs: careTaskIntervalMs(t, inputs), scheduleDueAt: null };
+    // 暂停中重置按「生效区间」计满：未有效结论冷却存在时不得低于 300s（预算更晚则取预算）。
+    const nominal = careCooldownActive(t)
+      ? Math.max(careTaskIntervalMs(t, inputs), CARE_NO_RESPONSE_COOLDOWN_MS)
+      : careTaskIntervalMs(t, inputs);
+    return { ...t, frozenRemainingMs: nominal, scheduleDueAt: null };
   });
   const remaining = group.paused === true ? carePausedRemainingMs(nextTasks) : group.pausedRemainingMs;
   return {
@@ -1558,6 +1602,10 @@ export interface CareStatusProjection {
     budget_source: CareBudgetSource;
     budget_base_at: number | null;
     budget_countdown: boolean;
+    /** 预算目标截止（不含 300s 未有效结论冷却；用于清楚区分两个口径）。 */
+    budget_due_at: number | null;
+    /** 未有效结论冷却截止；`null` = 当前不处于冷却（不额外强加 300s）。 */
+    cooldown_due_at: number | null;
     /** 本轮运行（自然墙钟；与关照倒计时分开）。 */
     run_started_at: number | null;
     run_start_source: CareRunStartSource | null;
@@ -1625,6 +1673,12 @@ export function careStatusProjection(args: {
       thresholdSource: args.configured.threshold_source,
     });
     const runStartedAt = st?.runStartedAt ?? null;
+    const dueTiming = {
+      thresholdSeconds: args.configured.threshold_seconds,
+      recheckSeconds: args.configured.recheck_seconds,
+      resetAt: args.group.resetAt,
+      thresholdSource: args.configured.threshold_source,
+    };
     return {
       ...s,
       started_at: st?.startedAt ?? args.now,
@@ -1640,6 +1694,10 @@ export function careStatusProjection(args: {
       budget_source: budget.source,
       budget_base_at: typeof st?.budgetBaseAt === "number" && Number.isFinite(st.budgetBaseAt) ? st.budgetBaseAt : null,
       budget_countdown: st?.budgetCountdown === true,
+      budget_due_at: st ? careTaskBudgetDueAt(st, dueTiming) : null,
+      cooldown_due_at: st ? careCooldownDueAt(st) : null,
+      // `due_at`（来自 decision，唯一可执行口径）= max(budget_due_at, cooldown_due_at)
+      // —— 调度与 UI 永远消费同一个值，不存在更早的隐藏 deadline。
       run_started_at: typeof runStartedAt === "number" && Number.isFinite(runStartedAt) ? runStartedAt : null,
       run_start_source: st?.runStartSource ?? null,
       run_start_exact: st?.runStartExact === true,

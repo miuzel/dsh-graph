@@ -254,7 +254,7 @@ import {
   makeCareAuditEntry,
   formatCareAudit,
 } from "./core/ops.js";
-import { careEffectiveBudgetSeconds, careTaskIntervalMs, CARE_RUN_HISTORY_LIMIT } from "./core/care.js";
+import { careCooldownActive, careCooldownDueAt, careEffectiveBudgetSeconds, careTaskBudgetDueAt, careTaskIntervalMs, CARE_RUN_HISTORY_LIMIT } from "./core/care.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
 import { sT, TOOL_CATEGORIES, TOOL_TAXONOMY, helpToolTaxonomyProblems } from "./lib/server-i18n.js";
@@ -2696,6 +2696,15 @@ export function createCareRuntime(options = {}) {
     }
     return marked;
   };
+  /**
+   * 暂停态：未有效结论冷却的**剩余**必须按暂停起点（不是暂停期间流逝的墙钟）计算；
+   * 没有可证 `lastCareAt` / 不在冷却 ⇒ 0（绝不伪造 now 作为冷却起点）。
+   */
+  const cooldownRemainingAt = (task, refAt) => {
+    if (!careCooldownActive(task)) return 0;
+    if (task.lastCareAt === null || !Number.isFinite(task.lastCareAt)) return 0;
+    return Math.max(0, task.lastCareAt + CARE_NO_RESPONSE_COOLDOWN_MS - refAt);
+  };
   const applySupervisorMessageToTask = (entry, task, opts) => {
     const budget = runBudgetOf(task, opts.timing);
     const budgetMs = budget.seconds * 1000;
@@ -2708,6 +2717,8 @@ export function createCareRuntime(options = {}) {
       opts.at,
       String(opts.messageId ?? ""),
     );
+    const pausedRef = entry.group.pausedAt ?? opts.at;
+    const cooldownRemaining = entry.group.paused === true ? cooldownRemainingAt(task, pausedRef) : 0;
     const updated = {
       ...task,
       budgetBaseAt: opts.at,
@@ -2715,7 +2726,8 @@ export function createCareRuntime(options = {}) {
       budgetEffectiveSeconds: budget.seconds,
       budgetEffectiveSource: budget.source,
       ...(entry.group.paused === true
-        ? { frozenRemainingMs: budgetMs, scheduleDueAt: null }
+        // 暂停中消息冻结「完整新预算」与既有冷却剩余中的较晚者：不得让暂停墙钟偷走冷却。
+        ? { frozenRemainingMs: Math.max(budgetMs, cooldownRemaining), scheduleDueAt: null }
         : { frozenRemainingMs: null, scheduleDueAt: opts.at + budgetMs }),
     };
     try {
@@ -2739,7 +2751,6 @@ export function createCareRuntime(options = {}) {
     // `forceCountdown` 由真实 goal 变更路径传入；项目默认扫描不得把目标任务当「新编辑」反复重置。
     const forced = opts.forceCountdown === true;
     const oldBudget = task.budgetEffectiveSeconds ?? runBudgetOf(task, opts.timing).seconds;
-    const oldNominal = inBudgetPhase ? oldBudget * 1000 : careTaskIntervalMs(task, opts.timing);
     const budget = runBudgetOf(task, opts.timing);
     // 显式 goal 预算变更才取代同 goal 的开放巡检（项目默认/全局扫描不算新编辑）。
     const superseded = forced
@@ -2752,13 +2763,18 @@ export function createCareRuntime(options = {}) {
     };
     if (entry.group.paused === true) {
       if (forced || inBudgetPhase) {
-        const frozen = typeof task.frozenRemainingMs === "number" ? task.frozenRemainingMs : oldNominal;
-        const consumed = Math.max(0, oldNominal - Math.max(0, frozen));
+        // 暂停中编辑预算：预算目标仍按「最近派发/消息 base + 新预算」，消耗按暂停起点折算
+        //（暂停墙钟不进入倒计时）；最终冻结剩余再与未有效结论冷却剩余取较晚者。
+        const pauseAt = entry.group.pausedAt ?? opts.at;
+        const base = task.budgetBaseAt ?? task.runStartedAt ?? task.startedAt;
+        const consumed = Math.max(0, pauseAt - base);
+        const budgetRemaining = Math.max(0, budget.seconds * 1000 - consumed);
+        const cooldownRemaining = cooldownRemainingAt(task, pauseAt);
         updated = {
           ...updated,
           budgetCountdown: true,
-          budgetBaseAt: opts.at - consumed,
-          frozenRemainingMs: Math.max(0, budget.seconds * 1000 - consumed),
+          budgetBaseAt: base,
+          frozenRemainingMs: Math.max(budgetRemaining, cooldownRemaining),
           scheduleDueAt: null,
         };
       }

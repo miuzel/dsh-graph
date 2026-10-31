@@ -24,7 +24,7 @@ async function waitFor<T>(fn: () => Promise<T | null>, label: string, timeoutMs 
   throw new Error(`等待超时：${label}`);
 }
 
-test("D2 owner 规则：旧 open inspection 的晚 unknown 不得覆盖之后主管消息建立的预算 deadline/计数/锁", async () => {
+test("D2：旧 open inspection 的晚 unknown 不覆盖新消息预算目标/实际冷却截止/计数/锁；同批其他 target 正常", async () => {
   const h = await makeRealHost({
     sessionQuery: true,
     projectYaml: "supervisor:\n  session: sess-super\n  care: \"true\"\n  care_threshold_seconds: 300\n  care_recheck_seconds: 300\n",
@@ -105,12 +105,18 @@ test("D2 owner 规则：旧 open inspection 的晚 unknown 不得覆盖之后主
     const afterMsg: any = await care();
     const tMsg: any = (afterMsg.tasks ?? []).find((x: any) => x.child === childId);
     assert.ok(tMsg);
-    const expectedMsgDue = Number(tMsg.budget_base_at) + 30_000;
+    const lastCareRecheck = lastCare + 300_000;
+    // 用户裁定：消息立即重算预算目标，但仍在未有效结论冷却 ⇒ 实际截止取较晚者。
+    const expectedMsgBudget = Number(tMsg.budget_base_at) + 30_000;
+    const expectedActual = Math.max(expectedMsgBudget, lastCareRecheck);
     const msgDueAt = Number(afterMsg.server_now) + Number(tMsg.dueInMs);
-    console.log(`[D2] messageAt=${messageAt} base=${tMsg.budget_base_at} countdown=${tMsg.budget_countdown} effective=${tMsg.effective_budget_seconds} dueInMs=${tMsg.dueInMs} dueAt=${msgDueAt}`);
+    console.log(`[D2] messageAt=${messageAt} base=${tMsg.budget_base_at} countdown=${tMsg.budget_countdown} effective=${tMsg.effective_budget_seconds} budget_due=${tMsg.budget_due_at} cooldown=${tMsg.cooldown_due_at} dueInMs=${tMsg.dueInMs} dueAt=${msgDueAt}`);
     assert.ok(Number(tMsg.budget_base_at) >= messageAt - 2_000, "新消息必须建立新 budgetBaseAt");
     assert.equal(tMsg.budget_countdown, true, "新消息后应处于预算倒计时");
-    assert.ok(Math.abs(msgDueAt - expectedMsgDue) <= 2_000, `新消息 deadline 应为 base+30s（expected=${expectedMsgDue} actual=${msgDueAt}）`);
+    assert.ok(Math.abs(Number(tMsg.budget_due_at) - expectedMsgBudget) <= 2_000, `预算目标应为 base+30s（expected=${expectedMsgBudget} actual=${tMsg.budget_due_at}）`);
+    assert.ok(Math.abs(Number(tMsg.cooldown_due_at) - lastCareRecheck) <= 2_000, `冷却截止应为 lastCare+300（actual=${tMsg.cooldown_due_at}）`);
+    assert.ok(Math.abs(msgDueAt - expectedActual) <= 2_000, `实际 deadline 应为 max(预算,冷却)（expected=${expectedActual} actual=${msgDueAt}）`);
+    assert.notEqual(Math.abs(msgDueAt - expectedMsgBudget) <= 2_000, true, "不得把更早预算目标伪装成实际 deadline");
     assert.equal(tMsg.human_locked, false);
     assert.equal(tMsg.stagnant_rounds, 0);
     const remindersAfterMsg = tMsg.reminders_sent;
@@ -135,17 +141,17 @@ test("D2 owner 规则：旧 open inspection 的晚 unknown 不得覆盖之后主
     const afterOld: any = await care();
     const tOld: any = (afterOld.tasks ?? []).find((x: any) => x.child === childId);
     const oldDueAt = Number(afterOld.server_now) + Number(tOld?.dueInMs ?? NaN);
-    const lastCareRecheck = lastCare + 300_000;
     console.log(`[D2] old outcome at ${outcomeAt} accepted=${accepted} result=${JSON.stringify(result)}`);
     console.log(`[D2] timing: inspectionDeliveredAt=${inspectionDeliveredAt} < messageAt=${messageAt} < outcomeAt=${outcomeAt}`);
-    console.log(`[D2] after old outcome: base=${tOld?.budget_base_at} countdown=${tOld?.budget_countdown} dueInMs=${tOld?.dueInMs} dueAt=${oldDueAt} reminders=${tOld?.reminders_sent} locked=${tOld?.human_locked} stagnant=${tOld?.stagnant_rounds}`);
-    console.log(`[D2] message deadline=${msgDueAt} (base+30=${expectedMsgDue})；lastCare+300=${lastCareRecheck}`);
+    console.log(`[D2] after old outcome: base=${tOld?.budget_base_at} countdown=${tOld?.budget_countdown} budget_due=${tOld?.budget_due_at} cooldown=${tOld?.cooldown_due_at} dueInMs=${tOld?.dueInMs} dueAt=${oldDueAt} reminders=${tOld?.reminders_sent} locked=${tOld?.human_locked} stagnant=${tOld?.stagnant_rounds}`);
+    console.log(`[D2] message budget=${expectedMsgBudget}；lastCare+300=${lastCareRecheck}；actual=${expectedActual}`);
 
     if (accepted) {
-      const keepsMessageDeadline = tOld?.budget_countdown === true && Math.abs(oldDueAt - expectedMsgDue) <= 2_000;
+      const keepsMessageDeadline = tOld?.budget_countdown === true && Math.abs(oldDueAt - expectedActual) <= 2_000
+        && Math.abs(Number(tOld?.budget_due_at) - expectedMsgBudget) <= 2_000;
       const clearsCounters = tOld?.reminders_sent !== remindersAfterMsg || tOld?.human_locked === true;
       assert.ok(keepsMessageDeadline,
-        `旧 inspection（deliveredAt=${inspectionDeliveredAt} 早于 messageAt=${messageAt}）的晚 unknown 在 outcomeAt=${outcomeAt} 被受理，但覆盖了新消息的 budget deadline：countdown=${tOld?.budget_countdown}，dueAt=${oldDueAt}（新消息=base+30=${expectedMsgDue}，lastCare+300=${lastCareRecheck}）`);
+        `旧 inspection（deliveredAt=${inspectionDeliveredAt} 早于 messageAt=${messageAt}）的晚 unknown 在 outcomeAt=${outcomeAt} 被受理，但覆盖了新消息的预算目标/实际 deadline：countdown=${tOld?.budget_countdown}，budget_due=${tOld?.budget_due_at}，dueAt=${oldDueAt}（预算=${expectedMsgBudget}，actual=max=${expectedActual}）`);
       assert.equal(clearsCounters, false, "旧晚结论不得清/改计数或人工锁");
       // 语义必须机读明确：受理为审计（applied=false），且按 stable message id 指出取代事件。
       assert.equal(result.stale, true, "旧巡检晚结论必须标 stale");
@@ -153,7 +159,7 @@ test("D2 owner 规则：旧 open inspection 的晚 unknown 不得覆盖之后主
       assert.equal(result.stale_reason, "superseded_by_message");
       assert.equal(result.stale_superseded_by, msgId, "superseded_by 必须是 stable message id（不是毫秒比较）");
     } else {
-      const unchanged = Math.abs(oldDueAt - expectedMsgDue) <= 2_000 && tOld?.budget_countdown === true;
+      const unchanged = Math.abs(oldDueAt - expectedActual) <= 2_000 && tOld?.budget_countdown === true;
       assert.ok(unchanged, "旧结论被拒后新消息 deadline 必须原样保留");
     }
 
@@ -173,7 +179,7 @@ test("D2 owner 规则：旧 open inspection 的晚 unknown 不得覆盖之后主
     assert.equal(tB?.budget_countdown, false, "B 仍按复查间隔（未被消息/预算编辑重置）");
     const tA2: any = (afterB.tasks ?? []).find((x: any) => x.child === childId);
     assert.equal(tA2?.budget_countdown, true, "B 的结论不得影响 A 的新消息基准");
-    assert.ok(Math.abs((Number(afterB.server_now) + Number(tA2?.dueInMs ?? NaN)) - expectedMsgDue) <= 2_000);
+    assert.ok(Math.abs((Number(afterB.server_now) + Number(tA2?.dueInMs ?? NaN)) - expectedActual) <= 2_000);
 
     // 一次性幂等：同一 stale 结论 + 同一证据重放 ⇒ idempotent，且仍不改 A 的状态。
     const again: any = await h.tools.get("graph_care_outcome").execute({
@@ -186,7 +192,7 @@ test("D2 owner 规则：旧 open inspection 的晚 unknown 不得覆盖之后主
     assert.equal(again.applied, false);
     const afterAgain: any = await care();
     const tA3: any = (afterAgain.tasks ?? []).find((x: any) => x.child === childId);
-    assert.ok(Math.abs((Number(afterAgain.server_now) + Number(tA3?.dueInMs ?? NaN)) - expectedMsgDue) <= 2_000, "幂等重放不得改新 deadline");
+    assert.ok(Math.abs((Number(afterAgain.server_now) + Number(tA3?.dueInMs ?? NaN)) - expectedActual) <= 2_000, "幂等重放不得改新 deadline");
     assert.equal(tA3?.reminders_sent, remindersAfterMsg);
 
     // 持久化证据：care.outcome 快照里的 inspection target 带 stale metadata（重启恢复同源）。

@@ -1,9 +1,9 @@
 /**
- * g-612 D1（返工）：首次自然关照（goal 预算 30s）→ 公开窄工具回 unknown（锁保持 0、进入复查）
- * → 公开 graph_set_goal_budget 设 120 → 公开 care/status 的截止必须是
- * 「最近派发/主管消息 base + 120s」，而不是无变化的 lastCareAt+300s。
- * 语义依据（负责人已确认）：显式预算编辑/主管消息是**最新**基准，g506 的 300s 无答下限只约束
- * 「无新消息/无预算编辑」的后续复查；三次无有效结论封顶与人工锁仍然保留。
+ * g-612 D1（返工，用户后续裁定）：首次自然关照（goal 预算 30s）→ 公开窄工具回 unknown
+ *（锁保持 0、reminders=1、进入未有效结论冷却）→ 公开 graph_set_goal_budget 设 120。
+ * 预算目标必须立即按「最近派发/主管消息 base + 120s」重算（budgetCountdown=true），
+ * 但因仍在冷却，**实际可执行截止** = max(预算目标, lastCareAt+300s)=lastCareAt+300s；
+ * `care/status.next_due_at` 与 UI 倒计时消费同一个实际值（不得显示更早的 t120）。
  * 真实 0.2.1-rc.2 公开宿主 + fake adapter + 真实 public tools；真实 timer（30s 首照）；
  * 不联网/真实 provider/真实 3120/3130/用户会话。
  */
@@ -22,7 +22,7 @@ async function waitFor<T>(fn: () => Promise<T | null>, label: string, timeoutMs 
   throw new Error(`等待超时：${label}`);
 }
 
-test("D1 owner 规则：首次关照后 unknown（复查态）→ goal 预算 30→120 必须立即按 base+120 重算，而非 lastCare+300", async () => {
+test("D1 用户裁定：首次关照后 unknown → goal 预算 30→120 预算目标立即=t120，但实际可执行截止=max(t120,t330)=t330", async () => {
   const h = await makeRealHost({
     sessionQuery: true,
     projectYaml: "supervisor:\n  session: sess-super\n  care: \"true\"\n  care_threshold_seconds: 300\n  care_recheck_seconds: 300\n",
@@ -85,15 +85,24 @@ test("D1 owner 规则：首次关照后 unknown（复查态）→ goal 预算 30
     assert.ok(tEdit);
     const serverNow = Number(afterEdit.server_now);
     const dueAt = serverNow + Number(tEdit.dueInMs);
-    const expected = Number(tEdit.budget_base_at) + 120_000;
-    console.log(`[D1] edit at ${editAt} (+${editAt - t0}ms): base=${tEdit.budget_base_at} countdown=${tEdit.budget_countdown} effective=${tEdit.effective_budget_seconds} dueInMs=${tEdit.dueInMs} dueAt=${dueAt}`);
-    console.log(`[D1] owner expected = base+120s = ${expected} (now=${serverNow}, expect dueInMs≈${expected - serverNow})；bug 对照 = lastCare+300 = ${recheckDue}`);
+    const expectedBudget = Number(tEdit.budget_base_at) + 120_000;
+    // 用户后续裁定：预算目标立即重算，但仍在未有效结论冷却 ⇒ 实际可执行截止取较晚者。
+    const expectedActual = Math.max(expectedBudget, recheckDue);
+    console.log(`[D1] edit at ${editAt} (+${editAt - t0}ms): base=${tEdit.budget_base_at} countdown=${tEdit.budget_countdown} effective=${tEdit.effective_budget_seconds} dueInMs=${tEdit.dueInMs} dueAt=${dueAt} budget_due=${tEdit.budget_due_at} cooldown_due=${tEdit.cooldown_due_at}`);
+    console.log(`[D1] owner expected: budget=base+120=${expectedBudget}, actual=max(budget,lastCare+300)=${expectedActual}；旧 bug 对照 = 无冷却的 t120 / lastCare+300 仍 300 但 countdown=false`);
     assert.equal(tEdit.budget_seconds, 120, "goal 预算真源已更新");
     assert.equal(tEdit.effective_budget_seconds, 120, "生效预算已更新");
-    assert.equal(tEdit.budget_countdown, true, "按 owner 规则应重新进入预算倒计时");
-    assert.ok(Math.abs(dueAt - expected) <= 2_000,
-      `owner 规则：预算编辑后截止必须=base+120s（expected≈${expected}，实得 dueAt=${dueAt}，dueInMs=${tEdit.dueInMs}，bug=lastCare+300=${recheckDue}）`);
-    assert.notEqual(Math.abs(dueAt - recheckDue) <= 2_000, true, "不得仍停在 lastCare+300 复查");
+    assert.equal(tEdit.budget_countdown, true, "按 owner 规则应重新进入预算倒计时（预算目标已立即重算）");
+    assert.ok(Math.abs(Number(tEdit.budget_due_at) - expectedBudget) <= 2_000,
+      `预算目标必须立即重算为 base+120s（expected≈${expectedBudget}，实得 ${tEdit.budget_due_at}）`);
+    assert.ok(Math.abs(Number(tEdit.cooldown_due_at) - recheckDue) <= 2_000,
+      `冷却截止必须仍为 lastCare+300（expected≈${recheckDue}，实得 ${tEdit.cooldown_due_at}）`);
+    assert.ok(Math.abs(dueAt - expectedActual) <= 2_000,
+      `实际可执行截止必须=max(预算,冷却)（expected≈${expectedActual}，实得 dueAt=${dueAt}，dueInMs=${tEdit.dueInMs}）`);
+    assert.notEqual(Math.abs(dueAt - expectedBudget) <= 2_000, true,
+      "不得把更早的预算目标伪装成实际可执行截止（无双真源欺骗）");
+    assert.ok(Math.abs(Number(afterEdit.next_due_at) - expectedActual) <= 2_000,
+      "care/status.next_due_at 必须与任务实际可执行截止一致");
   } finally {
     h.fake.releaseAll();
     try { await h.shutdown(); } catch {}
