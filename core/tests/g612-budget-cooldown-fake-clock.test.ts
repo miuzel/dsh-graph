@@ -285,18 +285,22 @@ test("g-612 冷却四象限④：t30 unknown 后 budget 600 晚于冷却 ⇒ 实
     invalidateBoardCache(s.h.root);
     s.care.notifyGoalBudgetChanged(s.h.root, s.goal, 600);
     const t = s.task();
-    const budgetDue = Number(t.budget_due_at);
     const cooldownDue = Number(t.cooldown_due_at);
     const actual = Number(t.dueAt);
-    assert.ok(Math.abs(budgetDue - (t0 + 600_000)) <= 2_000, "预算目标=base+600");
-    assert.ok(cooldownDue < budgetDue, "预算目标必须晚于冷却");
-    assert.ok(Math.abs(actual - budgetDue) <= 1_000, "实际截止必须取更晚预算，不被 300 截短");
+    // 预算目标（base+600）晚于冷却截止：该状态与旧版 resume 的混合锚点在状态上**不可区分**，
+    // 按负责人裁定「不能可靠区分就未知」⇒ 公开 budget_due_at 返回 null，绝不谎报纯预算；
+    // 预算时长仍可见，真实 next_due/投递必须完全不受显示修复影响（本测试后半段钉住）。
+    assert.equal(t.budget_due_at, null, "晚于冷却的预算目标不可严格证明为纯预算 ⇒ null");
+    assert.equal(Number(t.effective_budget_seconds), 600, "预算时长仍必须可见（600s）");
+    assert.ok(cooldownDue < actual, "实际截止必须晚于冷却");
+    assert.ok(Math.abs(actual - (t0 + 600_000)) <= 1_000, "实际截止必须取更晚预算，不被 300 截短");
+    assert.equal(Number(s.status().next_due_at), actual, "next_due_at 仍显示真实可执行截止");
     const before = s.inspections().length;
     await s.advanceTo(cooldownDue + 1_000);
     assert.equal(s.inspections().length, before, "冷却到点但预算未到 ⇒ 不得提前投递");
-    await s.advanceTo(budgetDue - 1_000);
+    await s.advanceTo(actual - 1_000);
     assert.equal(s.inspections().length, before);
-    await s.advanceTo(budgetDue + 1_000);
+    await s.advanceTo(actual + 1_000);
     assert.equal(s.inspections().length, before + 1, "预算到点投递一次");
   } finally { await s.shutdown(); }
 });

@@ -850,6 +850,68 @@ export function careTaskBudgetDueAt(task: CareTaskState, timing: {
 }
 
 /**
+ * **公开投影**口径的预算目标截止（`care/status.tasks[].budget_due_at`）——与调度口径
+ * `careTaskBudgetDueAt`/`careTaskDueAt` 分开：调度永远消费「max(预算, 冷却)」的可执行截止
+ *（本函数**不参与** `careTaskDueAt`/timer/投递门禁），只回答「能否从**现有持久状态**严格证明
+ * 一个独立的纯预算目标」，证不了就返回 `null`（未知）。绝不把合并后的实际截止冒充预算截止，
+ * 也不为此新增/改变任何计时状态。
+ *
+ * 不可证 ⇒ `null` 的场景：
+ * ① **暂停中**：倒计时被整组冻结，未来的绝对预算时刻要等 resume 才能确定；任何绝对时间都是
+ *    伪造的未来（真值在 `paused_remaining_ms`/`due_in_ms` 的冻结剩余里）。
+ * ② **冷却活跃且锚点不早于冷却截止**：`resumeCare` 写 `scheduleDueAt = now + max(预算剩余,
+ *    冷却剩余)`，同时写 `cooldownDueAt = now + 冷却剩余` ⇒ 恢复写入的锚点**永不早于**冷却截止。
+ *    因此 `锚点 >= 冷却截止` 时，锚点可能是恢复写入的合并值（冷却分量更晚），也可能来自旧版
+ *    快照/更旧 resume 的混合值 —— 无可读 provenance 时**无法严格区分**纯预算与混合 ⇒ `null`。
+ * ③ **冷却活跃且无锚点 / 锚点被 reset 覆盖**：此时派生值 `base + 生效区间` 里的区间本身已是
+ *    「复查 ∪ 300s 冷却」（`careTaskIntervalMs`），不是纯预算 ⇒ `null`。
+ *
+ * 可证 ⇒ 数字：
+ * · 冷却不活跃：没有可合并项（锚点或 `base + 预算` 都是纯预算目标）。
+ * · 冷却活跃但**锚点严格早于冷却截止**：任何 resume 变体（含旧版）都写不出这种关系
+ *   （旧版 pause 冻结 `>= lastCare+300-pauseAt`，旧版 resume 同理），故只可能来自纯预算写入者
+ *   （派发/主管消息/goal 预算编辑）⇒ 锚点就是纯预算目标。
+ */
+export function careTaskBudgetDueAtReportable(task: CareTaskState, timing: {
+  thresholdSeconds: number;
+  recheckSeconds: number;
+  resetAt: number | null;
+  thresholdSource?: CareSource;
+}, reportable: { paused?: boolean } = {}): number | null {
+  if (reportable.paused === true) return null; // ① 冻结中：没有可证的未来预算时刻
+  const cooldownDue = careCooldownDueAt(task);
+  if (cooldownDue === null) return careTaskBudgetDueAt(task, timing); // 无冷却 ⇒ 纯
+  const anchor = typeof task.scheduleDueAt === "number" && Number.isFinite(task.scheduleDueAt)
+    ? task.scheduleDueAt
+    : null;
+  if (anchor === null) return null; // ③ 只有「复查∪冷却」的派生值
+  const resetAt = timing.resetAt;
+  if (resetAt !== null && resetAt > anchor) return null; // ③ reset 派生区间含冷却
+  // ② 只有严格早于冷却截止的锚点能证明是纯预算（resume 变体写不出更早）。
+  return anchor < cooldownDue ? anchor : null;
+}
+
+/**
+ * **公开投影**口径的未有效结论冷却截止（`care/status.tasks[].cooldown_due_at`）。
+ *
+ * 与预算字段同理：只报**可证**的时刻，绝不显示会提前/虚假触发的绝对时间。
+ * ① 暂停中：冷却剩余被冻结，绝对时刻要 resume 才能确定 ⇒ `null`（真值在冻结剩余里）。
+ * ② 已过期（`<= now`）：它已经不再是「下一次冷却截止」；旧快照缺 `frozenCooldownRemainingMs`
+ *    时相对时间规则会补一个等于恢复时刻/更早的回退值，显示出来就是谎值 ⇒ `null`。
+ * 其余（未来绝对时刻）照旧返回；调度侧 `careCooldownDueAt` 完全不受影响。
+ */
+export function careCooldownDueAtReportable(task: CareTaskState, reportable: {
+  paused?: boolean;
+  now?: number;
+} = {}): number | null {
+  if (reportable.paused === true) return null;
+  const due = careCooldownDueAt(task);
+  if (due === null) return null;
+  if (typeof reportable.now === "number" && Number.isFinite(reportable.now) && due <= reportable.now) return null;
+  return due;
+}
+
+/**
  * 最终可执行截止（单一调度真源）：预算目标与未有效结论冷却取**较晚者**。
  * 负责人裁定（2026-10-31）：预算编辑/主管新消息立即重算预算目标，但若任务仍处于
  * 未回复/unknown 冷却，下一次提醒不得早于 `lastCareAt + 300s`；无冷却时不额外强加 300s，
@@ -1678,9 +1740,19 @@ export interface CareStatusProjection {
     budget_source: CareBudgetSource;
     budget_base_at: number | null;
     budget_countdown: boolean;
-    /** 预算目标截止（不含 300s 未有效结论冷却；用于清楚区分两个口径）。 */
+    /**
+     * 预算目标截止（不含 300s 未有效结论冷却；用于清楚区分两个口径）。
+     * `null` = **无法从现有状态可靠证明**这个独立时刻，不是「没有预算」：
+     * 暂停中（倒计时冻结，未来绝对时刻未定），或暂停恢复后 `scheduleDueAt` 已被
+     * `max(预算剩余, 冷却剩余)` 合并、纯预算分量不可还原。预算时长仍见
+     * `budget_seconds`/`effective_budget_seconds`，真实可执行截止见 `next_due_at`。
+     */
     budget_due_at: number | null;
-    /** 未有效结论冷却截止；`null` = 当前不处于冷却（不额外强加 300s）。 */
+    /**
+     * 未有效结论冷却截止；`null` = **没有可证的未来冷却截止**：当前不处于冷却（不额外强加
+     * 300s）、暂停中（剩余被冻结，绝对时刻要 resume 才能确定）、该绝对时刻已过期、或来自旧快照的
+     * 回退补值（不可证）。绝不显示会提前/虚假触发的谎值；真实可执行截止始终看 `next_due_at`。
+     */
     cooldown_due_at: number | null;
     /** 本轮运行（自然墙钟；与关照倒计时分开）。 */
     run_started_at: number | null;
@@ -1780,10 +1852,13 @@ export function careStatusProjection(args: {
       budget_source: budget.source,
       budget_base_at: typeof st?.budgetBaseAt === "number" && Number.isFinite(st.budgetBaseAt) ? st.budgetBaseAt : null,
       budget_countdown: st?.budgetCountdown === true,
-      budget_due_at: st ? careTaskBudgetDueAt(st, dueTiming) : null,
-      cooldown_due_at: st ? careCooldownDueAt(st) : null,
-      // `due_at`（来自 decision，唯一可执行口径）= max(budget_due_at, cooldown_due_at)
-      // —— 调度与 UI 永远消费同一个值，不存在更早的隐藏 deadline。
+      // 投影只报「可证」的独立预算目标；暂停中或恢复后的合并锚点 ⇒ null（未知），
+      // 绝不把 max(预算,冷却) 冒充纯预算。调度口径不受影响（见 careTaskDueAt）。
+      budget_due_at: st ? careTaskBudgetDueAtReportable(st, dueTiming, { paused: args.group.paused === true }) : null,
+      // 只报可证/未来的冷却截止：暂停中冻结、已过期或旧快照回退补值 ⇒ null（不谎报）。
+      cooldown_due_at: st ? careCooldownDueAtReportable(st, { paused: args.group.paused === true, now: args.now }) : null,
+      // `due_at`（来自 decision，唯一可执行口径）= max(预算目标, 冷却截止)
+      // —— 调度与 UI 永远消费同一个值，不存在更早的隐藏 deadline；`next_due_at` 始终可信。
       run_started_at: typeof runStartedAt === "number" && Number.isFinite(runStartedAt) ? runStartedAt : null,
       run_start_source: st?.runStartSource ?? null,
       run_start_exact: st?.runStartExact === true,
