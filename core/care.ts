@@ -1312,6 +1312,15 @@ export interface CareInspectionTarget {
   outcomeAt: number | null;
   /** 证据摘要（有界字符串的稳定摘要；用于同结论幂等判定）。 */
   evidenceDigest: string | null;
+  /**
+   * g-612：该 target 的巡检已被**更新的事件**（主管→child 新消息 / goal 预算编辑）取代。
+   * 只按显式事件顺序标记（消息 id / 预算编辑时刻），绝不靠「毫秒时间戳大小」猜；
+   * 标记后仍可受理晚到结论做审计，但**不得**再改动任务状态（预算/计数/锁/提醒）。
+   */
+  staleReason?: "superseded_by_message" | "superseded_by_budget" | null;
+  staleAt?: number | null;
+  /** 取代它的稳定事件标识（消息 id；预算编辑写 "goal_budget"）——不含任何消息正文。 */
+  supersededBy?: string | null;
 }
 
 export interface CareInspection {
@@ -1427,7 +1436,7 @@ export function validateCareOutcome(input: {
   bindingVersion: number;
   outcome: CareOutcomeKind | null;
   evidenceDigest: string;
-}): { ok: true; target: CareInspectionTarget; idempotent: boolean } | { ok: false; code: CareOutcomeRejection } {
+}): { ok: true; target: CareInspectionTarget; idempotent: boolean; stale: boolean } | { ok: false; code: CareOutcomeRejection } {
   const { inspection } = input;
   if (!inspection) return { ok: false, code: "inspection_unknown" };
   if (inspection.root !== input.root) return { ok: false, code: "wrong_root" };
@@ -1441,14 +1450,17 @@ export function validateCareOutcome(input: {
   if (!target) return { ok: false, code: "target_not_in_inspection" };
   if (target.bindingVersion !== input.bindingVersion) return { ok: false, code: "stale_binding" };
   if (!input.outcome) return { ok: false, code: "invalid_outcome" };
+  // g-612：目标已被**之后**的主管→child 消息 / goal 预算编辑取代（显式事件标记，非毫秒比较）。
+  // 晚到结论仍可受理以便审计/一次性幂等，但调用方必须**只记历史、不改任务状态**。
+  const stale = target.staleReason != null;
   // B17：已 resolved 的同值重试必须幂等（即使巡检 freshness 已过期）；只有**新的**结果
   // 才受 expiresAt 约束，过期后不得再接受。
   if (target.outcome !== null) {
     const same = target.outcome === input.outcome && target.evidenceDigest === input.evidenceDigest;
-    return same ? { ok: true, target, idempotent: true } : { ok: false, code: "already_resolved" };
+    return same ? { ok: true, target, idempotent: true, stale } : { ok: false, code: "already_resolved" };
   }
   if (input.now > inspection.expiresAt) return { ok: false, code: "expired" };
-  return { ok: true, target, idempotent: false };
+  return { ok: true, target, idempotent: false, stale };
 }
 
 /** 受理一份结论后的巡检记录（纯函数；调用方须在**事件先行**成功后再应用）。 */

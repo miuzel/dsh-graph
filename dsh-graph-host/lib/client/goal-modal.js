@@ -829,13 +829,16 @@
 
     // g-612：目标级预计预算（秒；空 = 继承项目/全局 care_threshold_seconds）。
     // 只写 goal meta；不触发派发参数/提示词变化，也不额外调用模型。
+    // 预算唯一真源 = goal frontmatter 的 `meta.task_budget_seconds`（goalDetail 直接下发 doc.meta）；
+    // 组件直接消费该字段，调用方不再另造镜像/第二套解析。
     function GoalBudgetEditor(props) {
-      const [value, setValue] = React.useState(props.budgetSeconds == null ? "" : String(props.budgetSeconds));
+      const budgetSeconds = props.meta?.task_budget_seconds ?? null;
+      const [value, setValue] = React.useState(budgetSeconds == null ? "" : String(budgetSeconds));
       const [saving, setSaving] = React.useState(false);
       const [note, setNote] = React.useState(null);
       React.useEffect(() => {
-        setValue(props.budgetSeconds == null ? "" : String(props.budgetSeconds));
-      }, [props.budgetSeconds]);
+        setValue(budgetSeconds == null ? "" : String(budgetSeconds));
+      }, [budgetSeconds]);
       const save = async (rawOverride) => {
         if (saving) return;
         const raw = String(rawOverride ?? value).trim();
@@ -1301,7 +1304,8 @@
             h("span", { style: { opacity: 0.4, userSelect: "none" } }, "·"),
             h(GoalBudgetEditor, {
               goalId: props.id,
-              budgetSeconds: meta.budget_seconds ?? null,
+              // 唯一真源 = goal frontmatter 的 meta.task_budget_seconds（goalDetail 直接下发 doc.meta）。
+              meta,
               onChange: () => { load(); props.onTagsChanged?.(); },
             })
           ),

@@ -2062,6 +2062,11 @@ export function createCareRuntime(options = {}) {
       outcome: ["progress", "no-progress", "unknown"].includes(String(t?.outcome)) ? t.outcome : null,
       outcomeAt: t?.outcomeAt === null || t?.outcomeAt === undefined ? null : numberOr(t.outcomeAt, null),
       evidenceDigest: typeof t?.evidenceDigest === "string" ? t.evidenceDigest : null,
+      // g-612：被后续事件取代的 target 标记（重启后晚到结论仍只作审计）。
+      staleReason: ["superseded_by_message", "superseded_by_budget"].includes(String(t?.staleReason))
+        ? t.staleReason : null,
+      staleAt: t?.staleAt === null || t?.staleAt === undefined ? null : numberOr(t.staleAt, null),
+      supersededBy: typeof t?.supersededBy === "string" && t.supersededBy ? t.supersededBy : null,
     })).filter((t) => t.goal && t.attempt && t.child);
     if (!targets.length) return null;
     return {
@@ -2669,9 +2674,40 @@ export function createCareRuntime(options = {}) {
     }
     return changed;
   };
+  /**
+   * g-612：显式新事件（主管→child 消息 / goal 预算编辑）发生后，把**仍在开放**的巡检 target
+   * 标记为被取代（按 stable message id / 事件顺序，不做毫秒时间戳比较）。
+   * 只标匹配的 target；同一巡检里其他 target 不受影响（一批多目标时绝不整批作废）。
+   * 标记只写 metadata（reason/at/message id），不保存消息正文；晚到结论仅作审计、不改任务状态。
+   */
+  const markOpenInspectionTargetsStale = (entry, predicate, reason, at, supersededBy) => {
+    const marked = [];
+    for (const [id, ins] of entry.inspections) {
+      if (ins.status === "resolved" || ins.status === "failed" || ins.status === "expired") continue;
+      let changed = false;
+      const targets = ins.targets.map((t) => {
+        if (t.outcome !== null || t.staleReason != null || !predicate(t)) return t;
+        changed = true;
+        return { ...t, staleReason: reason, staleAt: at, supersededBy: String(supersededBy ?? "") };
+      });
+      if (!changed) continue;
+      entry.inspections.set(id, { ...ins, targets });
+      marked.push(id);
+    }
+    return marked;
+  };
   const applySupervisorMessageToTask = (entry, task, opts) => {
     const budget = runBudgetOf(task, opts.timing);
     const budgetMs = budget.seconds * 1000;
+    // 先把该 child/attempt 的开放巡检标为 superseded（同一 message id 显式事件顺序），
+    // 使随后（或重启后）到达的旧巡检结论只作审计，绝不覆盖这条消息建立的预算基准。
+    const superseded = markOpenInspectionTargetsStale(
+      entry,
+      (t) => t.child === task.child && t.attempt === task.attempt,
+      "superseded_by_message",
+      opts.at,
+      String(opts.messageId ?? ""),
+    );
     const updated = {
       ...task,
       budgetBaseAt: opts.at,
@@ -2691,23 +2727,31 @@ export function createCareRuntime(options = {}) {
         at: opts.at,
         budget_seconds: budget.seconds,
         budget_source: budget.source,
+        ...(superseded.length ? { superseded_inspections: superseded } : {}),
       }, snapshotWithTask(entry, updated));
     } catch { /* 事件失败不阻断基准更新 */ }
     return updated;
   };
   const applyBudgetChangeToTask = (entry, task, opts) => {
     const inBudgetPhase = task.budgetCountdown === true || task.lastCareAt === null;
+    // owner 规则（g-612 返工）：运行中 goal 预算真正修改/清空 ⇒ 不论当前是首次倒计时还是
+    // 关照后的复查间隔，都立即按最近一次派发/主管消息基准 + 新预算重算当前截止。
+    // `forceCountdown` 由真实 goal 变更路径传入；项目默认扫描不得把目标任务当「新编辑」反复重置。
+    const forced = opts.forceCountdown === true;
     const oldBudget = task.budgetEffectiveSeconds ?? runBudgetOf(task, opts.timing).seconds;
     const oldNominal = inBudgetPhase ? oldBudget * 1000 : careTaskIntervalMs(task, opts.timing);
     const budget = runBudgetOf(task, opts.timing);
+    // 显式 goal 预算变更才取代同 goal 的开放巡检（项目默认/全局扫描不算新编辑）。
+    const superseded = forced
+      ? markOpenInspectionTargetsStale(entry, (t) => t.goal === task.goal, "superseded_by_budget", opts.at, "goal_budget")
+      : [];
     let updated = {
       ...task,
       budgetEffectiveSeconds: budget.seconds,
       budgetEffectiveSource: budget.source,
     };
     if (entry.group.paused === true) {
-      // 仅当当前仍在「首次预算倒计时/消息重置后」阶段才重算；已投递后的复查间隔不因预算编辑而重置。
-      if (inBudgetPhase) {
+      if (forced || inBudgetPhase) {
         const frozen = typeof task.frozenRemainingMs === "number" ? task.frozenRemainingMs : oldNominal;
         const consumed = Math.max(0, oldNominal - Math.max(0, frozen));
         updated = {
@@ -2718,7 +2762,7 @@ export function createCareRuntime(options = {}) {
           scheduleDueAt: null,
         };
       }
-    } else if (inBudgetPhase) {
+    } else if (forced || inBudgetPhase) {
       const base = task.budgetBaseAt ?? task.runStartedAt ?? task.startedAt;
       updated = {
         ...updated,
@@ -2738,6 +2782,10 @@ export function createCareRuntime(options = {}) {
         budget_seconds: budget.seconds,
         budget_source: budget.source,
         paused: entry.group.paused === true,
+        forced,
+        budget_countdown: updated.budgetCountdown === true,
+        due_at: updated.scheduleDueAt ?? null,
+        ...(superseded.length ? { superseded_inspections: superseded } : {}),
       }, snapshotWithTask(entry, updated));
     } catch { /* 事件失败不阻断调度 */ }
     return updated;
@@ -3697,22 +3745,35 @@ export function createCareRuntime(options = {}) {
         child: String(input.child),
         outcome: validated.target.outcome,
         counted: false,
+        // 晚到且已被新消息/预算编辑取代的旧巡检：只作审计，明确告知调用方未应用。
+        stale: validated.stale === true,
+        applied: validated.stale === true ? false : true,
+        ...(validated.stale === true ? {
+          stale_reason: validated.target.staleReason ?? null,
+          stale_superseded_by: validated.target.supersededBy ?? null,
+        } : {}),
       };
     }
     const at = now();
     let maxRounds = CARE_DEFAULTS.maxStagnantRounds;
     try { maxRounds = readConfig(entry).projection.max_stagnant_rounds; } catch { /* 用受控默认 */ }
     const preTask = entry.tasks.get(`${String(input.child)}\u0000${String(input.attempt)}`) ?? null;
+    // g-612：该 target 已被之后的主管→child 新消息 / goal 预算编辑取代 ⇒ 受理为**审计记录**，
+    // 但绝不改动新事件建立的任务状态（budgetCountdown/scheduleDueAt/计数/锁/提醒）。
+    // 也不伪称撤回已投递的关照：巡检本身仍按一次性记 resolved/审计。
+    const staleOutcome = validated.stale === true;
     // 先在**副本**上算出结果（事件先行：任何写入失败都不得留下半状态）。
-    const applied = applyCareOutcome(entry.group, [...entry.tasks.values()], {
-      child: String(input.child),
-      attempt: String(input.attempt),
-    }, {
-      kind: outcome,
-      fingerprint: digest,
-      now: at,
-      maxStagnantRounds: maxRounds,
-    });
+    const applied = staleOutcome
+      ? { group: entry.group, tasks: [...entry.tasks.values()], matched: preTask !== null, counted: false, humanLocked: entry.group.escalated === true }
+      : applyCareOutcome(entry.group, [...entry.tasks.values()], {
+          child: String(input.child),
+          attempt: String(input.attempt),
+        }, {
+          kind: outcome,
+          fingerprint: digest,
+          now: at,
+          maxStagnantRounds: maxRounds,
+        });
     const nextInspection = applyCareInspectionOutcome(inspection, {
       goal: String(input.goal),
       attempt: String(input.attempt),
@@ -3722,7 +3783,7 @@ export function createCareRuntime(options = {}) {
       now: at,
     });
     const targetTask = applied.tasks.find((t) => t.child === String(input.child) && t.attempt === String(input.attempt)) ?? null;
-    const newlyLocked = targetTask?.humanLocked === true && preTask?.humanLocked !== true;
+    const newlyLocked = staleOutcome ? false : targetTask?.humanLocked === true && preTask?.humanLocked !== true;
     // B15/B16 commit point：`care.outcome` append 成功即视为提交；之后**立即、不可回滚**应用
     // nextInspection/group/tasks/lastOutcome。升级事件只做 best-effort，失败也不能把已提交结果
     // 报成失败、更不能让后续 timer/reset/pause 用旧内存覆盖已落盘锁。
@@ -3737,6 +3798,8 @@ export function createCareRuntime(options = {}) {
       at,
       counted: applied.counted,
       idempotent: false,
+      stale: staleOutcome,
+      applied: !staleOutcome,
       stagnant_rounds: targetTask?.stagnantRounds ?? 0,
       human_locked: targetTask?.humanLocked === true,
     };
@@ -3752,6 +3815,11 @@ export function createCareRuntime(options = {}) {
         outcome,
         evidence_digest: digest,
         binding_version: bindingVersion,
+        // g-612：晚到旧巡检 ⇒ 只作审计；明确记录是否应用/是否 stale（不伪称撤回）。
+        stale: staleOutcome,
+        applied: !staleOutcome,
+        stale_reason: staleOutcome ? (validated.target.staleReason ?? null) : null,
+        stale_superseded_by: staleOutcome ? (validated.target.supersededBy ?? null) : null,
         // B16：升级信息随同一 commit point 持久化，避免依赖第二个事件是否存在。
         escalated: newlyLocked,
         escalation_reason: newlyLocked ? "fresh_no_progress_limit" : null,
@@ -3797,6 +3865,12 @@ export function createCareRuntime(options = {}) {
       child: String(input.child),
       outcome,
       counted: applied.counted,
+      stale: staleOutcome,
+      applied: !staleOutcome,
+      ...(staleOutcome ? {
+        stale_reason: validated.target.staleReason ?? null,
+        stale_superseded_by: validated.target.supersededBy ?? null,
+      } : {}),
       stagnant_rounds: targetTask?.stagnantRounds ?? 0,
       max_stagnant_rounds: maxRounds,
       human_locked: targetTask?.humanLocked === true,
@@ -4027,6 +4101,8 @@ export function createCareRuntime(options = {}) {
     let changed = false;
     for (const [key, task] of entry.tasks) {
       if (task.goal !== goal) continue;
+      // 同值重复设置（goal 真源未变）不是「新编辑」：不得反复重置截止/重复标记巡检。
+      if ((normalizeCareSeconds(task.budgetSeconds) ?? null) === (budget ?? null)) continue;
       const updated = applyBudgetChangeToTask(entry, { ...task, budgetSeconds: budget }, {
         at, timing, forceCountdown: true,
       });

@@ -10,12 +10,15 @@ import { join, sep } from "node:path";
 
 import {
   applyCareDelivery,
+  applyCareInspectionOutcome,
   careStatusProjection,
   careTaskDueAt,
   careTaskIntervalMs,
+  createCareInspection,
   newCareGroupState,
   pauseCare,
   resumeCare,
+  validateCareOutcome,
   type CareTaskState,
 } from "../care.ts";
 import {
@@ -194,4 +197,54 @@ test("g-612 投影：预算来源/基准/倒计时与本轮 run 字段、历史�
   assert.equal(shown.run_natural_ms, 20_000);
   assert.equal(projection.runs.length, 1);
   assert.equal(projection.run_history_limit > 0, true);
+});
+
+test("g-612 旧巡检被显式事件取代：晚到结论 stale（只审计、一次性幂等），其他 target 不受影响", () => {
+  const now = 4_000_000;
+  const insp = createCareInspection({
+    id: "ins-1", root: "/tmp/g612", supervisor: "sup", now, revision: 1, recheckSeconds: 300,
+    targets: [
+      { goal: "g-a", attempt: "att-1", child: "child-a", bindingVersion: 1 },
+      { goal: "g-b", attempt: "att-1", child: "child-b", bindingVersion: 1 },
+    ],
+  });
+  assert.equal(insp.status, "queued");
+  // 显式事件（消息 id / 预算编辑）只按事件顺序标记；绝不靠毫秒时间戳比较。
+  const marked = {
+    ...insp,
+    status: "delivered" as const,
+    deliveredAt: now,
+    targets: insp.targets.map((t) => t.child === "child-a"
+      ? { ...t, staleReason: "superseded_by_message" as const, staleAt: now + 1, supersededBy: "msg-1" }
+      : t),
+  };
+  const base = {
+    inspection: marked, now: now + 2_000, root: "/tmp/g612", supervisor: "sup",
+    attempt: "att-1", bindingVersion: 1, outcome: "unknown" as const, evidenceDigest: "d1",
+  };
+  const vA = validateCareOutcome({ ...base, goal: "g-a", child: "child-a" });
+  assert.equal(vA.ok, true);
+  assert.equal(vA.ok && vA.stale, true, "被消息取代的 target 必须标 stale");
+  assert.equal(vA.ok && vA.idempotent, false);
+  const vB = validateCareOutcome({ ...base, goal: "g-b", child: "child-b" });
+  assert.equal(vB.ok, true);
+  assert.equal(vB.ok && vB.stale, false, "同批其他 target 不得被误标 stale");
+
+  // 受理后 target 记 resolved，但 stale metadata 保留（宿主据此只记审计、不改任务状态）。
+  const after = applyCareInspectionOutcome(marked, {
+    goal: "g-a", attempt: "att-1", child: "child-a", kind: "unknown", evidenceDigest: "d1", now: now + 2_000,
+  });
+  const ta = after.targets.find((t) => t.child === "child-a");
+  assert.equal(ta?.outcome, "unknown");
+  assert.equal(ta?.staleReason, "superseded_by_message");
+  assert.equal(ta?.supersededBy, "msg-1");
+  assert.equal(after.status, "delivered", "同批其他 target 未回传 ⇒ 整条巡检不得提前 resolved");
+
+  // 同结论 + 同证据重放 ⇒ 幂等且仍标 stale（宿主不二次应用/不二次计数）。
+  const idem = validateCareOutcome({
+    ...base, inspection: after, goal: "g-a", child: "child-a", now: now + 3_000,
+  });
+  assert.equal(idem.ok, true);
+  assert.equal(idem.ok && idem.idempotent, true);
+  assert.equal(idem.ok && idem.stale, true);
 });
