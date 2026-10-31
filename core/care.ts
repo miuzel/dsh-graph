@@ -557,8 +557,10 @@ export interface CareRunRecord {
    */
   budgetSeconds: number | null;
   budgetSource: CareBudgetSource | null;
-  /** 本轮开始后**生效预算变化时间线**（不含起点；按发生顺序；有界）。 */
+  /** 本轮开始后**生效预算变化时间线**（不含起点；按发生顺序；有界，最多 31 条）。 */
   budgetChanges?: CareBudgetChange[];
+  /** `budgetChanges` 是否因有界上限被截断（`true` = 中间有未展示的变化，起点不受影响）。 */
+  budgetChangesTruncated?: boolean;
   /** 已停止时的自然经过时间（ms）；任一未知时 null。跨未观测空窗时仍为墙钟差，见 `naturalExact`。 */
   naturalMs: number | null;
   /** 自然经过时间 − **起始**预算（ms）；任一未知时 null（语义见 `deviationBasis`）。 */
@@ -624,8 +626,14 @@ export interface CareTaskState {
   runStartExact?: boolean;
   /** g-612：本任务最近一次被真实采样/观察为运行中的时刻（care 时钟；用于如实标注观察空窗）。 */
   lastObservedAt?: number | null;
-  /** g-612：本轮生效预算变化时间线（起点不在此；只在值/来源真正变化时追加；有界）。 */
+  /**
+   * g-612：本轮生效预算历史（只读、有界）：`[0]` 恒为**真实起点**预算，其后为最近的有效变化
+   * （至多 31 条，总计 32 条）。只在值/来源真正变化时追加；超出上限时淘汰最旧的**变化**而
+   * 绝不淘汰起点，并在 `budgetHistoryTruncated` 如实标记。
+   */
   budgetHistory?: CareBudgetChange[];
+  /** g-612：`budgetHistory` 是否因上限淘汰过变化（`true` = 中间有断档，起点仍真实）。 */
+  budgetHistoryTruncated?: boolean;
   /**
    * g-612：**调整后**的未有效结论冷却绝对截止（ms epoch；只读调度状态）。
    * 暂停/长停后冷却剩余必须在 resume 后继续有效，不能被 `lastCareAt+300s` 的旧绝对时刻吃掉；
@@ -866,6 +874,13 @@ export function careTaskBudgetDueAt(task: CareTaskState, timing: {
  * ③ **冷却活跃且无锚点 / 锚点被 reset 覆盖**：此时派生值 `base + 生效区间` 里的区间本身已是
  *    「复查 ∪ 300s 冷却」（`careTaskIntervalMs`），不是纯预算 ⇒ `null`。
  *
+ * ④ **已关照后的复查阶段**（`lastCareAt !== null` 且未处于预算倒计时）：此时不存在独立的
+ *    预算目标，下一次截止 = `lastCareAt + max(复查间隔, 300s 冷却)`，它只由 `next_due_at`/
+ *    `due_at` 表达；把 `lastCare + recheck` 当 `budget_due_at` 会把「复查到期」冒称成
+ *    「预算超时」。`budget_due_at = null` 的语义因此包含「当前不存在独立预算阶段」，而不是
+ *    「预算已超时」。不能反过来对所有 `budgetCountdown !== true` 一律置空：旧快照/首次尚未
+ *    任何关照（`lastCareAt === null`）仍按源码判为预算阶段，必须继续返回可证预算目标。
+ *
  * 可证 ⇒ 数字：
  * · 冷却不活跃：没有可合并项（锚点或 `base + 预算` 都是纯预算目标）。
  * · 冷却活跃但**锚点严格早于冷却截止**：任何 resume 变体（含旧版）都写不出这种关系
@@ -879,6 +894,10 @@ export function careTaskBudgetDueAtReportable(task: CareTaskState, timing: {
   thresholdSource?: CareSource;
 }, reportable: { paused?: boolean } = {}): number | null {
   if (reportable.paused === true) return null; // ① 冻结中：没有可证的未来预算时刻
+  // ④ 复查阶段没有独立预算目标：`lastCareAt + 复查间隔` 只属于 next_due_at。
+  // 首次未关照（lastCareAt === null）即使旧快照缺 budgetCountdown=true 也仍视为预算阶段。
+  const inIndependentBudgetPhase = task.budgetCountdown === true || task.lastCareAt === null;
+  if (!inIndependentBudgetPhase) return null;
   const cooldownDue = careCooldownDueAt(task);
   if (cooldownDue === null) return careTaskBudgetDueAt(task, timing); // 无冷却 ⇒ 纯
   const anchor = typeof task.scheduleDueAt === "number" && Number.isFinite(task.scheduleDueAt)
@@ -1831,6 +1850,8 @@ export interface CareStatusProjection {
     budget_source: CareBudgetSource | "unknown";
     /** 起始预算之后的变化时间线（只读；起点见 started_at/budget_seconds）。 */
     budget_changes: CareBudgetChange[];
+    /** 变化时间线是否因有界上限被截断（true = 中间有未展示变化；起始值不受影响）。 */
+    budget_changes_truncated: boolean;
     natural_ms: number | null;
     deviation_ms: number | null;
     /** 偏差口径（当前仅 `initial`：相对起始预算）；null = 偏差不可算。 */
@@ -1955,6 +1976,7 @@ export function careStatusProjection(args: {
       budget_changes: (Array.isArray(r.budgetChanges) ? r.budgetChanges : []).map((c) => ({
         at: c.at, seconds: c.seconds, source: c.source,
       })),
+      budget_changes_truncated: r.budgetChangesTruncated === true,
       natural_ms: r.naturalMs,
       // 偏差语义显式：相对**起始**预算；预算变化时间线单独给出，绝不冒充整轮单值。
       deviation_ms: r.deviationMs,

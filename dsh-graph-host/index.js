@@ -1992,8 +1992,11 @@ export function createCareRuntime(options = {}) {
   };
 
   const numberOr = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  /** 预算历史有界上限：1 条真实起点 + 最近 31 条变化（总计 32）。 */
   const BUDGET_HISTORY_LIMIT = 32;
+  const BUDGET_CHANGE_LIMIT = BUDGET_HISTORY_LIMIT - 1;
   const BUDGET_SOURCES = ["goal", "project_explicit", "global_explicit", "global_default"];
+  /** 只校验/归一，**不排序**：同毫秒的多次变化必须保留真实追加/事件顺序（不得按值猜）。 */
   const normalizeBudgetHistory = (raw) => {
     if (!Array.isArray(raw)) return [];
     const out = [];
@@ -2005,8 +2008,19 @@ export function createCareRuntime(options = {}) {
       if (!Number.isFinite(at) || seconds === null || !source) continue;
       out.push({ at, seconds, source });
     }
-    out.sort((a, b) => a.at - b.at);
-    return out.slice(-BUDGET_HISTORY_LIMIT);
+    return out;
+  };
+  /** 上限裁剪：**恒保留首项（真实起点）**，只淘汰最旧的变化；返回截断标志。 */
+  const capBudgetHistory = (history) => {
+    const arr = Array.isArray(history) ? history : [];
+    if (arr.length <= BUDGET_HISTORY_LIMIT) return { history: arr, truncated: false };
+    return { history: [arr[0], ...arr.slice(1).slice(-BUDGET_CHANGE_LIMIT)], truncated: true };
+  };
+  /** run 只存变化时间线（起点另存 budgetSeconds/source）：超限时保留最近 31 条并标截断。 */
+  const capBudgetChanges = (changes) => {
+    const arr = Array.isArray(changes) ? changes : [];
+    if (arr.length <= BUDGET_CHANGE_LIMIT) return { changes: arr, truncated: false };
+    return { changes: arr.slice(-BUDGET_CHANGE_LIMIT), truncated: true };
   };
   /** 本轮**起始**预算（只读历史首项）；没有可信起点 ⇒ unknown（绝不拿当前值回填）。 */
   const budgetInitialOf = (task) => {
@@ -2017,13 +2031,18 @@ export function createCareRuntime(options = {}) {
     const history = Array.isArray(task?.budgetHistory) ? task.budgetHistory : [];
     return history.length > 1 ? history.slice(1) : [];
   };
-  /** 只在**已存在可信起点**时追加一次生效预算变化；无起点（旧快照）保持 unknown。 */
+  /**
+   * 只在**已存在可信起点**时追加一次生效预算变化；无起点（旧快照）保持 unknown。
+   * 有界模型：起点恒保留 + 最近 31 条变化；淘汰过变化 ⇒ `truncated=true`（只增不减）。
+   */
   const recordBudgetChange = (task, at, seconds, source) => {
     const history = Array.isArray(task?.budgetHistory) ? task.budgetHistory : null;
-    if (!history || history.length === 0) return history ?? undefined;
+    const priorTruncated = task?.budgetHistoryTruncated === true;
+    if (!history || history.length === 0) return { history: history ?? undefined, truncated: priorTruncated };
     const last = history[history.length - 1];
-    if (last.seconds === seconds && last.source === source) return history;
-    return [...history, { at, seconds, source }].slice(-BUDGET_HISTORY_LIMIT);
+    if (last.seconds === seconds && last.source === source) return { history, truncated: priorTruncated };
+    const capped = capBudgetHistory([...history, { at, seconds, source }]);
+    return { history: capped.history, truncated: priorTruncated || capped.truncated };
   };
   const normalizePersistedTask = (raw) => {
     if (!raw || typeof raw !== "object") return null;
@@ -2033,6 +2052,7 @@ export function createCareRuntime(options = {}) {
     if (!child || !attempt || !goal) return null;
     const reason = raw.humanReason === "no_response_limit" || raw.humanReason === "no_progress_limit"
       ? raw.humanReason : null;
+    const historyCap = capBudgetHistory(normalizeBudgetHistory(raw.budgetHistory));
     return {
       child,
       attempt,
@@ -2062,7 +2082,8 @@ export function createCareRuntime(options = {}) {
       runStartExact: raw.runStartExact === true,
       // g-612 返工：只读观察/预算历史/调整后冷却（旧快照缺省 ⇒ unknown，不回填）。
       lastObservedAt: raw.lastObservedAt === null || raw.lastObservedAt === undefined ? null : numberOr(raw.lastObservedAt, null),
-      budgetHistory: normalizeBudgetHistory(raw.budgetHistory),
+      budgetHistory: historyCap.history,
+      budgetHistoryTruncated: raw.budgetHistoryTruncated === true || historyCap.truncated,
       cooldownDueAt: raw.cooldownDueAt === null || raw.cooldownDueAt === undefined ? null : numberOr(raw.cooldownDueAt, null),
       frozenCooldownRemainingMs: raw.frozenCooldownRemainingMs === null || raw.frozenCooldownRemainingMs === undefined
         ? null : Math.max(0, numberOr(raw.frozenCooldownRemainingMs, 0)),
@@ -2076,6 +2097,7 @@ export function createCareRuntime(options = {}) {
     const goal = String(raw.goal ?? "");
     if (!id || !child || !attempt || !goal) return null;
     const numOrNull = (v) => (v === null || v === undefined ? null : numberOr(v, null));
+    const changesCap = capBudgetChanges(normalizeBudgetHistory(raw.budgetChanges));
     return {
       id,
       goal, attempt, child,
@@ -2090,7 +2112,8 @@ export function createCareRuntime(options = {}) {
       budgetSeconds: normalizeCareSeconds(raw.budgetSeconds),
       budgetSource: BUDGET_SOURCES.includes(String(raw.budgetSource))
         ? raw.budgetSource : null,
-      budgetChanges: normalizeBudgetHistory(raw.budgetChanges),
+      budgetChanges: changesCap.changes,
+      budgetChangesTruncated: raw.budgetChangesTruncated === true || changesCap.truncated,
       naturalMs: numOrNull(raw.naturalMs),
       deviationMs: numOrNull(raw.deviationMs),
       overBudget: typeof raw.overBudget === "boolean" ? raw.overBudget : null,
@@ -2212,6 +2235,7 @@ export function createCareRuntime(options = {}) {
           budgetSeconds: initial ? initial.seconds : null,
           budgetSource: initial ? initial.source : null,
           budgetChanges: budgetChangesOf(t),
+          budgetChangesTruncated: t.budgetHistoryTruncated === true,
           naturalMs: null, deviationMs: null, overBudget: null,
           observationInterrupted: true,
           observationGaps: gaps,
@@ -2707,6 +2731,7 @@ export function createCareRuntime(options = {}) {
       budgetSeconds,
       budgetSource,
       budgetChanges,
+      budgetChangesTruncated: task.budgetHistoryTruncated === true,
       naturalMs,
       deviationMs,
       overBudget: deviationMs == null ? null : deviationMs > 0,
@@ -2721,6 +2746,7 @@ export function createCareRuntime(options = {}) {
       runStartSource: null,
       runStartExact: false,
       budgetHistory: undefined,
+      budgetHistoryTruncated: false,
       cooldownDueAt: task.cooldownDueAt ?? null,
       // g-612 att008：暂停中自然 idle ⇒ dormant 必须带走**暂停时冻结的冷却剩余**
       //（否则 resume 后只有早已被暂停墙钟耗掉的绝对时刻，冷却被静默丢失）。
@@ -2764,6 +2790,7 @@ export function createCareRuntime(options = {}) {
       budgetSeconds: initial ? initial.seconds : null,
       budgetSource: initial ? initial.source : null,
       budgetChanges: budgetChangesOf(task),
+      budgetChangesTruncated: task.budgetHistoryTruncated === true,
       naturalMs: null,
       deviationMs: null,
       overBudget: null,
@@ -2778,6 +2805,7 @@ export function createCareRuntime(options = {}) {
       runStartSource: null,
       runStartExact: false,
       budgetHistory: undefined,
+      budgetHistoryTruncated: false,
       frozenCooldownRemainingMs: null,
     };
     rememberDormant(entry, cleared);
@@ -2869,14 +2897,15 @@ export function createCareRuntime(options = {}) {
     );
     const pausedRef = entry.group.pausedAt ?? opts.at;
     const cooldownRemaining = entry.group.paused === true ? cooldownRemainingAt(task, pausedRef) : 0;
-    const budgetHistory = recordBudgetChange(task, opts.at, budget.seconds, budget.source);
+    const budgetRecord = recordBudgetChange(task, opts.at, budget.seconds, budget.source);
     const updated = {
       ...task,
       budgetBaseAt: opts.at,
       budgetCountdown: true,
       budgetEffectiveSeconds: budget.seconds,
       budgetEffectiveSource: budget.source,
-      budgetHistory,
+      budgetHistory: budgetRecord.history,
+      budgetHistoryTruncated: budgetRecord.truncated,
       ...(entry.group.paused === true
         // 暂停中消息冻结「完整新预算」与既有冷却剩余中的较晚者：不得让暂停墙钟偷走冷却。
         ? { frozenRemainingMs: Math.max(budgetMs, cooldownRemaining), frozenCooldownRemainingMs: cooldownRemaining, scheduleDueAt: null }
@@ -2908,12 +2937,13 @@ export function createCareRuntime(options = {}) {
     const superseded = forced
       ? markOpenInspectionTargetsStale(entry, (t) => t.goal === task.goal, "superseded_by_budget", opts.at, "goal_budget")
       : [];
-    const budgetHistory = recordBudgetChange(task, opts.at, budget.seconds, budget.source);
+    const budgetRecord = recordBudgetChange(task, opts.at, budget.seconds, budget.source);
     let updated = {
       ...task,
       budgetEffectiveSeconds: budget.seconds,
       budgetEffectiveSource: budget.source,
-      budgetHistory,
+      budgetHistory: budgetRecord.history,
+      budgetHistoryTruncated: budgetRecord.truncated,
     };
     if (entry.group.paused === true) {
       if (forced || inBudgetPhase) {
@@ -3026,6 +3056,7 @@ export function createCareRuntime(options = {}) {
           t = {
             ...t,
             budgetHistory: [{ at: t.runStartedAt ?? at, seconds: effAtStart.seconds, source: effAtStart.source }],
+            budgetHistoryTruncated: false,
           };
         }
         if (pendingMsg && pendingMsg.attempt === s.attempt && pendingMsg.bindingVersion === s.bindingVersion) {
@@ -3114,6 +3145,7 @@ export function createCareRuntime(options = {}) {
           t = {
             ...t,
             budgetHistory: [{ at: t.runStartedAt ?? at, seconds: eff.seconds, source: eff.source }],
+            budgetHistoryTruncated: false,
           };
         }
         if (entry.group.paused === true) {
@@ -4236,6 +4268,7 @@ export function createCareRuntime(options = {}) {
               const updated = {
                 ...base,
                 budgetHistory: [{ at, seconds: effAtStart.seconds, source: effAtStart.source }],
+                budgetHistoryTruncated: false,
               };
               childEntry.tasks.set(key, updated);
               appendRunStarted(childEntry, updated, timing);
