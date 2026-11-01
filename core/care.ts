@@ -561,6 +561,13 @@ export interface CareRunRecord {
   budgetChanges?: CareBudgetChange[];
   /** `budgetChanges` 是否因有界上限被截断（`true` = 中间有未展示的变化，起点不受影响）。 */
   budgetChangesTruncated?: boolean;
+  /**
+   * 本轮预算历史是否**不完整/起点未知**（g-612 att011）：`true` = 起始预算不可证（例如旧快照/
+   * 观察开始晚于 run 起点）或存在未能可靠归时点的生效变化 ⇒ 公开 `budgetSeconds` 为 null 或
+   * `budgetChanges` 只是可观察到的部分，**不得**把空 changes 解读为「整轮没有变化」。
+   * 与 `budgetChangesTruncated`（有界上限淘汰）是正交语义。
+   */
+  budgetHistoryIncomplete?: boolean;
   /** 已停止时的自然经过时间（ms）；任一未知时 null。跨未观测空窗时仍为墙钟差，见 `naturalExact`。 */
   naturalMs: number | null;
   /** 自然经过时间 − **起始**预算（ms）；任一未知时 null（语义见 `deviationBasis`）。 */
@@ -1977,6 +1984,8 @@ export function careStatusProjection(args: {
         at: c.at, seconds: c.seconds, source: c.source,
       })),
       budget_changes_truncated: r.budgetChangesTruncated === true,
+      // g-612 att011：起点/变化时间线是否不完整（`true` 时不得把空 changes 解读成“整轮未变”）。
+      budget_history_incomplete: r.budgetHistoryIncomplete === true || r.budgetSeconds === null,
       natural_ms: r.naturalMs,
       // 偏差语义显式：相对**起始**预算；预算变化时间线单独给出，绝不冒充整轮单值。
       deviation_ms: r.deviationMs,

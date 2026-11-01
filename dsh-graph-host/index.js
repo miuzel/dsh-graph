@@ -2044,6 +2044,20 @@ export function createCareRuntime(options = {}) {
     const capped = capBudgetHistory([...history, { at, seconds, source }]);
     return { history: capped.history, truncated: priorTruncated || capped.truncated };
   };
+  /**
+   * g-612 att011：**起点不可证**（旧快照/观察晚于 run 起点）的轮次里，真实 owner 通过公开入口
+   * 修改 goal 预算仍然发生了（`notifyGoalBudgetChanged` 带真实生效时点）。不能因为 initial 未知
+   * 就把这些真实变化全部丢掉并对外表现为「整轮未变更」：按真实时点/顺序单独记为**有界**观察列表
+   * （最多 31 条 + truncated），run 上同时标 `budget_history_incomplete=true` 明示起点缺失。
+   */
+  const recordUnknownInitialBudgetChange = (task, at, seconds, source) => {
+    const list = Array.isArray(task?.budgetUnknownChanges) ? task.budgetUnknownChanges : [];
+    const priorTruncated = task?.budgetUnknownChangesTruncated === true;
+    const last = list.length ? list[list.length - 1] : null;
+    if (last && last.seconds === seconds && last.source === source) return null;
+    const capped = capBudgetChanges([...list, { at, seconds, source }]);
+    return { changes: capped.changes, truncated: priorTruncated || capped.truncated };
+  };
   const normalizePersistedTask = (raw) => {
     if (!raw || typeof raw !== "object") return null;
     const child = String(raw.child ?? "");
@@ -2084,6 +2098,10 @@ export function createCareRuntime(options = {}) {
       lastObservedAt: raw.lastObservedAt === null || raw.lastObservedAt === undefined ? null : numberOr(raw.lastObservedAt, null),
       budgetHistory: historyCap.history,
       budgetHistoryTruncated: raw.budgetHistoryTruncated === true || historyCap.truncated,
+      // g-612 att011：起点不可证时的真实可见预算变化（有界）与“历史不完整”标记。
+      budgetUnknownChanges: capBudgetChanges(normalizeBudgetHistory(raw.budgetUnknownChanges)).changes,
+      budgetUnknownChangesTruncated: raw.budgetUnknownChangesTruncated === true,
+      budgetHistoryIncomplete: raw.budgetHistoryIncomplete === true,
       cooldownDueAt: raw.cooldownDueAt === null || raw.cooldownDueAt === undefined ? null : numberOr(raw.cooldownDueAt, null),
       frozenCooldownRemainingMs: raw.frozenCooldownRemainingMs === null || raw.frozenCooldownRemainingMs === undefined
         ? null : Math.max(0, numberOr(raw.frozenCooldownRemainingMs, 0)),
@@ -2114,6 +2132,7 @@ export function createCareRuntime(options = {}) {
         ? raw.budgetSource : null,
       budgetChanges: changesCap.changes,
       budgetChangesTruncated: raw.budgetChangesTruncated === true || changesCap.truncated,
+      budgetHistoryIncomplete: raw.budgetHistoryIncomplete === true || normalizeCareSeconds(raw.budgetSeconds) === null,
       naturalMs: numOrNull(raw.naturalMs),
       deviationMs: numOrNull(raw.deviationMs),
       overBudget: typeof raw.overBudget === "boolean" ? raw.overBudget : null,
@@ -2234,8 +2253,9 @@ export function createCareRuntime(options = {}) {
           stopExact: false,
           budgetSeconds: initial ? initial.seconds : null,
           budgetSource: initial ? initial.source : null,
-          budgetChanges: budgetChangesOf(t),
-          budgetChangesTruncated: t.budgetHistoryTruncated === true,
+          budgetChanges: initial ? budgetChangesOf(t) : (Array.isArray(t.budgetUnknownChanges) ? t.budgetUnknownChanges : []),
+          budgetChangesTruncated: initial ? t.budgetHistoryTruncated === true : t.budgetUnknownChangesTruncated === true,
+          budgetHistoryIncomplete: !initial || t.budgetHistoryIncomplete === true,
           naturalMs: null, deviationMs: null, overBudget: null,
           observationInterrupted: true,
           observationGaps: gaps,
@@ -2521,6 +2541,74 @@ export function createCareRuntime(options = {}) {
   };
 
   /**
+   * g-612 att011：真实 `agent/status=running` 发生时**只读捕获当时** board 上每个 in_progress
+   * goal 的生效预算/来源（goal 覆盖 > 项目 > 全局）。
+   *
+   * 为什么按 goal 维度而不是 binding：真实宿主在 spawn 之后才把 child_id 写入 attempt.md，故
+   * running 事件当下 `attempt_binding` 往往仍为 null；但 goal 已 in_progress 且预算真源可读。
+   * 这里只保留 `{goalId: {seconds, source}}` 极少 metadata（不存描述/标题/消息正文），
+   * reconcile 时按 run 的真实 goal 取用；payload 不可读/无法解析 ⇒ null（起点未知，不猜）。
+   */
+  const captureStartBudgets = (entry) => {
+    let payload = null;
+    try { payload = typeof readBoardPayload === "function" ? readBoardPayload(entry.root) : null; } catch { payload = null; }
+    if (!payload || typeof payload !== "object") return null;
+    const goals = enumerateBoardGoals(payload);
+    if (!goals) return null;
+    let timing = null;
+    try { timing = timingForEntry(entry); } catch { timing = null; }
+    const out = new Map();
+    for (const g of goals) {
+      if (!g || String(g?.status) !== "in_progress" || g?.archived === true) continue;
+      const id = String(g?.id ?? "");
+      if (!id) continue;
+      const budgetSeconds = normalizeCareSeconds(g?.budget_seconds);
+      if (budgetSeconds !== null) {
+        out.set(id, { seconds: budgetSeconds, source: "goal" });
+      } else if (timing) {
+        // 继承项目/全局默认：仍是**事件当时**的配置，不用稍后采样时的配置冒充。
+        const eff = careEffectiveBudgetSeconds({ budgetSeconds: null }, timing);
+        out.set(id, { seconds: eff.seconds, source: eff.source });
+      }
+    }
+    return out;
+  };
+
+  /**
+   * g-612 att011：新 run 的只读预算历史 = **起点事件时刻**捕获的生效预算 + 起跑后真实发生的
+   * goal 预算编辑（真实通知时点、按事件顺序、有界 32）+ 首次采样发现的未观测差异。
+   *
+   * 无可证起点快照（payload 不可读 / goal 不在起点快照 / 采样 attempt 起点晚于该事件）⇒ 空历史：
+   * initial/source 如实 unknown，绝不用首次采样时的当前值回填。首次采样发现「最后记录值 ≠ 当前
+   * 生效值」（未观测到的生效变化，时点不可证）⇒ 不伪造条目，只把该轮 `budgetHistoryIncomplete`
+   * 置 true 明示时间线不完整。
+   */
+  const historyForNewRun = (pendingRun, sampled, effAtSampling) => {
+    const startBudgets = pendingRun?.startBudgets instanceof Map ? pendingRun.startBudgets : null;
+    const goalId = String(sampled?.goal ?? "");
+    const initial = startBudgets && goalId ? startBudgets.get(goalId) ?? null : null;
+    if (!initial) return { history: [], truncated: false, incomplete: true };
+    // 同一 child 的本次 running 事件：采样到的 attempt 起点（真实 attempt.started 时点）不能晚于它。
+    const attemptStartedAt = Number(sampled?.startedAt);
+    if (Number.isFinite(attemptStartedAt) && Number(pendingRun.at) < attemptStartedAt) {
+      return { history: [], truncated: false, incomplete: true };
+    }
+    const rec = pendingRun.changes instanceof Map ? pendingRun.changes.get(goalId) : null;
+    const changes = Array.isArray(rec?.list) ? rec.list.slice(-BUDGET_CHANGE_LIMIT) : [];
+    let history = [{ at: pendingRun.at, seconds: initial.seconds, source: initial.source }, ...changes];
+    let truncated = rec?.truncated === true;
+    let incomplete = false;
+    const last = history[history.length - 1];
+    if (last.seconds !== effAtSampling.seconds || last.source !== effAtSampling.source) {
+      // 存在未观测到的生效变化（例如绕过 goal 工具的本地改写）：真实生效时点不可证 ⇒
+      // 不伪造一条 at=采样now 的变化，只如实把该轮预算历史标为不完整。
+      incomplete = true;
+    }
+    const capped = capBudgetHistory(history);
+    return { history: capped.history, truncated: truncated || capped.truncated, incomplete };
+  };
+
+  /**
    * 采样当前组的**真实运行中任务**（catalog ∩ live registry ∩ ownership ∩ running）。
    * `ok=false` ⇒ 运行态不可确认（fail-safe：不投递）。
    */
@@ -2711,7 +2799,15 @@ export function createCareRuntime(options = {}) {
     const initial = budgetInitialOf(task);
     const budgetSeconds = initial ? initial.seconds : null;
     const budgetSource = initial ? initial.source : null;
-    const budgetChanges = budgetChangesOf(task);
+    // g-612 att011：起点不可证 ⇒ 展示**真实观察到**的后续预算变化（有界），并标历史不完整；
+    // 绝不因 initial 未知就把真实变化静默丢成“整轮未变更”。
+    const budgetChanges = initial
+      ? budgetChangesOf(task)
+      : (Array.isArray(task.budgetUnknownChanges) ? task.budgetUnknownChanges : []);
+    const budgetChangesTruncated = initial
+      ? task.budgetHistoryTruncated === true
+      : task.budgetUnknownChangesTruncated === true;
+    const budgetHistoryIncomplete = budgetSeconds === null || task.budgetHistoryIncomplete === true;
     const naturalMs = startedAt == null || stoppedAt == null ? null : Math.max(0, stoppedAt - startedAt);
     const deviationMs = naturalMs == null || budgetSeconds == null ? null : naturalMs - budgetSeconds * 1000;
     const observationInterrupted = prior?.observationInterrupted === true;
@@ -2731,7 +2827,8 @@ export function createCareRuntime(options = {}) {
       budgetSeconds,
       budgetSource,
       budgetChanges,
-      budgetChangesTruncated: task.budgetHistoryTruncated === true,
+      budgetChangesTruncated,
+      budgetHistoryIncomplete,
       naturalMs,
       deviationMs,
       overBudget: deviationMs == null ? null : deviationMs > 0,
@@ -2747,6 +2844,9 @@ export function createCareRuntime(options = {}) {
       runStartExact: false,
       budgetHistory: undefined,
       budgetHistoryTruncated: false,
+      budgetUnknownChanges: undefined,
+      budgetUnknownChangesTruncated: false,
+      budgetHistoryIncomplete: false,
       cooldownDueAt: task.cooldownDueAt ?? null,
       // g-612 att008：暂停中自然 idle ⇒ dormant 必须带走**暂停时冻结的冷却剩余**
       //（否则 resume 后只有早已被暂停墙钟耗掉的绝对时刻，冷却被静默丢失）。
@@ -2789,8 +2889,13 @@ export function createCareRuntime(options = {}) {
       stopExact: false,
       budgetSeconds: initial ? initial.seconds : null,
       budgetSource: initial ? initial.source : null,
-      budgetChanges: budgetChangesOf(task),
-      budgetChangesTruncated: task.budgetHistoryTruncated === true,
+      budgetChanges: initial
+        ? budgetChangesOf(task)
+        : (Array.isArray(task.budgetUnknownChanges) ? task.budgetUnknownChanges : []),
+      budgetChangesTruncated: initial
+        ? task.budgetHistoryTruncated === true
+        : task.budgetUnknownChangesTruncated === true,
+      budgetHistoryIncomplete: !initial || task.budgetHistoryIncomplete === true,
       naturalMs: null,
       deviationMs: null,
       overBudget: null,
@@ -2806,6 +2911,9 @@ export function createCareRuntime(options = {}) {
       runStartExact: false,
       budgetHistory: undefined,
       budgetHistoryTruncated: false,
+      budgetUnknownChanges: undefined,
+      budgetUnknownChangesTruncated: false,
+      budgetHistoryIncomplete: false,
       frozenCooldownRemainingMs: null,
     };
     rememberDormant(entry, cleared);
@@ -2938,12 +3046,27 @@ export function createCareRuntime(options = {}) {
       ? markOpenInspectionTargetsStale(entry, (t) => t.goal === task.goal, "superseded_by_budget", opts.at, "goal_budget")
       : [];
     const budgetRecord = recordBudgetChange(task, opts.at, budget.seconds, budget.source);
+    // g-612 att011：起点不可证（空历史）时，真实 owner 的显式 goal 编辑仍按真实时点/顺序留痕，
+    // 供停止后的 run 如实展示“可观察到的变化 + 历史不完整”，而不是静默成 changes=[]。
+    // 只接受**真实编辑通知**（notifyGoalBudgetChanged 的真实时点）；reconcile 采样发现的差异时点
+    // 不可证 ⇒ 不伪称精确时点（该轮已由 budgetHistoryIncomplete 标为不完整）。
+    const unknownRec = opts.observedEdit === true && forced === true
+      && (!Array.isArray(task.budgetHistory) || task.budgetHistory.length === 0)
+      ? recordUnknownInitialBudgetChange(task, opts.at, budget.seconds, budget.source)
+      : null;
     let updated = {
       ...task,
       budgetEffectiveSeconds: budget.seconds,
       budgetEffectiveSource: budget.source,
       budgetHistory: budgetRecord.history,
       budgetHistoryTruncated: budgetRecord.truncated,
+      ...(unknownRec
+        ? {
+          budgetUnknownChanges: unknownRec.changes,
+          budgetUnknownChangesTruncated: unknownRec.truncated,
+          budgetHistoryIncomplete: true,
+        }
+        : {}),
     };
     if (entry.group.paused === true) {
       if (forced || inBudgetPhase) {
@@ -3052,19 +3175,19 @@ export function createCareRuntime(options = {}) {
         }
         // g-612 返工：新一轮从**起点生效预算**开始记录只读历史；续跑轮保留既有起点/变化。
         // g-612 att010：只有**起点可证**（真实 agent_status / attempt_record）才允许建立初始预算。
-        // 旧快照/仅采样看到 running 但无法证实何时开始 ⇒ 起点与预算历史都保持 unknown：
-        // 绝不把采样 now / 当前 goal 值回填成既往 run 的初始，也不让稍后第一条消息/预算编辑
-        // 冒充初始（recordBudgetChange 对空历史不追加）。
+        // g-612 att011：起点预算只能取真实 running 事件时刻的快照；采样当前值绝不冒充起点
+        //（attempt_record 近似起点同样没有当时的预算证据 ⇒ 空历史/unknown）。
         if (newRun) {
           if (t.runStartedAt != null) {
-            const effAtStart = runBudgetOf(t, timing);
+            const seeded = historyForNewRun(pendingRun, s, runBudgetOf(t, timing));
             t = {
               ...t,
-              budgetHistory: [{ at: t.runStartedAt, seconds: effAtStart.seconds, source: effAtStart.source }],
-              budgetHistoryTruncated: false,
+              budgetHistory: seeded.history,
+              budgetHistoryTruncated: seeded.truncated,
+              budgetHistoryIncomplete: seeded.incomplete === true,
             };
           } else {
-            t = { ...t, budgetHistory: [], budgetHistoryTruncated: false };
+            t = { ...t, budgetHistory: [], budgetHistoryTruncated: false, budgetHistoryIncomplete: true };
           }
         }
         if (pendingMsg && pendingMsg.attempt === s.attempt && pendingMsg.bindingVersion === s.bindingVersion) {
@@ -3136,6 +3259,21 @@ export function createCareRuntime(options = {}) {
           runStartExact,
           lastObservedAt: at,
         };
+        // g-612 att011：起点预算只来自**真实 running 事件时刻**捕获的快照（+ 之后真实发生的
+        // goal 编辑），绝不用首次采样的当前值回填（owner 可能在 running 后、首采样前改预算）。
+        // 无快照/不可证 ⇒ 空历史（initial/source unknown），保持 att010「不伪造既往起点」语义。
+        const effAtSample = runBudgetOf(t, timing);
+        if (t.runStartedAt != null) {
+          const seeded = historyForNewRun(pendingRun, s, effAtSample);
+          t = {
+            ...t,
+            budgetHistory: seeded.history,
+            budgetHistoryTruncated: seeded.truncated,
+            budgetHistoryIncomplete: seeded.incomplete === true,
+          };
+        } else {
+          t = { ...t, budgetHistory: [], budgetHistoryTruncated: false, budgetHistoryIncomplete: true };
+        }
         if (pendingMsg && pendingMsg.attempt === s.attempt && pendingMsg.bindingVersion === s.bindingVersion) {
           t = applySupervisorMessageToTask(entry, t, { at: pendingMsg.at, messageId: pendingMsg.messageId, timing });
           entry.pendingMessageBases.delete(s.child);
@@ -3148,20 +3286,6 @@ export function createCareRuntime(options = {}) {
         }
         const eff = runBudgetOf(t, timing);
         t = { ...t, budgetEffectiveSeconds: eff.seconds, budgetEffectiveSource: eff.source };
-        // g-612 返工：新一轮的只读预算历史从**起点生效预算**开始（不是停止时/当前 goal 值）。
-        // g-612 att010：起点不可证（旧快照/仅采样 running）⇒ 保持空历史（initial/source unknown），
-        // 不用采样 now + 当前预算补造既往 run 的初始预算。
-        if (t.runStartedAt != null) {
-          if (!Array.isArray(t.budgetHistory) || t.budgetHistory.length === 0) {
-            t = {
-              ...t,
-              budgetHistory: [{ at: t.runStartedAt, seconds: eff.seconds, source: eff.source }],
-              budgetHistoryTruncated: false,
-            };
-          }
-        } else {
-          t = { ...t, budgetHistory: [], budgetHistoryTruncated: false };
-        }
         if (entry.group.paused === true) {
           // 新任务在暂停期间被采样：冻结「从预算基准起已消耗后的剩余」（g506 语义）；
           // 但若刚有主管消息（pending message 已置满额），保留消息重置后的完整预算。
@@ -4275,14 +4399,20 @@ export function createCareRuntime(options = {}) {
           if (t.child === childId) { task = t; key = k; break; }
         }
         if (status === "running") {
+          // g-612 att011：在**事件当时**捕获生效预算快照，作为该 child 本轮的可证起点预算；
+          // 绝不等到首次采样时再拿当前值当起点（owner 可能在 running 后、首采样前改预算）。
+          const startBudgets = captureStartBudgets(childEntry);
           if (task) {
-            if (task.runStartedAt == null) {
+            if (task.runStartedAt == null && !task.runStartSource) {
+              // 上一轮已结束（runStartSource 被清空）⇒ 本次 running 是**新 run 的可证起点**。
+              // 旧快照 runStartSource="unknown"（旧 05f 在途轮）不得把本次观察伪称起点。
+              const initial = startBudgets?.get(String(task.goal ?? "")) ?? null;
               const base = { ...task, runStartedAt: at, runStartSource: "agent_status", runStartExact: true, lastObservedAt: at };
-              const effAtStart = runBudgetOf(base, timing);
               const updated = {
                 ...base,
-                budgetHistory: [{ at, seconds: effAtStart.seconds, source: effAtStart.source }],
+                budgetHistory: initial ? [{ at, seconds: initial.seconds, source: initial.source }] : [],
                 budgetHistoryTruncated: false,
+                budgetHistoryIncomplete: !initial,
               };
               childEntry.tasks.set(key, updated);
               appendRunStarted(childEntry, updated, timing);
@@ -4290,7 +4420,7 @@ export function createCareRuntime(options = {}) {
               childEntry.tasks.set(key, { ...task, lastObservedAt: at });
             }
           } else {
-            childEntry.pendingRunStarts.set(childId, { at, exact: true });
+            childEntry.pendingRunStarts.set(childId, { at, exact: true, startBudgets, changes: new Map() });
             if (childEntry.pendingRunStarts.size > 64) {
               const oldest = childEntry.pendingRunStarts.keys().next().value;
               if (oldest !== undefined) childEntry.pendingRunStarts.delete(oldest);
@@ -4405,12 +4535,33 @@ export function createCareRuntime(options = {}) {
       // 同值重复设置（goal 真源未变）不是「新编辑」：不得反复重置截止/重复标记巡检。
       if ((normalizeCareSeconds(task.budgetSeconds) ?? null) === (budget ?? null)) continue;
       const updated = applyBudgetChangeToTask(entry, { ...task, budgetSeconds: budget }, {
-        at, timing, forceCountdown: true,
+        at, timing, forceCountdown: true, observedEdit: true,
       });
       entry.tasks.set(key, updated);
       changed = true;
     }
-    if (changed) scheduleEntry(entry);
+    // g-612 att011：首次 care 采样**之前**发生的真实 goal 预算编辑必须进入 pending run 的起点
+    // 时间线（真实通知时点 = 可证生效时点，按发生顺序），不得等首次采样把多次修改压成一条最终值。
+    // 只记录到确实在起点快照里捕获过该 goal 的 pending run；同值不新增；有界 31 条 + truncated。
+    const eff = careEffectiveBudgetSeconds({ budgetSeconds: budget }, timing);
+    let pendingChanged = false;
+    for (const pending of entry.pendingRunStarts.values()) {
+      if (!(pending?.startBudgets instanceof Map)) continue;
+      const start = pending.startBudgets.get(goal);
+      if (!start || !(pending.changes instanceof Map)) continue;
+      const rec = pending.changes.get(goal) ?? { list: [], truncated: false };
+      const last = rec.list.length ? rec.list[rec.list.length - 1] : start;
+      if (last && last.seconds === eff.seconds && last.source === eff.source) continue;
+      let list = [...rec.list, { at, seconds: eff.seconds, source: eff.source }];
+      let truncated = rec.truncated === true;
+      if (list.length > BUDGET_CHANGE_LIMIT) {
+        list = list.slice(-BUDGET_CHANGE_LIMIT);
+        truncated = true;
+      }
+      pending.changes.set(goal, { list, truncated });
+      pendingChanged = true;
+    }
+    if (changed || pendingChanged) scheduleEntry(entry);
     return { ok: true, changed };
   };
 
