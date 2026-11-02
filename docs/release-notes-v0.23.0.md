@@ -20,12 +20,12 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 - **发布产物**：
   - 文件名：`dsh-graph-0.23.0.tgz`
-  - 大小：1,677,228 字节（包内文件 84 项，解包大小 5.1 MB）
-  - SHA-256：`139a8ed07979d8dd83df879bd58d96dbcb74f26200bc465ea6bd76603f1855e8`
-  - SHA-1：`58edc90bda49d9909229492e53693d0b7c80c14a`
+  - 大小：1,677,213 字节（包内文件 84 项，解包大小 5.1 MB）
+  - SHA-256：`8591dd7aa42c38d6c95c3056581525e141457b0051c7a17ddafa2151ed809937`
+  - SHA-1：`8c66e2da23a98a57e492340369963b27898673c3`
 - **平台真机门禁**：
   - Linux / WSL2: 2898/2898 单元与集成测试全绿；
-  - 原生 Windows: 详见 [`docs/platform-gate.md`](platform-gate.md)；
+  - 原生 Windows: ✅ **已实测通过（2026-11-02，win32/x64 + Node v24.21.0，宿主 `0.2.1-rc.5`，通过 22 / 失败 0 / 告警 0）**，详见 [`docs/platform-gate.md`](platform-gate.md) §7.13；
   - 原生 macOS: 本版未验证。
 - **发布记录**：详见 [`docs/release-checklist-v0.23.0.md`](release-checklist-v0.23.0.md)。
 - **可复现性**：源码经 `bash scripts/build.sh` 原子构建，产物文件与发布包内容逐字相等。
