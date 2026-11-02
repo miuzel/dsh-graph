@@ -3545,9 +3545,22 @@ async function tier45Boot(ctx) {
   // ---- T5 REST 冒烟：路由存在 === 插件真的 apply 了 ----
   const origin = new URL(url).origin;
   const ws = encodeURIComponent(ctx.workspace);
+
+  // g-507：宿主 REST 入口已受认证保护。若实例启动输出带有 launch token，
+  // 先带 token 访问获取宿主铸造的 session cookie，后续 probe 携带该 cookie 鉴权。
+  let authCookie = "";
+  try {
+    const launchRes = await fetch(url, { redirect: "manual" });
+    const setCookie = launchRes.headers.get("set-cookie");
+    if (setCookie) {
+      authCookie = setCookie.split(";")[0].trim();
+    }
+  } catch {}
+
   const probe = async (path, label, validate) => {
     try {
-      const res = await fetch(`${origin}${path}`, { redirect: "manual" });
+      const headers = authCookie ? { cookie: authCookie } : {};
+      const res = await fetch(`${origin}${path}`, { headers, redirect: "manual" });
       if (res.status !== 200) {
         record("T5", label, "FAIL", `HTTP ${res.status}`);
         return null;
