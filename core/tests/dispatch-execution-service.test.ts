@@ -18,13 +18,19 @@ import {
   loadGoal,
   saveGoal,
   transition,
+  abandonAttempt,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function fakeReq(method: string, queryParams: string, body: any) {
   const listeners: Record<string, Function> = {};
   return {
+    headers: { [OWNER_HEADER]: "1" }, // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
     method,
     url: queryParams,
     on: (e: string, fn: Function) => { listeners[e] = fn; },
@@ -73,16 +79,18 @@ function createHarness({
   let capturedRequests: any[] = [];
   const registeredTools: any[] = [];
   const registeredRoutes = new Map<string, any>();
-  const webServer = { register: (def: any) => { registeredRoutes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
 
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "subagents") {
         return {
           list: () => providers,
+          listChildren: async () => [],
           getProvider: (name: string) => {
             if (providerHasPrepareContinuable) {
               return { prepareContinuable: () => {} };
@@ -152,8 +160,9 @@ test("g-241 判据 1：工具与 HTTP 均注入 targetContext 且语义等价，
   const toolAttemptDoc = loadGoal(join(root, "versions", "v1.0", "goals", goalId, "attempts", toolRes.attempt, "attempt.md"));
   assert.equal(toolAttemptDoc.meta.parent_session_id, "sess-exec", "工具入口保留调用者会话作为 parent_session_id");
 
+  closePriorAttempts(root, goalId);
   // 2. HTTP 入口执行
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
     attempt_brief: "HTTP 派发 action",
@@ -380,7 +389,7 @@ test("g-241 判据 4：无 prepareContinuable provider 时工具与 HTTP 均明�
   assert.equal(capturedRequests.length, 0, "绝不调用 startContinuable");
 
   // 2. HTTP 入口
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), { goal: goalId });
   const res = fakeRes();
   const p = handler(req, res);
@@ -392,6 +401,15 @@ test("g-241 判据 4：无 prepareContinuable provider 时工具与 HTTP 均明�
   assert.ok(res._body.child_error?.includes("需 prepareContinuable 能力"), "HTTP 入口上报明确错误");
   assert.equal(capturedRequests.length, 0, "绝不调用 startContinuable");
 });
+
+/** g-610：同一目标重派前，把上一 attempt 按既有授权正常结束。 */
+function closePriorAttempts(root: string, goal: string, actor = "human:gui"): void {
+  for (const a of goalDetail(root, goal).attempts) {
+    if (a.result === "pending") {
+      abandonAttempt(root, goal, { actor, attempt: a.id, reason: "fixture: prior attempt ended", liveCheck: () => "gone" });
+    }
+  }
+}
 
 test("g-241 判据 4：参数化测试——模型、模式与推理档位优先级（单次调用 > project.yaml > profile 全局 > 继承）", async () => {
   const { ws, root, toolsByName, execContext } = createHarness();
@@ -431,6 +449,7 @@ executor:
   assert.equal(doc1.meta.mode_source, "override");
 
   // Case 2: 无 override 时回退 project.yaml
+  closePriorAttempts(root, goalId);
   const res2 = await toolsByName.get("graph_start_attempt")!.execute(
     { goal: goalId, attempt_brief: "回退 project" },
     execContext,
@@ -464,6 +483,7 @@ test("g-241 判据 5：空 action 协同回归（g-236 语义）——缺失 bri
   assert.ok(!prompt1.includes("（未提供）\n> 未提供原因：本次请求未传 attempt_brief"));
 
   // 2. 显式传纯空白 brief 时，按 g-236 语义视为空并走回退（不抛错）
+  closePriorAttempts(root, goalId);
   const res2 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goalId, attempt_brief: "   " }, execContext);
   assert.equal(res2.brief, "执行目标描述和质量判据中的任务");
   assert.equal(res2.brief_source, "fallback");
@@ -511,7 +531,7 @@ test("g-241 判据 5：准入门禁失败协同回归——未规划/阻塞/已�
   assert.equal(capturedRequests.length, 0, "交付目标阻断，未调用子代理");
 
   // HTTP 入口同样被 400 阻断
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), { goal: draftGoal });
   const res = fakeRes();
   const p = handler(req, res);
@@ -538,6 +558,7 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
   assert.ok(!prompt1.includes("豁免独立 worktree 隔离"), "显式 worktree=true 不得包含豁免说明");
 
   // 2. patch 目标省略 worktree → 默认轻量通道【微小改动/轻量任务快速通道】
+  closePriorAttempts(root, patchGoal);
   await toolsByName.get("graph_start_attempt")!.execute(
     { goal: patchGoal, attempt_brief: "轻量通道补丁" },
     execContext,
@@ -547,6 +568,7 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
   assert.ok(prompt2.includes("豁免独立 worktree 隔离"));
 
   // 3. patch 目标显式 worktree=false → 仍走 minor-task 豁免指引（不强制隔离）
+  closePriorAttempts(root, patchGoal);
   await toolsByName.get("graph_start_attempt")!.execute(
     { goal: patchGoal, worktree: false, attempt_brief: "完全豁免" },
     execContext,
@@ -576,7 +598,7 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   assert.ok(toolRes.note?.includes("subagent 派发失败（attempt 已本地创建）"));
 
   // 2. HTTP 入口派发失败
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
     attempt_brief: "HTTP 失败测试",
@@ -596,6 +618,22 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   assert.equal(detail.attempts.length, 2);
   assert.equal(detail.attempts[0].child_id, null);
   assert.equal(detail.attempts[1].child_id, null);
+
+  // g-610 rev-02：另一个私有 goal 上恢复独立 HTTP spawn-failure 语义（不依赖同 goal 的
+  // 首次失败结算；也不删除上面的工具/HTTP 同 goal 断言）。
+  const httpOnlyGoal = createGoal(root, { title: "HTTP 独立失败测试", version: "v1.0", actor: "human:gui" });
+  setCriteria(root, httpOnlyGoal, ["判据"], "human:gui");
+  const req2 = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
+    goal: httpOnlyGoal,
+    attempt_brief: "HTTP 独立失败",
+  });
+  const res2 = fakeRes();
+  const p2 = handler(req2, res2);
+  req2._emit();
+  await p2;
+  assert.equal(res2._code, 200, "独立 goal 的 HTTP spawn 失败必须仍是 200 + child_error");
+  assert.ok(res2._body.child_error?.includes("LLM quota exceeded"));
+  assert.equal(goalDetail(root, httpOnlyGoal).attempts.length, 1, "独立 goal 只落一个失败 attempt");
 });
 
 test("g-270: 目标描述含闭合围栏内 ## 伪标题时，prompt 目标描述不截断且质量判据完整", async () => {
@@ -716,7 +754,7 @@ test("g-283 HTTP 入口同路径：worktree=false 不建树且 attempt 记录 wo
   const goalId = createGoal(root, { title: "HTTP不隔离", version: "v1.0", type: "bug", actor: "human:gui" });
   setCriteria(root, goalId, ["判据"], "human:gui");
 
-  const handler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
     worktree: false,

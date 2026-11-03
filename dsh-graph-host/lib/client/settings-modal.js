@@ -31,6 +31,13 @@
           // g-440：Agent Teams 开关三态归一——真布尔 true/false 保留；null/未配置/畸形一律归一为
           // null（＝off）。归一后同态不产生假脏（判据 2），且绝不会把畸形值回填成「开启」。
           agent_teams: form?.supervisor?.agent_teams === true ? true : form?.supervisor?.agent_teams === false ? false : null,
+          // g-505：保活三态归一（与 core `normalizeKeepAliveMode` 同口径）——只有三种合法形态保留，
+          // 其余（未配置/畸形/未知字符串）一律归一为 null（＝inherit 跟随全局）。
+          keep_alive: normalizeKeepAliveDraft(form?.supervisor?.keep_alive),
+          // g-506：关照三态与时间参数（非法/越界一律归一 null；写侧仍由服务端二次校验）。
+          care: normalizeCareDraft(form?.supervisor?.care),
+          care_threshold_seconds: normalizeCareSecondsDraft(form?.supervisor?.care_threshold_seconds),
+          care_recheck_seconds: normalizeCareSecondsDraft(form?.supervisor?.care_recheck_seconds),
         },
         prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
         modules: Object.fromEntries(MODULE_SWITCH_KEYS.map((k) => [k, normalizeModuleSwitchDraft(form?.modules?.[k])])),
@@ -81,6 +88,91 @@
      *  支持真裁剪的宿主（当前本机）上**该行不存在**，绝不改变既有页面的默认可见性；zh/en 对称、
      *  en 侧零 CJK（由 core/tests/g480-modules.test.ts 的对账断言钉住）。 */
     const MODULE_TRIM_UNSUPPORTED_HINT_KEY = "settings.modulesTrimUnsupported";
+    // ===== g-505：主管上下文缓存保活（项目级三态）=====
+    // 与 core `KEEP_ALIVE_MODES` 同源同序（客户端是独立打包的浏览器 bundle，无法 import core 常量，
+    // 故此处是**副本**；两边一致性由 core/tests/g505-keepalive.test.ts 的前后端对账断言钉住）。
+    const KEEP_ALIVE_MODES = ["inherit", "true", "false"];
+    const KEEP_ALIVE_LABEL_KEYS = {
+      inherit: "settings.keepAliveInherit",
+      "true": "settings.keepAliveOn",
+      "false": "settings.keepAliveOff",
+    };
+    /** 三态归一（与 core 同口径）：只认真布尔与三种字面量（大小写不敏感）；其余一律 `null`（＝inherit）。 */
+    const normalizeKeepAliveDraft = (v) => {
+      if (v === true) return "true";
+      if (v === false) return "false";
+      if (typeof v === "string") {
+        const s = v.trim().toLowerCase();
+        if (s === "inherit" || s === "true" || s === "false") return s;
+      }
+      return null;
+    };
+    /** 生效值来源 → 展示文案键（状态类读数留在正文，不进浮层；闭集与 core `KeepAliveSource` 一一对应）。 */
+    const KEEP_ALIVE_SOURCE_KEYS = {
+      project_explicit: "settings.keepAliveSrcProject",
+      global_explicit: "settings.keepAliveSrcGlobal",
+      global_default: "settings.keepAliveSrcDefault",
+      project_invalid: "settings.keepAliveSrcProjectInvalid",
+      global_invalid: "settings.keepAliveSrcGlobalInvalid",
+    };
+    /** **生效读数**用中性开关键（开启/关闭）。下拉选项文案「强制开启/强制关闭」只描述**写入意图**，
+     *  不能当生效读数用 —— 否则「跟随全局 + 内置默认」会渲染成「当前生效：强制开启 · 来源：内置默认」，
+     *  与「继承」自相矛盾（负责人 2026-10-28 现场困惑点）。 */
+    const KEEP_ALIVE_EFFECTIVE_LABEL_KEYS = {
+      on: "settings.keepAliveEffectiveOn",
+      off: "settings.keepAliveEffectiveOff",
+    };
+    /** 畸形告警分两层（绝不用一句「已按关闭」覆盖所有组合）：
+     *   · `project_invalid` / `global_invalid`：非法值 fail-closed ⇒ 实际确实按关闭，明确说「按关闭处理」；
+     *   · `project_explicit` + 全局畸形：项目显式值照常生效（可能开着）⇒ 只报「全局无效、项目覆盖生效」，
+     *     **不得**谎称已关闭，也不得把畸形全局静默吞掉；
+     *   · 其余未知/欠字段组合：不伪装生效，只指向**当前生效**读数自行判断（保守兜底）。 */
+    const keepAliveMalformedKey = (eff) => {
+      if (!eff || eff.malformed !== true) return null;
+      if (eff.source === "project_invalid" || eff.source === "global_invalid") return "settings.keepAliveMalformed";
+      if (eff.source === "project_explicit") return "settings.keepAliveMalformedOverridden";
+      return "settings.keepAliveMalformedUnknown";
+    };
+    // ===== g-506：长任务关照（项目级三态 + 阈值/复查间隔继承或覆盖）=====
+    // 与 core `CARE_MODES` 同源同序（浏览器 bundle 无法 import core；一致性由前后端对账测试钉住）。
+    const CARE_MODES = ["inherit", "true", "false"];
+    const CARE_LABEL_KEYS = {
+      inherit: "settings.careInherit",
+      "true": "settings.careOn",
+      "false": "settings.careOff",
+    };
+    const normalizeCareDraft = (v) => {
+      if (v === true) return "true";
+      if (v === false) return "false";
+      if (typeof v === "string") {
+        const s = v.trim().toLowerCase();
+        if (s === "inherit" || s === "true" || s === "false") return s;
+      }
+      return null;
+    };
+    const normalizeCareSecondsDraft = (v) => {
+      const n = typeof v === "number" ? v : (typeof v === "string" && v.trim() !== "" ? Number(v) : NaN);
+      if (!Number.isFinite(n)) return null;
+      const f = Math.floor(n);
+      return f >= 30 && f <= 86400 ? f : null;
+    };
+    const CARE_SOURCE_KEYS = {
+      project_explicit: "settings.careSrcProject",
+      global_explicit: "settings.careSrcGlobal",
+      global_default: "settings.careSrcDefault",
+      project_invalid: "settings.careSrcProjectInvalid",
+      global_invalid: "settings.careSrcGlobalInvalid",
+    };
+    const CARE_EFFECTIVE_LABEL_KEYS = {
+      on: "settings.careEffectiveOn",
+      off: "settings.careEffectiveOff",
+    };
+    const careMalformedKey = (eff) => {
+      if (!eff || eff.malformed !== true) return null;
+      if (eff.source === "project_invalid" || eff.source === "global_invalid") return "settings.careMalformed";
+      if (eff.source === "project_explicit") return "settings.careMalformedOverridden";
+      return "settings.careMalformedUnknown";
+    };
     // ===== g-333：override + 空文本 ≡ disable =====
     // core 已显式定义该语义（writeProjectConfig 用 JSON.stringify 编码：空串写回 `""`，结构化读取器
     // 读回即 disable；「空 override」在存储层不可表示）。这里把同一语义前移到**草稿归一化**与
@@ -239,6 +331,31 @@
         if (to === true || to === false || from === true || from === false) leaf(["supervisor", "agent_teams"]);
       }
       leaf(["prompt_overrides", "subagent"]);
+      // g-505：保活三态同 agent_teams/modules 口径——「无基线且草稿为 null（=inherit）」= 无话可说
+      //（不把「跟随全局」实体化进 project.yaml）；只有草稿是 "true"/"false"，或基线是这两者而
+      // 草稿回 null（显式恢复跟随全局）时才提交。`inherit` 与 `null` 在 core 写侧同义（都清空该叶子）。
+      {
+        const to = getLeafPath(draft, ["supervisor", "keep_alive"]);
+        const from = getLeafPath(base, ["supervisor", "keep_alive"]);
+        if (to === "true" || to === "false" || from === "true" || from === "false") {
+          leaf(["supervisor", "keep_alive"], (v) => (v === "true" || v === "false" ? v : null));
+        }
+      }
+      // g-506：关照三态与时间参数同口径（无基线 + null = 跟随全局，不实体化）。
+      {
+        const to = getLeafPath(draft, ["supervisor", "care"]);
+        const from = getLeafPath(base, ["supervisor", "care"]);
+        if (to === "true" || to === "false" || from === "true" || from === "false") {
+          leaf(["supervisor", "care"], (v) => (v === "true" || v === "false" ? v : null));
+        }
+      }
+      for (const key of ["care_threshold_seconds", "care_recheck_seconds"]) {
+        const to = getLeafPath(draft, ["supervisor", key]);
+        const from = getLeafPath(base, ["supervisor", key]);
+        // 无基线且草稿为空 = 无话可说（旧客户端/未配置），不把 null 实体化进稀疏 patch。
+        const norm = (v) => (v === undefined ? null : v);
+        if (norm(to) !== null || norm(from) !== null) leaf(["supervisor", key]);
+      }
       // g-480：模块开关同 agent_teams 口径——「无基线且草稿为 null」= 无话可说（不把「未配置」实体化
       // 进 project.yaml）；只有草稿是布尔、或基线是布尔而草稿回 null（显式清空回到默认开启）时才提交。
       for (const k of MODULE_SWITCH_KEYS) {
@@ -319,6 +436,12 @@
         "supervisor.automation.memory_promotion",
         "supervisor.automation.skill_proposal",
         "supervisor.automation.release",
+        // g-505：保活三态（主管会话行为面，与 supervisor.automation 同页签）
+        "supervisor.keep_alive",
+        // g-506：关照三态 + 阈值/复查间隔（同为主管会话行为面）
+        "supervisor.care",
+        "supervisor.care_threshold_seconds",
+        "supervisor.care_recheck_seconds",
         "prompt_overrides.subagent",
       ],
     };
@@ -1214,6 +1337,162 @@
                   // g-490：只要该键的未配置项显示具体 human/ai（= 服务端下发了它的 gate 范围来源），
                   // 就必须**同屏**渲染口径来源标注——绝不出现无来源的具体 human/ai。
                   automationUnsetScope[k] ? automationUnsetScopeNote(automationUnsetScope[k]) : null))),
+
+            // ===== g-505：主管上下文缓存保活（项目级三态 + 生效值/能力读数）=====
+            // 归属「高级设置」：它是**主管会话的行为面**开关（与上方 supervisor.automation 同类）。
+            // 三态语义（与 core 逐字一致）：
+            //   inherit（默认）= 跟随 profile 全局设置；true = 强制开启（压倒全局）；false = 强制关闭。
+            // 为避免「改了不知道有没有用」的错觉，控件下方**必须**同屏显示服务端下发的**实际生效值**、
+            // 来源与能力缺口（生效值/能力是状态读数 ⇒ 按 g-488 分界留在正文，不进 `(?)` 浮层）。
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            (() => {
+              const eff = form.supervisor?.keep_alive_effective;
+              const status = form.supervisor?.keep_alive_status;
+              const draft = normalizeKeepAliveDraft(form.supervisor?.keep_alive);
+              const srcKey = eff ? KEEP_ALIVE_SOURCE_KEYS[eff.source] : null;
+              // 畸形告警的**唯一判定点**（按来源分层；渲染处只消费结果，避免两处各判一次漂移）
+              const malformedKey = keepAliveMalformedKey(eff);
+              const unavailable = status && status.capable && status.capable.host_channel === false;
+              return h("div", { style: { minWidth: 0 } },
+                h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                  h("label", { htmlFor: "dg-keep-alive", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.keepAliveLabel")),
+                  settingsHintIcon(dgT("settings.keepAliveHint"))),
+                h("select", {
+                  id: "dg-keep-alive",
+                  "aria-label": dgT("settings.keepAliveAria"),
+                  style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                  value: draft ?? "inherit",
+                  onChange: (e) => set(["supervisor", "keep_alive"], e.target.value === "inherit" ? null : e.target.value),
+                },
+                  ...KEEP_ALIVE_MODES.map((m) => h("option", { key: m, value: m, style: policyOptionStyle }, dgT(KEEP_ALIVE_LABEL_KEYS[m])))),
+                // 生效值读数：必须有（否则用户无法判断 inherit 最终落到了开还是关）。
+                // 读数用**中性开关键**（开启/关闭），绝不复用选项文案「强制开启/强制关闭」。
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } },
+                      dgT("settings.keepAliveEffective").replace("{v}",
+                        eff.effective ? dgT(KEEP_ALIVE_EFFECTIVE_LABEL_KEYS.on) : dgT(KEEP_ALIVE_EFFECTIVE_LABEL_KEYS.off))
+                        + (srcKey ? " · " + dgT(srcKey) : ""))
+                  : null,
+                // 能力/缺口读数：TTL 未知是**已知限制**，必须如实显示（不按模型名猜长 TTL）。
+                status?.capable
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      status.capable.ttl === "unknown"
+                        ? dgT("settings.keepAliveTtlUnknown")
+                        : dgT("settings.keepAliveCapability").replace("{v}", status.capable.channel))
+                  : null,
+                // B5：显式可信长 TTL 的来源/匹配状态必须与 REST 同源显示（默认未知，不按名字猜）。
+                status?.configured?.route_ttl
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.keepAliveTtlExplicit")
+                        .replace("{route}", `${status.configured.route_ttl.provider}/${status.configured.route_ttl.model}`)
+                        .replace("{v}", String(status.configured.route_ttl.ttl_ms))
+                        + " · " + dgT(status.configured.route_ttl_matched ? "settings.keepAliveTtlMatched" : "settings.keepAliveTtlUnmatched"))
+                  : null,
+                status?.configured?.route_ttl_malformed
+                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT("settings.keepAliveTtlMalformed"))
+                  : null,
+                // 如实说明：TTL 是**只读展示**，实际配置入口在 project.yaml（不提供伪造/猜测 UI）。
+                h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.keepAliveTtlHint")),
+                unavailable
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.keepAliveCapability").replace("{v}", dgT("settings.keepAliveUnavailable"))
+                        + (Array.isArray(status.capable.missing) && status.capable.missing.length
+                          ? ": " + status.capable.missing.join(", ")
+                          : ""))
+                  : null,
+                // 畸形取值：按**来源分层**警示（非法来源确按关闭；项目覆盖畸形全局时只报覆盖，不谎称关闭）
+                malformedKey
+                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT(malformedKey))
+                  : null);
+            })(),
+
+            // ===== g-506：子代理长任务关照（项目级三态 + 阈值/复查间隔继承/覆盖）=====
+            // 与保活同页签（主管会话行为面），但**独立开关/独立时间参数**；生效值与来源必须同屏。
+            h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
+            (() => {
+              const eff = form.supervisor?.care_effective;
+              const status = form.supervisor?.care_status;
+              const draft = normalizeCareDraft(form.supervisor?.care);
+              const srcKey = eff ? CARE_SOURCE_KEYS[eff.source] : null;
+              const malformedKey = careMalformedKey(eff);
+              const unavailable = status && status.capable && status.capable.minimal === false;
+              const capLabel = (cap) => dgT("care.cap." + cap);
+              const listSep = (typeof dgLang !== "undefined" && dgLang === "en") ? ", " : "、";
+              const timingSrc = (src) => dgT(CARE_SOURCE_KEYS[src] ?? "care.srcUnknown");
+              const missingCaps = (status?.capable?.missing ?? []).map(capLabel);
+              const unverifiedCaps = (status?.capable?.unverified ?? []).map(capLabel);
+              return h("div", { style: { minWidth: 0 } },
+                h("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 2 } },
+                  h("label", { htmlFor: "dg-care", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.careLabel")),
+                  settingsHintIcon(dgT("settings.careHint"))),
+                h("select", {
+                  id: "dg-care",
+                  "aria-label": dgT("settings.careAria"),
+                  style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                  value: draft ?? "inherit",
+                  onChange: (e) => set(["supervisor", "care"], e.target.value === "inherit" ? null : e.target.value),
+                },
+                  ...CARE_MODES.map((m) => h("option", { key: m, value: m, style: policyOptionStyle }, dgT(CARE_LABEL_KEYS[m])))),
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 4, fontSize: 11 } },
+                      dgT("settings.careEffective").replace("{v}",
+                        eff.effective ? dgT(CARE_EFFECTIVE_LABEL_KEYS.on) : dgT(CARE_EFFECTIVE_LABEL_KEYS.off))
+                        + (srcKey ? " · " + dgT(srcKey) : ""))
+                  : null,
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careTimingSource")
+                        .replace("{threshold}", String(eff.threshold_seconds))
+                        .replace("{tsrc}", timingSrc(eff.threshold_source))
+                        .replace("{recheck}", String(eff.recheck_seconds))
+                        .replace("{rsrc}", timingSrc(eff.recheck_source)))
+                  : null,
+                h("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginTop: 6 } },
+                  h("div", null,
+                    h("label", { htmlFor: "dg-care-threshold", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.careThresholdLabel")),
+                    h("input", {
+                      id: "dg-care-threshold", type: "number", min: 30, max: 86400, step: 1,
+                      "aria-label": dgT("settings.careThresholdLabel"),
+                      style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                      value: form.supervisor?.care_threshold_seconds ?? "",
+                      placeholder: String(eff?.defaults?.threshold_seconds ?? 300),
+                      onChange: (e) => set(["supervisor", "care_threshold_seconds"], e.target.value === "" ? null : Number(e.target.value)),
+                    })),
+                  h("div", null,
+                    h("label", { htmlFor: "dg-care-recheck", style: { fontSize: 11, opacity: 0.8 } }, dgT("settings.careRecheckLabel")),
+                    h("input", {
+                      id: "dg-care-recheck", type: "number", min: 30, max: 86400, step: 1,
+                      "aria-label": dgT("settings.careRecheckLabel"),
+                      style: { ...S.promptInput, width: "100%", boxSizing: "border-box" },
+                      value: form.supervisor?.care_recheck_seconds ?? "",
+                      placeholder: String(eff?.defaults?.recheck_seconds ?? 300),
+                      onChange: (e) => set(["supervisor", "care_recheck_seconds"], e.target.value === "" ? null : Number(e.target.value)),
+                    }))),
+                h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.careSecondsHint")),
+                eff
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careEffectiveTiming")
+                        .replace("{threshold}", String(eff.threshold_seconds))
+                        .replace("{recheck}", String(eff.recheck_seconds))
+                        .replace("{max}", String(eff.max_stagnant_rounds)))
+                  : null,
+                unavailable
+                  ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.careUnavailable"))
+                  : null,
+                // B9 补充：非最小缺口（如 progress_read 缺失但唤醒仍可用）也必须常态逐项可见，
+                // 不能只在 minimal=false 时显示；unverified 单独标注，绝不混同 available。
+                missingCaps.length
+                  ? h("div", { className: "dg-care-missing", style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careMissing") + ": " + missingCaps.join(listSep))
+                  : null,
+                unverifiedCaps.length
+                  ? h("div", { className: "dg-care-unverified", style: { ...S.meta, marginTop: 2, fontSize: 11 } },
+                      dgT("settings.careUnverified") + ": " + unverifiedCaps.join(listSep))
+                  : null,
+                malformedKey
+                  ? h("div", { style: { ...S.meta, color: "var(--dsw-alias-state-error-primary, #f08080)", marginTop: 2, fontSize: 11 } }, dgT(malformedKey))
+                  : null);
+            })(),
 
             h("hr", { style: { border: "none", borderTop: "1px solid rgba(128,128,128,.25)", margin: "10px 0" } }),
             h("div", { style: { fontWeight: 700, marginBottom: 4 } }, dgT("settings.promptOverride")),

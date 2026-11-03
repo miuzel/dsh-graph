@@ -15,15 +15,15 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.2--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.22.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 51 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.23.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
-**最新亮点（v0.22.0）**
+**最新亮点（v0.23.0）**
 
-- **完成摘要去冗余瘦身与交回报文精简**：目标弹窗的「完成摘要」页签全面重构，告别动辄数十 KB 的历史评论与流程沿革全量搬运，收敛为聚焦最新成果、判据达成与自动化证据引用的「终态交付快照」；子代理交回报文骨架彻底解耦执行者与评审者结构，阅读负担与无谓 Token 消耗直降 90% 以上。
-- **目标删除与隔离工作树清理防护闭环**：删除已归档目标前主动检测其关联的 Git 隔离工作树，存在未清理分支树时严格阻断，防止残留失控；同时支持安全清理已删除目标的残留孤儿工作树，彻底消解真实宿主归属标记下的清理死锁。
-- **共享卡片全生命周期与保底解除通道**：工具层补齐安全删除零引用共享卡片的能力（非零引用严格拒绝）；在工作区按需裁剪关闭共享卡片模块后，依然为目标保留保底解除引用的操作手段，彻底根除模块裁剪时的配置死锁。
-- **目标流转评审记录自愈消除死链**：目标在跨版本排期、移回独立目录或归档/取消归档移动过程中，其历史独立评审记录自动同步重写文件新路径，根除因目标物理搬迁导致的评审报告死链。
-- **全新官方插件图标与评审统计口径披露**：新增符合 DSH 插件规范的高质感拓扑看板官方矢量图标（`icon.svg`）；并在使用说明中完整披露代码评审变更规模统计中非产品路径（如 `docs/*`）的白名单判定与计算规则，消除认知与策略偏差。
+- **长任务智能关照与僵局干预**：主管空闲期间对进行中的子代理长任务按生效间隔自动发起巡检与状态把关；支持连续未回复/进展停滞自动升级等待人工，到期只触发巡检而不武断中断执行，支持整组关照的暂停、继续与重置。
+- **子代理时间预算调度与动态基准重算**：支持在目标中显式配置预计任务时间预算（未配置继承项目/全局默认阈值）；首次派发、运行中调整预算或主管向运行中子代理发送新消息时，立即依据最新时间基准重新计算关照截止，并保持至少 5 分钟无答有效冷却防频发唤醒。
+- **运行轮次精确隔离与历史保真追溯**：子代理运行按起止时点划定独立轮次，停止即停表，重新运行自起新轮；精确记录每轮起始预算与变更时间线，禁止以停止时刻预算冒充整轮预算，正常宿主重建遇到同一运行中任务不拆分轮次并如实标注观察空窗。
+- **主管会话智能保活机制**：名下有子代理在运行且主管处于空闲时，自动在适当时机进行有界续期与单次防离线保活，避免长时间未交互导致上下文失效。
+- **插件 HTTP 接口安全加固与派发去重**：全面封闭无凭证访问风险，对齐宿主统一鉴权与身份白名单校验；强化派发准入门禁，严格防止同一目标并发派发重复执行尝试，杜绝状态冲突与资源争用。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。
 
@@ -32,10 +32,16 @@
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；H 系列共享探针在本版全绿） |
-| 原生 Windows | ⏳ **本版结论一律以台账为准**：真机轮次结论（逐版本、逐宿主代际）登记在[平台门禁](docs/platform-gate.md) §7 回填表（该文档**不随包发布**）—— **本行不预称任何轮次结果，也不得读出「已通过」**。台账中已完成的历史轮次示例：`v0.20.1`（2026-10-10，`win32/x64` + Node `v24.21.0`，宿主 `0.2.0-rc.2` 与 `0.2.1-alpha.2` 两代际，T1–T5 = 通过 15 / 失败 0 / 告警 1、T3 = 32/32 步）—— 历史轮次**只覆盖安装 / 启动 / REST 层**，且只覆盖该版本的产品代码，**不替代**本版结论。 |
-| macOS | ⏳ **本版未验证**：`v0.22.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以[平台门禁](docs/platform-gate.md) §7 回填表（不随包发布）为准。历史记录见 §7.4 / §7.7，只覆盖各自版本的产品代码。 |
+| 原生 Windows | ✅ **本版已实测通过（2026-11-02，win32/x64 + Node v24.21.0，宿主 `0.2.1-rc.5`，通过 22 / 失败 0 / 告警 0）**：详见 [platform-gate §7.13 回填表](docs/platform-gate.md) —— T1 静态/台账（67 项 268 处命中未登记 0）/ 派发可用（零硬编码 shell 名）/ H 组合探针（H1–H6 除 H3 外全绿）全部通过；T3 看板文件系统生命周期 32 步盘面断言全通过；T4/T5 实例启动就绪与 REST 鉴权换票冒烟通过。 |
+| macOS | ⏳ **本版未验证**：`v0.23.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以[平台门禁](docs/platform-gate.md) §7 回填表（不随包发布）为准。历史记录见 §7.4 / §7.7，只覆盖各自版本的产品代码。 |
 
 三平台共用同一安装包。已知限制：① macOS 默认文件系统 APFS 大小写不敏感——仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`，由 `process.cwd()` 推导的路径不受影响。
+
+## HTTP 鉴权（Web 入口）
+
+Web 宿主里的 `/api/dsh-graph/**` 走**单一受保护入口**：只注册一条 `prefix` 路由，每请求先由宿主公开的 `connection.admit` 鉴权、再判定 owner，之后才分发业务。未通过 ⇒ `401`（匿名/凭证无效）、`403`（信任边界或非 owner）、**`503`**（宿主没有 `admit` 等能力不可判定情形，fail-closed）。该入口**只影响 HTTP**：`graph_*` 工具面不经过它。
+
+鉴权行为只在 DSH `0.2.1-rc.2` 实测；`engines.dsh` 声明的其它宿主版本未逐版验证。完整口径见 [dsh-graph-host/README.md](dsh-graph-host/README.md#http-鉴权web-看板的-rest-入口)。
 
 ## 安装
 
@@ -59,11 +65,11 @@ dsh plugin --profile <name> add dsh-graph
 
 ## 提供的工具
 
-51 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
+53 个 `graph_*` 工具，按功能分组（逐个说明见 [dsh-graph-host/README.md](dsh-graph-host/README.md) 或 `graph_help`）：
 
 | 分组 | 工具 |
 |------|------|
-| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_description` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` · `graph_list_worktrees` |
+| 目标生命周期 | `graph_create_goal` · `graph_rename_goal` · `graph_set_description` · `graph_set_goal_type` · `graph_set_goal_tags` · `graph_set_goal_budget` · `graph_amend_goal` · `graph_transition` · `graph_postpone_goal` · `graph_archive_goal` · `graph_unarchive_goal` · `graph_delete_goal` · `graph_clean_worktree` · `graph_list_worktrees` |
 | 目标关系 | `graph_set_relation` |
 | 质量判据 | `graph_set_criteria` |
 | 上下文卡片 | `graph_add_card` · `graph_fill_card` · `graph_review_card` · `graph_bind_collect_card` · `graph_delete_card` · `graph_convert_card_to_shared` · `graph_convert_card_to_owned` · `graph_attach_shared_card` · `graph_detach_shared_card` · `graph_list_shared_cards` |
@@ -73,7 +79,7 @@ dsh plugin --profile <name> add dsh-graph
 | 记忆 | `graph_memory_add` · `graph_memory_recall` · `graph_memory_remove` · `graph_memory_replace` |
 | 配置管理 | `graph_get_settings` · `graph_update_settings` |
 | 校验 / 对账 | `graph_validate` · `graph_rebuild` |
-| 状态汇报 | `graph_report_status` · `graph_report_supervisor_status` |
+| 状态汇报 | `graph_report_status` · `graph_report_supervisor_status` · `graph_care_outcome` |
 | 评审裁决 | `graph_resolve_accept` |
 | 历史讨论 | `graph_add_comment` |
 | 完成摘要 | `graph_write_results` · `graph_refresh_results` |

@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { init, createGoal, setCriteria, findGoalFile } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
 
 export function createHarness() {
   return createHarnessWith({});
@@ -68,6 +69,7 @@ export function createHarnessWith(opts: { dispatchApi?: HarnessDispatchApi; disp
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（经唯一门禁入口）
       if (name === "subagents") return service;
       return undefined;
     },
@@ -124,7 +126,7 @@ export function restCall(route: any, body: any, method = "POST") {
   const req: any = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
   req.method = method;
   req.url = route.path;
-  req.headers = {};
+  req.headers = { [OWNER_HEADER]: "1" }; // g-507：经门禁入口 ⇒ 带测试自有 owner 凭证
   const res: any = {
     code: 0, payload: null,
     writeHead(code: number) { this.code = code; },

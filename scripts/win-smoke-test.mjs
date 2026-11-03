@@ -629,8 +629,8 @@ const OS_SITE_ROWS = [
   ["core/ops.ts", "processLiveness", 1, ["acquireTagsLock"],
    "标签锁陈旧回收的持有者存活探测",
    "ws:T3.tx_lock_reclaim"],
-  ["core/ops.ts", "realpathSync", 8, ["assertNoSymlinkPath", "assertContainedPath", "ensureAttachmentsRoot", "resolveAttachmentPath", "reassertContainedParent", "resolveExistingAttachmentReal", "attachmentProblems"],
-   "附件 / root 的 realpath 越界与 symlink 校验",
+  ["core/ops.ts", "realpathSync", 10, ["assertNoSymlinkPath", "assertContainedPath", "ensureAttachmentsRoot", "resolveAttachmentPath", "reassertContainedParent", "resolveExistingAttachmentReal", "attachmentProblems", "assertNoActiveExecutionChild"],
+   "附件 / root 的 realpath 越界与 symlink 校验；g-610 clean 按真实 canonical 路径核归属",
    "ws:T3.attachments_store_delete"],
   ["core/ops.ts", "renameSync", 11, ["deleteAttachment", "renameDirInto", "moveGoal", "archiveGoal", "unarchiveGoal", "postponeGoal", "acquireTagsLock", "releaseTagsLock", "setGoalTags"],
    "目录/文件搬迁（g-427：NTFS 拒绝用目录替换已存在目录）",
@@ -704,7 +704,7 @@ const OS_SITE_ROWS = [
   ["core/transaction.ts", "chmodSync", 1, ["reclaimStaleBadLock"],
    "回收 mode 000 坏锁前恢复可读",
    "ws:T3.tx_lock_reclaim"],
-  ["core/transaction.ts", "lockFile", 23, ["lockFilePath", "heldLocks", "lockKey", "STALE_BAD_LOCK_MS", "lockAgeMs", "reclaimStaleBadLock", "acquireLock", "releaseLock", "withTx"],
+  ["core/transaction.ts", "lockFile", 25, ["lockFilePath", "heldLocks", "lockKey", "STALE_BAD_LOCK_MS", "lockAgeMs", "reclaimStaleBadLock", "acquireLock", "releaseLock", "withTx", "withLocalLock"],
    "事务锁获取 / 释放 / 陈旧回收（隔离 + 身份核对）",
    "ws:T3.tx_lock_reclaim"],
   ["core/transaction.ts", "lstatSync", 4, ["lockAgeMs", "reclaimStaleBadLock", "atomicWrite"],
@@ -761,7 +761,7 @@ const OS_SITE_ROWS = [
   ["dsh-graph-host/index.js", "realpathSync", 4, ["resolveSchemastery", "discoverAttemptWorktrees"],
    "workspace canonical key / worktree 真实路径",
    "exempt:宿主 workspace 归一由 T4/T5 间接覆盖；软链拒绝见 pg:P2"],
-  ["dsh-graph-host/index.js", "statSync", 1, ["apply"],
+  ["dsh-graph-host/index.js", "statSync", 3, ["apply"],
    "文件 mtime 探测（REST 载荷）",
    "exempt:只读探测；REST 读路径由 T5 覆盖"],
 // 台账规模**不写死**：行数与命中数由 buildLedgerRow 汇总后运行时打印（`台账=<rows>项/<hits>处命中`），
@@ -3545,9 +3545,22 @@ async function tier45Boot(ctx) {
   // ---- T5 REST 冒烟：路由存在 === 插件真的 apply 了 ----
   const origin = new URL(url).origin;
   const ws = encodeURIComponent(ctx.workspace);
+
+  // g-507：宿主 REST 入口已受认证保护。若实例启动输出带有 launch token，
+  // 先带 token 访问获取宿主铸造的 session cookie，后续 probe 携带该 cookie 鉴权。
+  let authCookie = "";
+  try {
+    const launchRes = await fetch(url, { redirect: "manual" });
+    const setCookie = launchRes.headers.get("set-cookie");
+    if (setCookie) {
+      authCookie = setCookie.split(";")[0].trim();
+    }
+  } catch {}
+
   const probe = async (path, label, validate) => {
     try {
-      const res = await fetch(`${origin}${path}`, { redirect: "manual" });
+      const headers = authCookie ? { cookie: authCookie } : {};
+      const res = await fetch(`${origin}${path}`, { headers, redirect: "manual" });
       if (res.status !== 200) {
         record("T5", label, "FAIL", `HTTP ${res.status}`);
         return null;

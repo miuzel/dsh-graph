@@ -8,10 +8,17 @@ import { join } from "node:path";
 import { init, createGoal, boardProjection } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
 
-function fakeRequest(method: string, body: unknown) {
+// g-507：捕获到的注册定义（setup 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
+
+function fakeRequest(method: string, body: unknown, path: string) {
   const req: any = {
+    headers: { [OWNER_HEADER]: "1" },
     method,
+    url: path,
     _listeners: {} as Record<string, (v?: any) => void>,
     on(ev: string, cb: (v?: any) => void) {
       req._listeners[ev] = cb;
@@ -36,21 +43,21 @@ function setup() {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-version-rest-"));
   init(root);
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, { root });
-  return { root, routes };
+  return { root, routes: routeDefs };
 }
 
 const post = async (routes: Map<string, any>, path: string, body: unknown) => {
-  const handler = routes.get(path);
-  assert.ok(handler, `路由 ${path} 已注册`);
-  const req = fakeRequest("POST", body);
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/create-version */;
+  assert.equal(typeof handler, "function", `命名空间门禁入口可用（业务端点经其分发）：${path}`);
+  const req = fakeRequest("POST", body, path);
   const res = fakeResponse();
   const p = handler(req, res);
   emitBody(req, body);
@@ -59,10 +66,9 @@ const post = async (routes: Map<string, any>, path: string, body: unknown) => {
 };
 
 const get = async (routes: Map<string, any>, path: string, query?: string) => {
-  const handler = routes.get(path);
-  assert.ok(handler, `路由 ${path} 已注册`);
-  const req = fakeRequest("GET", null);
-  req.url = query ? `?${query}` : "";
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/create-version */;
+  assert.equal(typeof handler, "function", `命名空间门禁入口可用（业务端点经其分发）：${path}`);
+  const req = fakeRequest("GET", null, query ? `${path}?${query}` : path);
   const res = fakeResponse();
   const p = handler(req, res);
   await p;
@@ -331,10 +337,10 @@ test("版本管理 REST API 集成：创建→重命名→删除完整流程", a
 
 test("版本管理 REST API：POST 方法强制要求", async () => {
   const { routes } = setup();
-  const handler = routes.get("/api/dsh-graph/create-version");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/create-version */;
   assert.ok(handler, "路由应已注册");
-  // 尝试 GET 请求
-  const req = fakeRequest("GET", {});
+  // 尝试 GET 请求（目标端点显式给出：门禁入口按 url 分发）
+  const req = fakeRequest("GET", {}, "/api/dsh-graph/create-version");
   const res = fakeResponse();
   await handler(req, res);
   assert.equal(res._code, 405);
@@ -424,8 +430,8 @@ test("release-version 端点：缺少 slug 返回 400", async () => {
 
 test("release-version 端点：POST 方法强制要求", async () => {
   const { routes } = setup();
-  const handler = routes.get("/api/dsh-graph/release-version");
-  const req = fakeRequest("GET", null);
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/release-version */;
+  const req = fakeRequest("GET", null, "/api/dsh-graph/release-version");
   const res = fakeResponse();
   await handler(req, res);
   assert.equal(res._code, 405);

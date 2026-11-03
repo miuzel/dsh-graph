@@ -442,6 +442,28 @@ export function withTx<T>(
   }
 }
 
+/** g-610：同步短锁——把一段**同步**临界区串行化，绝不跨 await 持有。
+ *
+ *  复用 acquireLock/releaseLock 的 O_EXCL+PID+陈旧锁语义；与 withTx 的区别是不提供
+ *  event/persist 契约（调用方自己组织，但**不得**在 fn 里 await）。
+ *  用途：同一 workspace+goal 的「门禁重查→预测→建树→落盘 attempt」必须原子可见，
+ *  否则两个进程都能在门禁与 startAttempt 之间穿过。锁名按 root+goal 隔离。
+ */
+export function withLocalLock<T>(
+  root: string,
+  name: string,
+  fn: () => T,
+  opts: { lockTimeoutMs?: number } = {},
+): T {
+  const lockPath = lockFilePath(root, name);
+  acquireLock(lockPath, opts.lockTimeoutMs ?? 5000);
+  try {
+    return fn();
+  } finally {
+    releaseLock(lockPath);
+  }
+}
+
 /** 原子文件写：临时文件 + rename（已存在的安全模式）。
  *  不覆盖 symlink；目标路径如果是 symlink 则拒绝。 */
 export function atomicWrite(file: string, content: string): void {

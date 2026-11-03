@@ -84,6 +84,12 @@ const KEY_ANCHORS: Record<string, string> = {
   "review.contract_paths": REVIEW_LIST_ANCHOR,
   "review.non_product_prefixes": REVIEW_LIST_ANCHOR,
   "supervisor.agent_teams": 'set(["supervisor", "agent_teams"], e.target.checked)',
+  // g-505：保活三态下拉的唯一写入点（「高级设置」页签；与 supervisor.automation 同页签同类）。
+  "supervisor.keep_alive": 'set(["supervisor", "keep_alive"], e.target.value === "inherit" ? null : e.target.value)',
+  // g-506：关照三态 + 阈值/复查间隔的唯一写入点（同属「高级设置」页签）。
+  "supervisor.care": 'set(["supervisor", "care"], e.target.value === "inherit" ? null : e.target.value)',
+  "supervisor.care_threshold_seconds": 'set(["supervisor", "care_threshold_seconds"], e.target.value === "" ? null : Number(e.target.value))',
+  "supervisor.care_recheck_seconds": 'set(["supervisor", "care_recheck_seconds"], e.target.value === "" ? null : Number(e.target.value))',
   "local.refresh_interval": "onChange: (e) => handleIntervalChange(e.target.value)",
   "local.live_display": "setLiveDisplay(e.target.checked)",
   // g-488：`defaults.review.reviewer` / `defaults.review.prompt` / `defaults.pk.lanes` /
@@ -414,7 +420,7 @@ function loadClientI18n(src = readI18n()): { zh: Dict; en: Dict } {  const sandb
 
 type Rendered = { tree: any; nodes: any[]; calls: Record<number, any>; closeCalls: () => number };
 
-function renderSettingsModal(modalSrc: string, form: any, zh: Dict, opts: { tab?: string; configFile?: string | null; openHint?: string | null } = {}): Rendered {
+function renderSettingsModal(modalSrc: string, form: any, zh: Dict, opts: { tab?: string; configFile?: string | null; openHint?: string | null; lang?: "zh" | "en" } = {}): Rendered {
   const h = (type: any, props: any, ...children: any[]) => ({
     type,
     props: props || {},
@@ -438,6 +444,7 @@ function renderSettingsModal(modalSrc: string, form: any, zh: Dict, opts: { tab?
     dgOverlay: (props: any, ...children: any[]) => h("div", props, ...children),
     settingsModalModeInstanceSeq: 0,
     dgT: (k: string) => zh[k] ?? k,
+    dgLang: opts.lang ?? "zh",
     S: new Proxy({}, { get: () => ({}) }),
     graphUrl: (u: string) => u,
     gConnectionApi: null,
@@ -1001,4 +1008,37 @@ test("g-479 负向对照：搬走页签面板 / 删归属项 / 跨页签重复�
   );
 
   assert.deepEqual(readFileSync(modalPath), before, "负向对照不得改动真实仓库文件");
+});
+
+test("g-506 补充：settings 真实渲染逐项展示非最小能力缺口/unverified 与 timing source（zh/en）", () => {
+  const src = readModal();
+  const { zh, en } = loadClientI18n();
+  const form: any = JSON.parse(JSON.stringify(SNAPSHOT));
+  form.supervisor.care_effective = {
+    effective: true, source: "project_explicit",
+    threshold_seconds: 60, threshold_source: "project_explicit",
+    recheck_seconds: 61, recheck_source: "global_explicit",
+    max_stagnant_rounds: 3,
+  };
+  form.supervisor.care_status = {
+    capable: {
+      available: { idle_probe: true, children_probe: true, wake_dispatch: true, progress_read: false },
+      missing: ["progress_read", "wake_dispatch"], unverified: ["interrupt"], minimal: true,
+    },
+  };
+  for (const dict of [zh, en] as const) {
+    const { tree } = renderSettingsModal(src, form, dict as any, { tab: "advanced", lang: dict === en ? "en" : "zh" });
+    const text = deepTextOf(tree);
+    assert.ok(text.includes(dict["settings.careMissing"]), `setting missing header: ${text.slice(0, 200)}`);
+    assert.ok(text.includes(dict["care.cap.progress_read"]), "must show progress_read gap even when minimal=true");
+    assert.ok(text.includes(dict["settings.careUnverified"]), "unverified must be separate");
+    assert.ok(text.includes(dict["care.cap.interrupt"]), "unverified interrupt label");
+    assert.ok(text.includes("60") && text.includes("61"), "must show real threshold/recheck values");
+    assert.ok(text.includes(dict["settings.careTimingSource"].split("{")[0].trim()), "must show timing source line");
+    assert.ok(!text.includes("care.cap.progress_read"), "must not render raw key");
+    if (dict === en) {
+      assert.ok(text.includes(", "), "English capability list must use comma");
+      assert.ok(!text.includes("、"), "English capability list must not use Chinese delimiter");
+    }
+  }
 });

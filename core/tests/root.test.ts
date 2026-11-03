@@ -14,11 +14,19 @@ import { resolveRoot, resolveCanonicalRoot, discoverGitWorktree, _clearCanonical
 import { readEvents } from "../events.ts";
 import { execSync } from "node:child_process";
 import { apply as applyHost } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, assertSingleProtectedEntry, OWNER_HEADER } from "./_http-auth-harness.ts";
+import { buildRouteTable, lookupRoute } from "../../dist/index.js";
+
+/** g-507：直连请求补测试自有 owner 凭证头（经唯一门禁入口鉴权）。 */
+const withOwner = (req: any): any => ({ ...req, headers: { ...(req?.headers ?? {}), [OWNER_HEADER]: "1" } });
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function mockCtx(extra: Record<string, unknown> = {}) {
   const webServer = { register: () => () => {} };
   return {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: {
@@ -117,11 +125,14 @@ test("g-149 apply 有绝对 config.root 时仍正常 init（管理员覆盖）",
 test("g-149 apply 有 sandboxPolicy.workspaceRoot 时正常 init", () => {
   const base = mkdtempSync(join(tmpdir(), "g149-sandbox-init-"));
   // 模拟 sandboxPolicy 提供 workspace——需要覆盖 mockCtx 的 get
-  const webServer = { register: () => () => {} };
+  // g-507 返工：不再声明局部 webServer 遮蔽模块级同名变量（遮蔽会让后续逐端点断言读到未注册的假服务）
+  const stub = createRegisterStub();
+  routeDefs = stub.routes;
   const sandboxPolicy = { workspaceRoot: base };
   const ctx: any = {
     get: (name: string) => {
-      if (name === "webServer") return webServer;
+      if (name === "webServer") return stub.webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return sandboxPolicy;
       return undefined;
     },
@@ -137,9 +148,11 @@ test("g-149 apply 有 sandboxPolicy.workspaceRoot 时正常 init", () => {
 test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路由）两个半边", () => {
   const registered: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  const stub = createRegisterStub(); // g-507 返工：提升作用域（逐端点断言需要入口表）
+  routeDefs = stub.routes;
+  webServer = stub.webServer;
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
@@ -148,8 +161,12 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
   // host 半边：28 个 graph_* 工具（g-117 新增 graph_handoff / graph_claim_supervisor；
   // g-119 新增 graph_bind_collect_card；g-118 新增 graph_help；g-141 新增 graph_rename_goal；g-110 新增 archive/unarchive；g-140 新增 delete；g-150 新增 graph_record_attempt_handoff；g-150 范围扩展新增 graph_set_directive / graph_add_comment；g-128 新增 graph_delete_card；g-158 新增 graph_set_goal_type；g-138 新增 graph_postpone_goal；g-183 新增 graph_store_attachment / graph_delete_attachment）
   const toolNames = registered.map((d) => d.name).filter((n) => n.startsWith("graph_"));
-  assert.equal(toolNames.length, 51, "单包注册 51 个 graph_* 工具（g-374 新增 graph_write_results/graph_refresh_results；g-380 新增 graph_set_relation；g-436 新增 graph_start_review）");
+  assert.equal(toolNames.length, 53, "单包注册 53 个 graph_* 工具（g-374 新增 graph_write_results/graph_refresh_results；g-380 新增 graph_set_relation；g-436 新增 graph_start_review）");
   // client 半边：/api/dsh-graph* 全部端点（原 client 包 + g-110 archive/unarchive + g-140 delete + g-158 set-goal-type/create-goal type 透传）
+  // g-507：业务定义不再逐条裸注册 —— 整个命名空间由**一个** prefix 入口覆盖（先鉴权后分发）。
+  // 逐条端点仍全部可达：下面的清单在 g-507 之前是「逐条已注册」断言，现改为「全部落在唯一入口之下」，
+  // 断言强度不降（清单少一项或入口不再覆盖命名空间都会判红）。
+  assertSingleProtectedEntry(routeDefs);
   for (const p of ["/api/dsh-graph", "/api/dsh-graph/goal", "/api/dsh-graph/accept",
     "/api/dsh-graph/resolve-accept", "/api/dsh-graph/edit-description",
     "/api/dsh-graph/add-card", "/api/dsh-graph/start-collection",
@@ -158,7 +175,10 @@ test("g-116 单包 apply 同时注册 host（tools）与 client（webServer 路�
     "/api/dsh-graph/archive", "/api/dsh-graph/unarchive",
     "/api/dsh-graph/delete", "/api/dsh-graph/set-description",
     "/api/dsh-graph/version-goals", "/api/dsh-graph/backlog-goals"]) {
-    assert.ok(routes.has(p), `路由 ${p} 已注册`);
+    // g-507 返工：恢复基线逐端点强度（此前只判常量前缀，恒真）。判定口径与 dispatcher 一致：
+    // lookupRoute 在入口表里查该 path，未命中 ⇒ 认证后分发 404 ⇒ 判红。
+    const hit = lookupRoute(buildRouteTable(stub.routes), p);
+    assert.equal(hit.defined, true, `端点 ${p} 经唯一入口分发可命中业务定义（实际：${hit.defined ? hit.matchedPath : "未命中 ⇒ 404"}）`);
   }
 });
 
@@ -364,12 +384,12 @@ test("g-149 REST GET /api/dsh-graph 无 workspace 参数返回错误、不建骨
   let boardHandler: any;
   const webServer = {
     register: (def: any) => {
-      if (def.path === "/api/dsh-graph") boardHandler = def.handler;
+      if (def.path === "/api/dsh-graph" && def.kind === "prefix") boardHandler = def.handler; // g-507：唯一 prefix 入口
       return () => {};
     },
   };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -386,7 +406,7 @@ test("g-149 REST GET /api/dsh-graph 无 workspace 参数返回错误、不建骨
     end: (data: string) => { responseData = JSON.parse(data); },
   };
 
-  boardHandler(req, res);
+  boardHandler(withOwner(req), res);
 
   assert.equal(statusCode!, 400, "无 workspace 时返回 400");
   assert.ok(responseData.error.includes("workspace"), `错误提及 workspace: ${responseData.error}`);
@@ -397,12 +417,12 @@ test("g-149 REST POST 端点无 workspace 参数返回错误", async () => {
   let transitionHandler: any;
   const webServer = {
     register: (def: any) => {
-      if (def.path === "/api/dsh-graph/transition") transitionHandler = def.handler;
+      if (def.path === "/api/dsh-graph" && def.kind === "prefix") transitionHandler = def.handler; // g-507：唯一 prefix 入口
       return () => {};
     },
   };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -412,6 +432,7 @@ test("g-149 REST POST 端点无 workspace 参数返回错误", async () => {
 
   // 模拟 POST 请求，body 无 workspace，URL 也无 ?workspace=
   const req: any = {
+    headers: { [OWNER_HEADER]: "1" }, // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
     method: "POST",
     url: "/api/dsh-graph/transition",
     on: (event: string, cb: any) => {
@@ -441,12 +462,12 @@ test("g-149 REST GET /api/dsh-graph 有明确 workspace 时正常返回", async 
   let boardHandler: any;
   const webServer = {
     register: (def: any) => {
-      if (def.path === "/api/dsh-graph") boardHandler = def.handler;
+      if (def.path === "/api/dsh-graph" && def.kind === "prefix") boardHandler = def.handler; // g-507：唯一 prefix 入口
       return () => {};
     },
   };
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: base } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: base } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -463,7 +484,7 @@ test("g-149 REST GET /api/dsh-graph 有明确 workspace 时正常返回", async 
     end: (data: string) => { responseData = JSON.parse(data); },
   };
 
-  boardHandler(req, res);
+  boardHandler(withOwner(req), res);
 
   assert.equal(statusCode!, 200, "有 workspace 时返回 200");
   assert.ok(responseData, "有 workspace 时返回数据");

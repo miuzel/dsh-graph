@@ -9,15 +9,22 @@ import { init, writeSupervisorSession, readSupervisorSession, writeProjectConfig
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
 
+// g-507：捕获到的注册定义（setup 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g207-"));
   init(dir);
   return dir;
 }
 
-function fakeRequest(method: string, body: unknown) {
+function fakeRequest(method: string, body: unknown, path: string) {
   const req: any = {
+    headers: { [OWNER_HEADER]: "1" },
     method,
+    url: path,
     _listeners: {} as Record<string, (v?: any) => void>,
     on(ev: string, cb: (v?: any) => void) {
       req._listeners[ev] = cb;
@@ -42,21 +49,21 @@ function setupRest() {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g207-rest-"));
   init(root);
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
   };
   apply(ctx, { root });
-  return { root, routes };
+  return { root, routes: routeDefs };
 }
 
 const post = async (routes: Map<string, any>, path: string, body: unknown) => {
-  const handler = routes.get(path);
-  assert.ok(handler, `路由 ${path} 已注册`);
-  const req = fakeRequest("POST", body);
+  const handler = entryHandler(routeDefs); // g-507：唯一受保护入口（先 admit + owner，后按 url 分发）
+  assert.ok(typeof handler === "function", `命名空间入口已注册（业务端点经门禁分发）：` + String(path));
+  const req = fakeRequest("POST", body, path);
   const res = fakeResponse();
   const p = handler(req, res);
   emitBody(req, body);

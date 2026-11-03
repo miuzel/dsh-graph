@@ -521,6 +521,7 @@ evidence: suite=core/tests node --test passed=1379 failed=0 skipped=0 exit=0
 | Windows · **v0.20.1**（第 2 轮 = **闭环轮**，被测产物 == 当轮发布产物；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 DSH **`0.2.1-alpha.2`**（经 `--dsh` 显式锁定），默认端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**；执行时刻 `2026-10-10T07:05:09.850Z`）。**被测产物 = 终态发布候选** `dsh-graph-0.20.1.tgz` sha256 `94459a16ae7d8dd378230d4c8daaf0f7885d2cd68b08e67b743d28d3b2d9c22c` 1437660 B，**== 当轮发布产物 ⇒ 该轮闭环成立**（其后 att-004 重建重打 ⇒ 终态见下一行）。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成，与第 1 轮同）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
 | Windows · **v0.20.1**（第 3 轮 = **终轮 / 闭环轮**，被测产物 == 终态发布产物；含 1 项目标改动：g-469 派发 API 双版本兼容） | 2026-10-10 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **15/0/1** | **PASS**（真机 T1–T5：通过 15 / 失败 0 / 告警 1；宿主 DSH **`0.2.1-alpha.2`**（经 `--dsh` 显式锁定），端口 3088；**原生 Windows 进程，经 WSL↔Windows 互操作驱动**；执行时刻 `2026-10-10T08:38:52.827Z`）。**被测产物 = 终态发布产物** `dsh-graph-0.20.1.tgz` sha256 `44dc4473940d41a7f1141e7b9b96f1e89e49788c7f070a818c8913a5e716f6ee` 1437812 B，**== 发布产物 ⇒ 闭环成立**。**T3 看板文件系统生命周期 32/32 步**（g-427 形态 8 步，每步盘面断言）+ 步骤清单自证 32/32 + 失败路径（业务错误、`tx.persist_failed=1`、重试收敛）+ 盘面总览 + 32 步文案无平台错误码 + 跨进程并发 CAS 4 抢 1。**唯一告警 = T1 台账层 WARN**（`--tarball` 模式发布包内无 `core/*.ts` ⇒ 未对账，**设计而非缺陷** ⇒ 台账对账改在仓库根完成，与第 1/2 轮同）。⚠️ **Windows 上「派发可用」维度未覆盖**（T1–T5 不含派发）：本行结论只覆盖**安装 / 启动 / REST**层；派发可用维度本版在 Linux/WSL2 隔离实例上验证，**Windows 未经真机验证** —— 不得读作 Windows 三维度齐全。互操作形态与纯原生场景的 4 点差异同 §7.8；逐字报告见 §7.9 | 负责人（真机） |
 | Linux (WSL2) · **v0.20.2**（发布准备轮：候选包静态层 + H3 事实通道实证） | 2026-10-10 | linux/x64 | v26.7.0 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | `exit=0`（转发件） | **PASS**（`platform-smoke-test.mjs --static-only .` = **通过 15 / 失败 0 / 告警 0**，含 H1–H6 全 PASS —— 其中 **H3 由隔离实例真派发事实判定**；`win-smoke-test.mjs --static-only . --h3-dispatch-json <facts>` = **通过 9 / 失败 0 / 告警 0**；转发执行件 `exit=0`；整套件自证闸门 2411/2411。**H3 的实例侧证据**：隔离实例装候选 `dist`（`link:`）→ 两轮独立真派发 `collector` / `executor-minimal` / `reviewer` 三条路径 → 真 `child_id` 落事实文件 → 磁盘侧独立核对命中（详见 §7.11 的 Linux 段）。**本行只对 Linux 具平台效力**，不替代 Windows 真机结论） | agent:g-476-att-001 |
+| Windows · **v0.23.0**（发布候选包真机门禁；含 g-505/g-506/g-507/g-561/g-610/g-612） | 2026-11-02 | win32/x64 | v24.21.0 | — | — | — | — | — | — | — | **22/0/0** | **PASS**（真机 T1–T5：通过 22 / 失败 0 / 告警 0；宿主 `@deepseek-ai/dsh@0.2.1-rc.5`，端口 3088；被测产物即发布包 `dsh-graph-0.23.0.tgz` sha256 `139a8ed07979d8dd83df879bd58d96dbcb74f26200bc465ea6bd76603f1855e8` 1677228 B）。**T3 看板文件系统生命周期 32/32 步全通过** + 失败路径判据全绿 + 跨进程 CAS 4 抢 1 + 32 步文案无平台错误码；**T1 台账层 67 项 / 命中 268 处 / 忽略 0 行**；**T1 派发可用层零硬编码 shell 名**；**H 系列组合探针 5/6 PASS（H3 需实例真派发显式跳过）**；**T5 REST 鉴权冒烟换票握手通过**。逐字报告见 §7.13 | 负责人（真机） |
 
 回填时请一并粘贴「可复制回传的报告」整段（执行件在结论后自动打印），并在 `README.md` 平台范围段落更新结论。
 该报告块自 g-428 起额外含 **`覆盖=…`** 一行（台账项数/命中数/忽略处数 + T3 生命周期步数），
@@ -1393,6 +1394,108 @@ harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=SKIP(需真机/实例) 
 > 非 agent 推断；产物 sha256/字节数经**独立对账**（中转前后一致）。
 > 🔴 红线仍作为流程纪律保留：**Linux/WSL2 全绿不能替代 Windows 真机结论**（发布红线 1），
 > 而本版 Windows 结论**仅覆盖上表所列维度**，H3 与 macOS 仍为未验证项。
+
+---
+
+### 7.13 v0.23.0 Windows 原生真机报告（逐字回传，2026-11-02）
+
+**执行环境**：
+- 平台：`win32/x64`（原生 Windows 进程，经 WSL2↔Windows PowerShell 互操作驱动）
+- Node.js：`v24.21.0`
+- 宿主 DSH：`0.2.1-rc.5`
+- 被测产物：`D:\workspace\play\dsh-graph-0.23.0.tgz`（发布包，**1,677,228 字节**，sha256 `139a8ed07979d8dd83df879bd58d96dbcb74f26200bc465ea6bd76603f1855e8`；与 `tmp/` 下指纹逐字一致）。
+
+**逐字回传报告**：
+
+```text
+========================================================================
+dsh-graph Windows 快速验收
+========================================================================
+平台：win32 x64    Node：v24.21.0    2026-11-02T07:16:55.572Z
+隔离 DSH_HOME：C:\Users\mingxuan\AppData\Local\Temp\dsh-graph-win-smoke-1793604869427
+隔离 profile：win-smoke    工作区：C:\Users\mingxuan\AppData\Local\Temp\dsh-graph-win-smoke-1793604869427\workspace
+
+========================================================================
+T2 全新隔离 profile 安装
+========================================================================
+dsh 版本：0.2.1-rc.5
+[ OK ] T2 · 初始化 web 模板 profile — --dump-config 写好 profile 即退出
+[info] T2 · 被测产物指纹 — dsh-graph-0.23.0.tgz  1677228 B  sha256=139a8ed07979d8dd83df879bd58d96dbcb74f26200bc465ea6bd76603f1855e8
+[ OK ] T2 · 安装 tarball dsh-graph-0.23.0.tgz
+[ OK ] T2 · 插件自带依赖已随安装落地 — yaml 已安装
+[info] T2 · 已安装包定位 — C:\Users\mingxuan\AppData\Local\Temp\dsh-graph-win-smoke-1793604869427\profiles\win-smoke\node_modules\dsh-graph
+已安装 dsh-graph 版本：0.23.0
+
+========================================================================
+T1 静态门禁（发布包不得具名导入 POSIX 专有常量）
+========================================================================
+[ OK ] T1 · 无 POSIX 专有常量的 ESM 具名导入 — 已扫描 17 个文件
+
+========================================================================
+T1 台账层（OS 调用点覆盖清单：未登记即判红）
+========================================================================
+[ OK ] T1 · OS 调用点覆盖清单（台账层） — 清单 67 项 / 命中 268 处 / 扫描 18 文件 / 忽略处数=0；每项均给出风险面与映射（ws:/pg:）或豁免理由，未登记项即判红
+
+========================================================================
+T1 派发可用层（harness 工具名平台无关性：硬编码 shell 名即判红）
+========================================================================
+[ OK ] T1 · 派发可用（工具名平台无关性） — 已安装包编译产物 core\ops.js（core/ops.js）：带引号的 "bash" 只出现在候选表与平台回落；槽位/候选/占位符/诊断/事件接线齐备
+
+========================================================================
+T1 harness 组合探针层（H1–H6：harness 组合 / OS 行为差异）
+========================================================================
+[ OK ] T1 · H · H1 shell 工具名解析（平台条件化组合声明 → 插件解析一致：win32→pwsh / POSIX→bash） — 组合声明：win32=pwsh linux=bash darwin=bash；插件解析（探针）逐平台一致；回落=win32:pwsh linux:bash darwin:bash；当前平台 win32=pwsh（来源 probe）；组合来源=100 个声明文件
+[ OK ] T1 · H · H2 角色白名单求交（组合工具名台账驱动；reviewer / collector / executor-minimal 三路径） — 三路径（含 minimal）+ 注入 3 组；reviewer/standard@win32=pwsh reviewer/minimal@win32=pwsh collector/standard@win32=pwsh collector/minimal@win32=pwsh executor/minimal@win32=pwsh reviewer/standard@linux=bash reviewer/minimal@linux=bash collector/standard@linux=bash collector/minimal@linux=bash executor/minimal@linux=bash；负向对照已判红；组合工具名=8+graph_*53
+[skip] T1 · H · H3 派发可用（隔离实例真派发 reviewer + collector + executor-minimal 各一次） — 跳过（需真机/实例）：未在隔离实例上真实派发 reviewer + collector + executor-minimal —— 不冒充通过
+[ OK ] T1 · H · H4 路径分隔符与大小写语义（产品侧拒绝语义 + 卷语义注入下的引擎行为） — 分隔符：a\b.txt=拒绝 /abs.txt=拒绝 ../esc.txt=拒绝 a/b.txt=接受 ok.txt=接受；大小写注入：请求=a.txt；不敏感卷→A.txt(aliased=true)；敏感卷→null
+[ OK ] T1 · H · H5 CRLF/LF 与编码往返（目标正文逐字节 + results 机器头注入折叠） — 正文：别名=无 逐字节=✓ utf8=✓；机器头：折叠=✓ 注入自成一行的痕迹=无 正文归一=✓
+[ OK ] T1 · H · H6 命令拼接与引号（`--dsh` 单串解析 + cmd.exe 引号 + 真实 argv 传递自检） — --dsh 单串按空白/引号分组；cmd.exe 元字符集合 [\s"&^|<>]；argv 逐字节回传（含 cmd.exe 组合命令行）；argv 用例 1 条 / shell 组合 1 条
+harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=SKIP(需真机/实例) H4=PASS H5=PASS H6=PASS | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+组合来源：100 个声明文件（C:\Users\mingxuan\AppData\Local\npm-cache\_npx\1e7f6d9597241db0\node_modules, C:\Users\mingxuan\AppData\Local\npm-cache\_npx\4f4f47d9854f3c73\node_modules, C:\Users\mingxuan\AppData\Local\npm-cache\_npx\61d1239fe6befc35\node_modules, C:\Users\mingxuan\AppData\Local\npm-cache\_npx\750cc96126099c02\node_modules, C:\Users\mingxuan\AppData\Local\npm-cache\_npx\7eff65a5cfe9d1d1\node_modules, C:\Users\mingxuan\AppData\Local\npm-cache\_npx\b5c6312874079fe8\node_modules, C:\Users\mingxuan\.dsh\profiles, C:\Users\mingxuan\.dsh\profiles\desktop\node_modules, C:\Users\mingxuan\.dsh\profiles\node_modules）
+
+========================================================================
+T3 核心运行时（完整看板文件系统生命周期 + 每步盘面断言 + 并发 CAS）
+========================================================================
+[ OK ] T3 · 建目标 / 判据 / 标签锁 / CAS / validate — goal=g-001，32 步全通过，validate 返回空
+[ OK ] T3 · 看板文件系统生命周期（清单式 32 步） — 建/移/归档/取消归档/暂缓/删除 + 卡片/附件/attempts + 锁与陈旧回收；每步均核对磁盘最终状态（源已消失、目标完整、全板计数唯一）
+[ OK ] T3 · 步骤清单自证（清单 ≡ 实跑） — 32 个步骤 id 与实跑集合完全一致
+[ OK ] T3 · 失败路径：预置非空目标 ⇒ 明确业务错误 — 含目标路径与「已存在/非空」语义、无平台错误码、源与阻碍物完好、tx.persist_failed 恰好 +1（可诊断），且重试收敛
+[ OK ] T3 · 盘面总览（双份/空目录/锁残留/事件计数） — 目标副本数唯一（2 个存活目标）、无残留空目标目录、无锁/临时产物、tx.persist_failed=1
+[ OK ] T3 · 用户可见文案不泄漏平台错误码 — 已核 32 步文案，无 EPERM/ENOTEMPTY/EBUSY/EACCES
+[ OK ] T3 · 跨进程并发 CAS（4 抢 1） — 恰好 1 个成功、3 个冲突被拒
+
+========================================================================
+T4/T5 实例启动与 REST 冒烟
+========================================================================
+[ OK ] T4 · 实例启动 / 插件加载 — 就绪：http://127.0.0.1:3088/?token=***
+[ OK ] T5 · dsh-graph 路由已注册
+[ OK ] T5 · 看板载荷可读
+[ OK ] T5 · Web UI 可达 — HTTP 303
+
+========================================================================
+结论
+========================================================================
+通过 22 项，失败 0 项，告警 0 项。
+
+总判定：PASS ✅
+
+----- 可复制回传的报告 -----
+dsh-graph Windows 冒烟 | 平台=win32/x64 node=v24.21.0
+安装来源=dsh-graph-0.23.0.tgz (实际版本 0.23.0)
+产物指纹=sha256:139a8ed07979d8dd83df879bd58d96dbcb74f26200bc465ea6bd76603f1855e8  1677228 B
+结果=PASS 通过22/失败0/告警0
+覆盖=台账=67项/268处命中（忽略0行，未登记即判红）  T3生命周期=32步（g-427 形态 8 步，每步盘面断言）  派发可用=零硬编码 shell 名（接线齐备）  H组合=5/6 通过，1 项显式跳过（需真机/实例）
+harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=SKIP(需真机/实例) H4=PASS H5=PASS H6=PASS | 清单=6 项（单一真源，win-smoke + platform-smoke 两件消费）
+启动日志=C:\Users\mingxuan\AppData\Local\Temp\dsh-graph-win-smoke-1793604869427\_smoke\dsh-web.log
+---------------------------
+```
+
+**分层事实与判定总结**：
+- **T2 安装与依赖落地**：宿主 `0.2.1-rc.5`，依赖 `yaml` 正常安装，无权限阻断。
+- **T1 静态/台账/派发/组合**：扫描 18 文件 268 处 OS 调用点未登记 0、忽略 0；零硬编码 shell 名；H1/H2/H4/H5/H6 全 PASS。
+- **T3 完整看板 FS 生命周期**：32/32 步盘面断言全过，CAS 并发 4 抢 1 正常，无 EPERM 或锁残留。
+- **T4/T5 实例启动与鉴权**：T5 成功以 launch token 交换 Cookie 鉴权访问，路由与看板载荷均正常 200 响应。
+- **总评**：**通过 22 / 失败 0 / 告警 0，总判定 PASS**。发布红线 1 在 Windows 原生实机闭环成立。
 
 ---
 

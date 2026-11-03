@@ -44,6 +44,10 @@ import {
 // g-437：`resolveAccept(fast_track=true)` 的门禁③改由引擎在 attempt 实际工作树上采集 Git 真源，
 // 故本文件的「快速放行」正向/负向用例统一改用真 Git 夹具（策略级纯函数用例不受影响）。
 import { makeFastTrackFixture } from "./fixtures/fast-track-fixture.ts";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function fixture(opts: { type?: string; criteria?: string[]; status?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g435-"));
@@ -77,9 +81,9 @@ function policyStageReport(over: Record<string, unknown> = {}) {
 function hostHarness(root: string) {
   const registered: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
@@ -100,9 +104,10 @@ function fakeRes() {
 
 /** 真实 HTTP 入口：GET/POST /api/dsh-graph/settings。 */
 async function request(routes: Map<string, any>, method: string, body?: unknown) {
-  const handler = routes.get("/api/dsh-graph/settings");
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/settings */;
   assert.ok(handler, "settings 路由必须已注册");
   const req: any = {
+    headers: { [OWNER_HEADER]: "1" }, // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
     method,
     url: "/api/dsh-graph/settings",
     _l: {} as Record<string, (v?: any) => void>,

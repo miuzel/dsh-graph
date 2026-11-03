@@ -33,14 +33,19 @@ import {
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
 
+// g-507：捕获到的注册定义（setup 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+
 function setup(agents?: Record<string, unknown>) {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g282-"));
   init(root);
   const registered: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
-    get: (name: string) => (name === "agents" ? { get: (id: string) => agents?.[id] } : name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
+    get: (name: string) => (name === "agents" ? { get: (id: string) => agents?.[id] } : name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined),
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: {
@@ -49,7 +54,7 @@ function setup(agents?: Record<string, unknown>) {
     },
   };
   apply(ctx, { root });
-  return { root, routes, byName: new Map(registered.map((d) => [d.name, d])) };
+  return { root, routes: routeDefs, byName: new Map(registered.map((d) => [d.name, d])) };
 }
 
 const exec = (sessionId?: string) => ({
@@ -95,8 +100,8 @@ const gone: any = () => "gone";
 const running: any = () => "running";
 const unknownState: any = () => "unknown";
 
-function fakeRequest(method: string, body: unknown) {
-  const req: any = { method, _listeners: {} as Record<string, (v?: any) => void>,
+function fakeRequest(method: string, body: unknown, path: string) {
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method, url: path, _listeners: {} as Record<string, (v?: any) => void>,
     on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; } };
   return req;
 }
@@ -107,9 +112,9 @@ function fakeResponse() {
   return res;
 }
 async function post(routes: Map<string, any>, path: string, body: unknown) {
-  const h = routes.get(path);
-  assert.ok(h, "端点未注册: " + path);
-  const req = fakeRequest("POST", body);
+  const h = entryHandler(routeDefs); // g-507：唯一受保护入口（先 admit + owner，后按 url 分发）
+  assert.ok(typeof h === "function", "端点未注册: " + path);
+  const req = fakeRequest("POST", body, path);
   const res = fakeResponse();
   const p = h(req, res);
   req._listeners.data?.(Buffer.from(typeof body === "string" ? body : JSON.stringify(body)));

@@ -23,9 +23,14 @@ import {
   goalCards,
   boardPayload,
   resolveModelRoute,
+  abandonAttempt,
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g194-"));
@@ -184,6 +189,15 @@ test("g-194 ④ 历史 attempt / card 缺少 provider / model 字段时安全降
   assert.equal(detail.cards[0].model, null);
 });
 
+/** g-610：同一目标重派前，把上一 attempt 按既有授权正常结束。 */
+function closePriorAttempts(root: string, goal: string): void {
+  for (const a of goalDetail(root, goal).attempts) {
+    if (a.result === "pending") {
+      abandonAttempt(root, goal, { actor: "human:gui", attempt: a.id, reason: "fixture: prior attempt ended", liveCheck: () => "gone" });
+    }
+  }
+}
+
 test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / start-collection）均持久化解析后路由", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g194-ws-"));
   const root = join(ws, ".dsh-graph");
@@ -196,10 +210,11 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
 
   let registeredTools: any[] = [];
   let registeredRoutes = new Map<string, any>();
-  const webServer = { register: (def: any) => { registeredRoutes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "s1" }) };
       if (name === "subagents") {
@@ -243,6 +258,7 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
   function fakeReq(method: string, queryParams: string, body: any) {
     const listeners: Record<string, Function> = {};
     return {
+      headers: { [OWNER_HEADER]: "1" },
       method,
       url: queryParams,
       on: (e: string, fn: Function) => { listeners[e] = fn; },
@@ -260,8 +276,9 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
     return res;
   }
 
+  closePriorAttempts(root, goalId);
   // 2. start-execution REST 端点 (缺省继承 project.yaml)
-  const execHandler = registeredRoutes.get("/api/dsh-graph/start-execution");
+  const execHandler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   assert.ok(execHandler, "start-execution 已注册");
   const req2 = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), { goal: goalId });
   const res2 = fakeRes();
@@ -276,8 +293,9 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
   assert.equal(att2.model, "proj-m");
   assert.equal(att2.model_route, "proj-p/proj-m");
 
+  closePriorAttempts(root, goalId);
   // 3. start-collection REST 端点 (显式指定)
-  const collectHandler = registeredRoutes.get("/api/dsh-graph/start-collection");
+  const collectHandler = handlerFor(routeDefs) /* /api/dsh-graph/start-collection */;
   assert.ok(collectHandler, "start-collection 已注册");
   const req3 = fakeReq("POST", "/api/dsh-graph/start-collection?workspace=" + encodeURIComponent(ws), { goal: goalId, card: cardId, provider: "col-p", model: "col-m" });
   const res3 = fakeRes();

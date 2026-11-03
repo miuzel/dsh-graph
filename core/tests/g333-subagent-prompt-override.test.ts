@@ -49,6 +49,10 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const HOST_SRC = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/index.js"), "utf8");
 const MODAL_SRC = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/settings-modal.js"), "utf8");
@@ -83,10 +87,11 @@ function newGoal(root: string, title: string): string {
 function makeHostCtx(captured: { prompt?: string }, workspace: string) {
   const routes = new Map<string, any>();
   const registered: any[] = [];
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: workspace };
       if (name === "subagents") {
         return {
@@ -116,6 +121,7 @@ function execCtx(ws: string) {
 function fakeReq(method: string, url: string, body: any) {
   const listeners: Record<string, Function> = {};
   return {
+    headers: { [OWNER_HEADER]: "1" },
     method,
     url,
     on: (e: string, fn: Function) => { listeners[e] = fn; },
@@ -329,7 +335,7 @@ test("g-333 判据 1/4/5：REST 写入 → 派发正文逐字包含该文本（�
   writeYaml(root, "supervisor:\n  session: sess-super\n");
   const captured: { prompt?: string } = {};
   const { routes, registered } = makeHostCtx(captured, ws);
-  const settingsRoute = routes.get("/api/dsh-graph/settings");
+  const settingsRoute = handlerFor(routeDefs) /* /api/dsh-graph/settings */;
 
   // 基线：未设置覆盖 → 不注入该段（同时给出「变了」的对照）
   const g0 = newGoal(root, "基线目标");
@@ -448,7 +454,7 @@ test("g-333 判据 1/3：弹窗草稿（真实 buildSettingsPatch）→ REST →
   );
 
   // 弹窗载荷 → 真实 REST 端点 → 真实派发正文
-  const res = await postSettings(routes.get("/api/dsh-graph/settings"), ws, patch);
+  const res = await postSettings(handlerFor(routeDefs) /* /api/dsh-graph/settings */, ws, patch);
   assert.equal(res._code, 200, "弹窗载荷被 REST schema 接受");
   const goal = newGoal(root, "弹窗写入目标");
   const { prompt } = await dispatchTool(registered, ws, goal, captured);

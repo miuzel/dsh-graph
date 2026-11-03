@@ -111,7 +111,7 @@ import {
   type MemoryScope,
 } from "./events.ts";
 import { GraphError, GraphConflictError, STATUSES, assertTransition } from "./machine.ts";
-import { withTx, TxError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
+import { withTx, withLocalLock, TxError, TxCasError, commitPrepared, type TxContext } from "./transaction.ts";
 import { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema, assertVersionSlug, isVersionSlug, type ObjectSchema } from "./schema.ts";
 
 import {
@@ -159,6 +159,20 @@ import {
   reconcileMachineReportWithGitTruth,
   type ReviewPolicy,
 } from "./review-policy.ts";
+// g-505：主管上下文缓存保活的配置解析（两级三态）与只读投影（纯函数模块 keepalive.ts）。
+import { KEEP_ALIVE_EXEMPT_TTL_MS, normalizeKeepAliveMode, isKeepAliveModeMalformed, type KeepAliveMode } from "./keepalive.ts";
+// g-506：子代理长任务关照的配置解析（两级三态 + 时间参数继承/覆盖）、调度/巡检状态机与只读投影。
+import {
+  CARE_MODES,
+  CARE_THRESHOLD_MIN_SECONDS,
+  CARE_THRESHOLD_MAX_SECONDS,
+  normalizeCareMode,
+  isCareModeMalformed,
+  normalizeCareSeconds,
+  careEffectiveProjection,
+  type CareMode,
+  type CareEffectiveProjection,
+} from "./care.ts";
 export { GraphError, GraphConflictError };
 export { normalizeGoalType };
 export {
@@ -224,11 +238,152 @@ export type {
   GitTruthFacts,
 } from "./review-policy.ts";
 export type { AttemptGitTruth, AttemptGitTruthResult, AttemptGitTruthTree } from "./worktree.ts";
+// g-505：主管上下文缓存保活（纯函数模块 keepalive.ts）经 ops 统一 re-export，
+// host 半边只需从 ./core/ops.js 取用（与 review-policy / worktree 系列同款）。
+export {
+  KEEP_ALIVE_MODES,
+  KEEP_ALIVE_DEFAULT_ENABLED,
+  KEEP_ALIVE_STAGE1_DEFAULTS,
+  KEEP_ALIVE_STAGE2_DEFAULTS,
+  KEEP_ALIVE_SHORT_TTL_MS,
+  KEEP_ALIVE_PING_TIMEOUT_MS,
+  KEEP_ALIVE_EXEMPT_TTL_MS,
+  KEEP_ALIVE_CHANNELS,
+  KEEP_ALIVE_PHASES,
+  normalizeKeepAliveMode,
+  isKeepAliveModeMalformed,
+  normalizeKeepAliveGlobal,
+  isKeepAliveGlobalMalformed,
+  resolveKeepAlive,
+  keepAliveEffectiveProjection,
+  keepAliveResolutionOf,
+  keepAliveEffectiveOf,
+  resolveKeepAliveGlobalRaw,
+  resolveKeepAliveChannel,
+  decideKeepAlive,
+  defaultKeepAliveConfig,
+  makeKeepAliveAuditEntry,
+  formatKeepAliveAudit,
+  keepAliveStatusProjection,
+} from "./keepalive.ts";
+export type {
+  KeepAliveMode,
+  KeepAliveConfigValue,
+  KeepAliveSource,
+  KeepAliveProjectConfig,
+  KeepAliveGlobalConfig,
+  KeepAliveResolution,
+  KeepAliveEffectiveProjection,
+  KeepAliveChannel,
+  KeepAliveChannelReason,
+  KeepAliveCapabilities,
+  KeepAliveTtlProfile,
+  KeepAliveChannelDecision,
+  KeepAlivePhase,
+  KeepAliveConfig,
+  KeepAliveInputs,
+  KeepAliveDecision,
+  KeepAliveReason,
+  KeepAliveOutcome,
+  KeepAliveAuditEntry,
+  KeepAliveSnapshotUnavailable,
+  KeepAliveStatusProjection,
+} from "./keepalive.ts";
+// g-506：子代理长任务关照（纯函数模块 care.ts）经 ops 统一 re-export，
+// host 半边只需从 ./core/ops.js 取用（与 keepalive / review-policy 系列同款）。
+export {
+  CARE_MODES,
+  CARE_DEFAULT_ENABLED,
+  CARE_DEFAULTS,
+  CARE_MAX_UNANSWERED_REMINDERS,
+  CARE_NO_RESPONSE_COOLDOWN_MS,
+  CARE_THRESHOLD_MIN_SECONDS,
+  CARE_THRESHOLD_MAX_SECONDS,
+  CARE_CAPABILITIES,
+  CARE_STALL_SIGNALS,
+  CARE_ALLOWED_ACTIONS,
+  CARE_PRESERVED_GATES,
+  CARE_INTERVENTIONS,
+  CARE_WAKE_KINDS,
+  CARE_PHASES,
+  CARE_OUTCOMES,
+  CARE_INSPECTION_STATUSES,
+  CARE_INSPECTION_MIN_FRESHNESS_MS,
+  CARE_INSPECTION_MAX_FRESHNESS_MS,
+  normalizeCareMode,
+  isCareModeMalformed,
+  normalizeCareGlobal,
+  isCareGlobalMalformed,
+  normalizeCareSeconds,
+  resolveCare,
+  resolveCareTiming,
+  careEffectiveProjection,
+  assessCareCapabilities,
+  assessIntervention,
+  assertNoMutualWake,
+  careDedupeKey,
+  careTaskDueAt,
+  careTaskIntervalMs,
+  carePausedRemainingMs,
+  decideCare,
+  applyCareDelivery,
+  applyCareOutcome,
+  applyNoResponseLimit,
+  normalizeCareOutcome,
+  careInspectionFreshnessMs,
+  createCareInspection,
+  careInspectionOpen,
+  expireCareInspection,
+  validateCareOutcome,
+  applyCareInspectionOutcome,
+  pauseCare,
+  resumeCare,
+  resetCare,
+  newCareGroupState,
+  isCareReminderStillValid,
+  careStatusProjection,
+  formatCareWakeMessage,
+  makeCareAuditEntry,
+  formatCareAudit,
+  careResolutionOf,
+  careEffectiveOf,
+} from "./care.ts";
+export type {
+  CareMode,
+  CareConfigValue,
+  CareSource,
+  CareProjectConfig,
+  CareGlobalConfig,
+  CareResolution,
+  CareTimingResolution,
+  CareEffectiveProjection,
+  CareCapability,
+  CareCapabilityReport,
+  CareStallSignal,
+  CareAllowedAction,
+  CareIntervention,
+  CareWakeKind,
+  CarePhase,
+  CareTaskState,
+  CareGroupState,
+  CareInputs,
+  CareTaskSchedule,
+  CareDecision,
+  CareReason,
+  CareOutcomeKind,
+  CareInspectionStatus,
+  CareInspectionTarget,
+  CareInspection,
+  CareOutcomeRejection,
+  CareOutcomeRecord,
+  CareStatusProjection,
+  CareAuditEntry,
+} from "./care.ts";
 export { allCriteriaVerified, verifiedCriteriaItems, CRITERIA_VERIFIED_MARK } from "./model.ts";
 export { createVersion, renameVersion, deleteVersion, releaseVersion, setVersionStatus, validateVersionRelease, versionDetail };
 export { validateSchema, assertSchema, schemaErrorResponse, settingsPostSchema, unbindPostSchema, abandonAttemptPostSchema };
 export type { ObjectSchema };
-export { TxError };
+export { TxError, withLocalLock };
 import { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, getCachedBoardPayload as getCachedBoardPayloadCore, _inspectBoardCache, closeWatchers } from "./cache.ts";
 import { invalidate as invalidateGeneration } from "./cache-state.ts";
 export { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatch, _inspectBoardCache, closeWatchers };
@@ -1696,6 +1851,48 @@ export interface ProjectConfig {
     automation: Record<string, string | null>;
     /** g-440：Agent Teams 最小契约开关（负责人资格判定）。null/未配置 = off。 */
     agent_teams: boolean | null;
+    /**
+     * g-505：主管上下文缓存保活的项目级三态（归一读值）。`null`/缺失 = 未配置 = `inherit`。
+     * 写侧 schema 只接受 `inherit`/`true`/`false`/null（拒绝隐式形态）。
+     */
+    keep_alive?: KeepAliveMode | null;
+    /**
+     * g-505 B5：**显式可信长 TTL**（可选，默认 null = 未知 ⇒ 短缓存有界策略）。
+     * 只接受同时给出完整 provider+model+ttl_ms 的条目；ttl_ms 必须 ≥
+     * `KEEP_ALIVE_EXEMPT_TTL_MS` 且 ≤ 24h。只有与**当前观察到的正常 loop route** 精确匹配时才豁免；
+     * 绝不按 provider/model 名字猜。
+     */
+    keep_alive_ttl?: { provider: string; model: string; ttl_ms: number } | null;
+    /** 读侧元信息：keep_alive_ttl 存在但形态非法（按未知 TTL 处理，不豁免）。 */
+    keep_alive_ttl_malformed?: boolean;
+    /** 读侧元信息：非法条目的 JSON 安全投影（仅展示）。 */
+    keep_alive_ttl_raw?: unknown;
+    /**
+     * g-505 **仅读侧元信息**（写侧 schema 明确拒绝）：`supervisor.keep_alive` 原始值存在但
+     * 无法判定为三态之一。宿主与调度器据此 **fail-closed 按关闭处理**，绝不把坏值归一
+     * `inherit` 后默认启用。
+     */
+    keep_alive_malformed?: boolean;
+    /** g-505 **仅读侧元信息**：畸形原始值的 JSON 安全投影（仅用于展示/诊断，绝不回写）。 */
+    keep_alive_raw?: unknown;
+    /**
+     * g-506：子代理长任务关照的项目级三态（`inherit`/`true`/`false`）。未配置/缺失 ⇒ `null`。
+     * 畸形原始值 ⇒ 归一为 `inherit` 且 `care_malformed=true`（宿主/调度器 fail-closed 关闭）。
+     */
+    care?: CareMode | null;
+    /** g-506 **仅读侧元信息**：`supervisor.care` 原始值（畸形判定用，绝不回写）。 */
+    care_raw?: unknown;
+    /** g-506 **仅读侧元信息**：`supervisor.care` 原始值无法判定为三态之一。 */
+    care_malformed?: boolean;
+    /** g-506：项目级任务工作阈值（秒）；`null` = 继承全局。 */
+    care_threshold_seconds?: number | null;
+    /** g-506：项目级复查间隔（秒）；`null` = 继承全局。 */
+    care_recheck_seconds?: number | null;
+    /** g-506 **仅读侧元信息**：时间参数原始值存在但非法（按继承处理并显示告警）。 */
+    care_threshold_seconds_malformed?: boolean;
+    care_recheck_seconds_malformed?: boolean;
+    /** g-506：关照的**项目半边**只读投影（host 会以真实全局值重新投影后下发 UI/REST）。 */
+    care_effective?: CareEffectiveProjection;
   };
   prompt_overrides: { subagent: PromptOverride };
   /**
@@ -2025,7 +2222,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     return {
       executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
-      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false, care: null, care_malformed: false, care_threshold_seconds: null, care_recheck_seconds: null, care_threshold_seconds_malformed: false, care_recheck_seconds_malformed: false },
       prompt_overrides: { subagent: { state: "default", value: null } },
       // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
       modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
@@ -2141,6 +2338,139 @@ export function readProjectConfig(root: string): ProjectConfig {
   const nonProductRead = list(["review", "non_product_prefixes"]);
   const policyResult = policyRead();
 
+  /**
+   * g-505：`supervisor.keep_alive` 的读侧装配（**原始值判畸形**，不拿归一后的形态判）。
+   *
+   * - 合法形态（真布尔 / `"inherit"`/`"true"`/`"false"` / 缺失 / null）⇒ 归一三态；
+   *   未配置保持 `null`（与显式 `inherit` 语义相同，但读回形状可区分）。
+   * - 畸形形态（数字、映射、数组、`"yes"`、`"on"`…）⇒ `keep_alive` 归一为 `inherit` 以保持
+   *   既有读回类型，但 **`keep_alive_malformed = true`** 且原值以 JSON 安全形态透出。
+   *   宿主/调度器必须据此 **fail-closed 关闭**，绝不「归一 inherit ⇒ 默认开启」。
+   * - 整档 YAML 不可解析 ⇒ 无法确认任何 supervisor 配置 ⇒ 同样 fail-closed。
+   */
+  const keepAliveRead = (): Pick<ProjectConfig["supervisor"], "keep_alive" | "keep_alive_malformed" | "keep_alive_raw"> => {
+    if (documentMalformed) {
+      return { keep_alive: null, keep_alive_malformed: true, keep_alive_raw: null };
+    }
+    let raw: unknown;
+    let present = false;
+    if (isPlainObject(parsedDoc) && "supervisor" in parsedDoc) {
+      const sv = (parsedDoc as any).supervisor;
+      if (isPlainObject(sv) && "keep_alive" in sv) {
+        raw = sv.keep_alive;
+        present = true;
+      }
+    } else {
+      const lineValue = readScalarByPath(lines, ["supervisor", "keep_alive"]);
+      if (lineValue !== null) {
+        raw = lineValue;
+        present = true;
+      }
+    }
+    if (!present || raw === null || raw === undefined) {
+      return { keep_alive: null, keep_alive_malformed: false };
+    }
+    if (isKeepAliveModeMalformed(raw)) {
+      // 原值只做 JSON 安全投影（标量/数组/映射都会被 JSON 序列化截断），不参与写回。
+      let safeRaw: unknown = null;
+      try { safeRaw = JSON.parse(JSON.stringify(raw)); } catch { safeRaw = null; }
+      return { keep_alive: normalizeKeepAliveMode(raw), keep_alive_malformed: true, keep_alive_raw: safeRaw };
+    }
+    return { keep_alive: normalizeKeepAliveMode(raw), keep_alive_malformed: false };
+  };
+  const keepAliveConfig = keepAliveRead();
+
+  /**
+   * g-506：`supervisor.care*` 的读侧装配（**原始值判畸形**，与 keep_alive 同口径）。
+   *
+   * - `care` 合法三态/真布尔/未配置 ⇒ 归一；畸形 ⇒ 归一 `inherit` 但 `care_malformed=true`
+   *   （宿主 fail-closed 关闭，绝不把坏值当「开」）。
+   * - 时间参数非法存在值 ⇒ 归一 `null`（继承）但 *_malformed=true（界面告警，不静默）。
+   * - 项目半边 `care_effective` 只作提示；host 会以真实全局值重新投影。
+   */
+  const careRead = (): Pick<
+    ProjectConfig["supervisor"],
+    | "care" | "care_raw" | "care_malformed"
+    | "care_threshold_seconds" | "care_threshold_seconds_malformed"
+    | "care_recheck_seconds" | "care_recheck_seconds_malformed"
+    | "care_effective"
+  > => {
+    const sv = isPlainObject(parsedDoc) && isPlainObject((parsedDoc as any).supervisor)
+      ? (parsedDoc as any).supervisor as Record<string, unknown>
+      : null;
+    const pickRaw = (key: string): { present: boolean; value: unknown } => {
+      if (sv && key in sv) return { present: true, value: sv[key] };
+      const lineValue = readScalarByPath(lines, ["supervisor", key]);
+      return { present: lineValue !== null, value: lineValue };
+    };
+    const modeRaw = pickRaw("care");
+    const thresholdRaw = pickRaw("care_threshold_seconds");
+    const recheckRaw = pickRaw("care_recheck_seconds");
+    const threshold = normalizeCareSeconds(thresholdRaw.present ? thresholdRaw.value : null);
+    const recheck = normalizeCareSeconds(recheckRaw.present ? recheckRaw.value : null);
+    const modeMalformed = documentMalformed
+      || (modeRaw.present && isCareModeMalformed(modeRaw.value));
+    const stored: CareMode | null = modeRaw.present && !documentMalformed
+      ? normalizeCareMode(modeRaw.value)
+      : null;
+    let safeRaw: unknown = null;
+    if (modeRaw.present) {
+      try { safeRaw = JSON.parse(JSON.stringify(modeRaw.value)); } catch { safeRaw = null; }
+    }
+    const projectHalf = {
+      mode: modeMalformed ? (modeRaw.value as any) : stored,
+      thresholdSeconds: threshold,
+      recheckSeconds: recheck,
+    };
+    return {
+      care: stored,
+      ...(modeRaw.present ? { care_raw: safeRaw } : {}),
+      care_malformed: modeMalformed,
+      care_threshold_seconds: threshold,
+      care_threshold_seconds_malformed: thresholdRaw.present && threshold === null,
+      care_recheck_seconds: recheck,
+      care_recheck_seconds_malformed: recheckRaw.present && recheck === null,
+      care_effective: careEffectiveProjection(projectHalf, { enabled: null, thresholdSeconds: null, recheckSeconds: null }),
+    };
+  };
+  const careConfig = careRead();
+
+  /**
+   * g-505 B5：`supervisor.keep_alive_ttl` 的读侧装配（可选显式可信长 TTL）。
+   * 只认完整 `{provider, model, ttl_ms}` 映射；provider/model 非空字符串（≤128），
+   * ttl_ms 为 [KEEP_ALIVE_EXEMPT_TTL_MS, 24h] 的整数。缺失/null ⇒ null（未知）。
+   * 形态非法 ⇒ `keep_alive_ttl_malformed=true` + safe raw，但**不**关闭保活（回落未知 TTL 策略）。
+   */
+  const keepAliveTtlRead = (): Pick<ProjectConfig["supervisor"], "keep_alive_ttl" | "keep_alive_ttl_malformed" | "keep_alive_ttl_raw"> => {
+    if (documentMalformed) return { keep_alive_ttl: null, keep_alive_ttl_malformed: true, keep_alive_ttl_raw: null };
+    let raw: unknown;
+    let present = false;
+    if (isPlainObject(parsedDoc) && "supervisor" in parsedDoc) {
+      const sv = (parsedDoc as any).supervisor;
+      if (isPlainObject(sv) && "keep_alive_ttl" in sv) { raw = sv.keep_alive_ttl; present = true; }
+    }
+    if (!present || raw === null || raw === undefined) return { keep_alive_ttl: null, keep_alive_ttl_malformed: false };
+    const malformed = (safeRaw: unknown = raw) => {
+      let safe: unknown = null;
+      try { safe = JSON.parse(JSON.stringify(safeRaw)); } catch { safe = null; }
+      return { keep_alive_ttl: null, keep_alive_ttl_malformed: true, keep_alive_ttl_raw: safe };
+    };
+    if (!isPlainObject(raw)) return malformed();
+    const keys = Object.keys(raw);
+    if (keys.some((k) => !["provider", "model", "ttl_ms"].includes(k))) return malformed();
+    const provider = raw.provider;
+    const model = raw.model;
+    const ttl = raw.ttl_ms;
+    if (typeof provider !== "string" || provider.trim() === "" || provider.length > 128) return malformed();
+    if (typeof model !== "string" || model.trim() === "" || model.length > 128) return malformed();
+    if (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < KEEP_ALIVE_EXEMPT_TTL_MS || ttl > 86_400_000) return malformed();
+    return {
+      keep_alive_ttl: { provider: provider.trim(), model: model.trim(), ttl_ms: ttl },
+      keep_alive_ttl_malformed: false,
+    };
+  };
+  const keepAliveTtlConfig = keepAliveTtlRead();
+
   // 读侧元信息：逐字段标注「存在但不可用」的原因（指向 project.yaml），绝不把内部哨兵当配置条目暴露。
   const invalidFields: Record<string, string> = {};
   if (documentMalformed) {
@@ -2191,7 +2521,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       review: { reviewer: scal(["defaults", "review", "reviewer"]), prompt: scal(["defaults", "review", "prompt"]) },
       pk: { lanes: lanesRaw === null ? null : parseInt(lanesRaw, 10), sandbox: scal(["defaults", "pk", "sandbox"]) },
     },
-    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]) },
+    supervisor: { automation: auto, agent_teams: boolScalar(["supervisor", "agent_teams"]), ...keepAliveConfig, ...keepAliveTtlConfig, ...careConfig },
     // g-480：五个模块开关（真布尔或 null=未配置）；旧键 `memory.tools_enabled` 只作为 **memory 模块
     // 的读侧默认**保留一次，并在 `modules.memory` 落盘时被删除（见 writeProjectConfig）⇒ 同一时刻
     // 只有一个生效真源，且旧值不会被静默丢弃（判据 5）。
@@ -2467,6 +2797,21 @@ function validateConfigPatch(patch: any): void {
     if ("agent_teams" in s && s.agent_teams !== undefined && s.agent_teams !== null && typeof s.agent_teams !== "boolean") {
       throw new GraphError("supervisor.agent_teams 只允许 true/false 或 null（未配置）");
     }
+    // g-506：关照三态必须落在合法闭集（真布尔 / "inherit"|"true"|"false" / null）；畸形即拒绝。
+    if ("care" in s && isCareModeMalformed(s.care)) {
+      throw new GraphError(`supervisor.care 只允许 ${CARE_MODES.join("/")} 或 null（未配置）`);
+    }
+    // g-506：时间参数必须是合法秒数或 null（继承）；越界/字符串垃圾一律拒绝，绝不静默接受。
+    for (const key of ["care_threshold_seconds", "care_recheck_seconds"] as const) {
+      if (!(key in s)) continue;
+      const v = (s as any)[key];
+      if (v === null || v === undefined) continue;
+      if (normalizeCareSeconds(v) === null) {
+        throw new GraphError(
+          `supervisor.${key} 只允许 ${CARE_THRESHOLD_MIN_SECONDS}~${CARE_THRESHOLD_MAX_SECONDS} 之间的秒数或 null（继承）`,
+        );
+      }
+    }
   }
   if ("prompt_overrides" in patch) {
     needObj(patch.prompt_overrides, "prompt_overrides");
@@ -2577,6 +2922,45 @@ function deleteLegacyMemoryToolsKey(lines: string[]): boolean {
   return true;
 }
 
+/**
+ * g-505：删除块映射里的一级标量子键（`parent:\n  child: ...`），用于把项目三态恢复成
+ * 「未配置 = inherit」（不把 `keep_alive: ` 空壳留在 project.yaml 里）。
+ * 只处理行级可编辑的块映射；父块本身保留（它可能还有 `session:` 等其它键）。
+ */
+function deleteScalarChild(lines: string[], parentPath: string[], childKey: string): boolean {
+  if (parentPath.length !== 1) return false;
+  const head = findKeyLine(lines, parentPath[0], 0, 0, lines.length);
+  if (head < 0) return false;
+  const after = lines[head].slice(lineIndent(lines[head]) + parentPath[0].length + 1);
+  if (splitValueComment(after).value.trim() !== "") return false; // 非块映射头 ⇒ 行级不可编辑
+  const childIdx = findKeyLine(lines, childKey, lineIndent(lines[head]) + 2, head + 1, blockChildrenEnd(lines, head, lineIndent(lines[head])));
+  if (childIdx < 0) return false;
+  lines.splice(childIdx, 1);
+  return true;
+}
+
+/** 删除 `parentPath.key` 的整个行级块（key 行 + 其缩进子块）。仅支持单层父块。 */
+function deleteMappingChild(lines: string[], parentPath: string[], key: string): boolean {
+  if (parentPath.length !== 1) return false;
+  const head = findKeyLine(lines, parentPath[0], 0, 0, lines.length);
+  if (head < 0) return false;
+  const after = lines[head].slice(lineIndent(lines[head]) + parentPath[0].length + 1);
+  if (splitValueComment(after).value.trim() !== "") return false;
+  const indent = lineIndent(lines[head]);
+  const childIdx = findKeyLine(lines, key, indent + 2, head + 1, blockChildrenEnd(lines, head, indent));
+  if (childIdx < 0) return false;
+  const childIndent = lineIndent(lines[childIdx]);
+  let end = childIdx + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (line.trim() === "") { end += 1; continue; }
+    if (lineIndent(line) <= childIndent) break;
+    end += 1;
+  }
+  lines.splice(childIdx, end - childIdx);
+  return true;
+}
+
 export function writeProjectConfig(root: string, patch: any, actor: string): void {
   // g-207：schema 严格校验（拒绝未知字段、类型不匹配、隐式 coercion）
   const schemaResult = validateSchema(patch, settingsPostSchema);
@@ -2624,6 +3008,28 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
     const v = patch.supervisor.agent_teams;
     setScalar(["supervisor", "agent_teams"], v === true ? "true" : v === false ? "false" : "");
   }
+  // g-505：保活三态落盘——`true`/`false` 写布尔字面量；`inherit`/null 清空该叶子（= 跟随全局，
+  // 也是默认态）。「清空」而非写字符串 "inherit"：未配置与显式 inherit 语义完全相同。
+  // 写侧不接受除此之外的形态（schema 已先拒绝），故这里不存在「坏值被归一后落盘」的路径。
+  if (patch.supervisor && "keep_alive" in patch.supervisor) {
+    const mode = normalizeKeepAliveMode(patch.supervisor.keep_alive);
+    if (mode === "inherit") {
+      deleteScalarChild(lines, ["supervisor"], "keep_alive");
+    } else {
+      setScalar(["supervisor", "keep_alive"], mode);
+    }
+  }
+  // g-505 B5：显式可信长 TTL 条目（完整 provider+model+ttl_ms）。null/缺省 ⇒ 删除整块（未知）。
+  if (patch.supervisor && "keep_alive_ttl" in patch.supervisor) {
+    const ttl = patch.supervisor.keep_alive_ttl;
+    if (!ttl) {
+      deleteMappingChild(lines, ["supervisor"], "keep_alive_ttl");
+    } else {
+      setScalar(["supervisor", "keep_alive_ttl", "provider"], ttl.provider);
+      setScalar(["supervisor", "keep_alive_ttl", "model"], ttl.model);
+      setScalar(["supervisor", "keep_alive_ttl", "ttl_ms"], String(ttl.ttl_ms));
+    }
+  }
   if (patch.prompt_overrides) {
     for (const key of PROMPT_OVERRIDE_KEYS) {
       const o = patch.prompt_overrides[key];
@@ -2634,6 +3040,19 @@ export function writeProjectConfig(root: string, patch: any, actor: string): voi
       else if (state === "override") encoded = JSON.stringify(o.value ?? "");
       setScalar(["prompt_overrides", key], "", () => encoded);
     }
+  }
+  // g-506：关照三态落盘——`inherit`/null 清空叶子（跟随全局，默认态）；`true`/`false` 写布尔字面量。
+  if (patch.supervisor && "care" in patch.supervisor) {
+    const mode = normalizeCareMode(patch.supervisor.care);
+    if (mode === "inherit") deleteScalarChild(lines, ["supervisor"], "care");
+    else setScalar(["supervisor", "care"], mode);
+  }
+  // g-506：时间参数落盘——合法秒数写数字；null/继承清空叶子（绝不写 "inherit" 噪声）。
+  for (const key of ["care_threshold_seconds", "care_recheck_seconds"] as const) {
+    if (!patch.supervisor || !(key in patch.supervisor)) continue;
+    const v = normalizeCareSeconds((patch.supervisor as any)[key]);
+    if (v === null) deleteScalarChild(lines, ["supervisor"], key);
+    else setScalar(["supervisor", key], String(v));
   }
   // g-311/g-435：顶层 review 列表写入
   if (patch.review) {
@@ -3370,6 +3789,43 @@ export function setGoalDirective(
     details: { directive: trimmed || null },
   });
   saveGoal(file, doc);
+}
+
+/**
+ * g-612：设置/清空目标级预计任务预算（唯一可编辑真源 = goal frontmatter 的
+ * `meta.task_budget_seconds`；null/undefined = 继承项目/全局 care_threshold_seconds）。
+ *
+ * 只校验**整数秒 30–86400**（与既有 care 阈值同范围），非法值在写前拒绝、零事件；
+ * 写入走既有事件先行模式（goal.budget_set），不触碰描述/指令/判据等其他小节。
+ */
+export function setGoalBudget(
+  root: string,
+  goalId: string,
+  opts: { budget_seconds: unknown; actor: string },
+): { old_seconds: number | null; new_seconds: number | null } {
+  const raw = opts?.budget_seconds;
+  let next: number | null = null;
+  if (raw !== null && raw !== undefined) {
+    if (typeof raw !== "number" || !Number.isInteger(raw)
+      || raw < CARE_THRESHOLD_MIN_SECONDS || raw > CARE_THRESHOLD_MAX_SECONDS) {
+      throw new GraphError(`预算必须是 ${CARE_THRESHOLD_MIN_SECONDS}–${CARE_THRESHOLD_MAX_SECONDS} 的整数秒，或 null（继承）`);
+    }
+    next = raw;
+  }
+  const file = findGoalFile(root, goalId);
+  const doc = loadGoal(file);
+  const old = normalizeCareSeconds(doc.meta.task_budget_seconds);
+  if (old === next) return { old_seconds: old, new_seconds: next };
+  appendEvent(root, {
+    actor: opts.actor,
+    event: "goal.budget_set",
+    goal: goalId,
+    details: { old_seconds: old, new_seconds: next, source: "goal" },
+  });
+  if (next === null) delete doc.meta.task_budget_seconds;
+  else doc.meta.task_budget_seconds = next;
+  saveGoal(file, doc);
+  return { old_seconds: old, new_seconds: next };
 }
 
 /** 设置/替换目标的「目标描述」——覆盖 `## 目标描述` 小节内容（g-260）。
@@ -8268,7 +8724,7 @@ export function markIndependentReviewMissing(
     return true;
   } catch (e) {
     try {
-      process.stderr.write(`[dsh-graph] g-436 未独立评审标注失败（已忽略，不影响 accept）: ${(e as Error)?.message ?? e}\n`);
+      process.stderr.write(`[dsh-graph] 未独立评审标注失败（已忽略，不影响 accept）: ${(e as Error)?.message ?? e}\n`);
     } catch { /* 忽略 */ }
     return false;
   }
@@ -8412,7 +8868,7 @@ export function reconcileReviewConclusions(
       conclusion_reconciled_from: machine,
       conclusion_reconciled_at: nowIso(),
       conclusion_reconciled_by: actor,
-      conclusion_reconcile_note: "按报告正文重算回填（g-487 结论解析容错）；评审正文逐字节未改",
+      conclusion_reconcile_note: "按报告正文重算回填（结论解析容错）；评审正文逐字节未改",
     };
     assertReviewEventName("review.conclusion_reconciled");
     commitPrepared(root, { actor, goal: rec.goal }, {
@@ -8626,6 +9082,8 @@ export function startAttempt(
     worktreeReason?: string | null;
     /** g-289：探测状态摘要（clean/dirty/unknown），落盘到 attempt.md 和事件 */
     worktreeProbe?: { state: "clean" | "dirty" | "unknown"; error?: string } | null;
+    /** g-610：宿主在 spawn **之前**落盘的“首次启动未结算”标记（bind/失败后清除）。 */
+    dispatchInFlight?: boolean;
   },
 ): string {
   // 校验 attemptBrief 类型（g-150 review 问题 4：必须是 string 或 undefined，不可是其他类型）
@@ -8694,6 +9152,8 @@ export function startAttempt(
     // g-289：落盘探测状态摘要（clean/dirty/unknown），与 worktree_reason 互补实现完整可观测性。
     // 仅在有探测结果时写入；显式覆盖时 probeState 可选附带。
     ...(opts.worktreeProbe ? { worktree_probe: opts.worktreeProbe } : {}),
+    // g-610：唯一新增字段——首次异步启动窗口的持久标记（成功后由 bind 清除）。
+    ...(opts.dispatchInFlight ? { dispatch_in_flight: true } : {}),
   };
   if (opts.provider && opts.provider.trim()) {
     meta.provider = opts.provider.trim();
@@ -8763,6 +9223,7 @@ export function startAttempt(
     ...(opts.worktreeReason != null && String(opts.worktreeReason).trim() ? { worktree_reason: String(opts.worktreeReason).trim() } : {}),
     // g-289：事件中也落盘探测状态，保持 attempt.md 与 events.jsonl 对齐。
     ...(opts.worktreeProbe ? { worktree_probe: opts.worktreeProbe } : {}),
+    ...(opts.dispatchInFlight ? { dispatch_in_flight: true } : {}),
     ...(opts.provider && opts.provider.trim() ? { provider: opts.provider.trim() } : {}),
     ...(opts.model && opts.model.trim() ? { model: opts.model.trim() } : {}),
     ...(opts.modelRoute && opts.modelRoute.trim() ? { model_route: opts.modelRoute.trim() } : {}),
@@ -9138,6 +9599,13 @@ export function reportStatus(
 
 /** 把 subagent childId 绑定到 attempt（startContinuable 之后调用）。
  *  g-194：支持持久化 provider / model / modelRoute。 */
+export interface BindAttemptExpect {
+  /** 仅派发路径使用：要求 attempt 仍处于「首次 spawn 未结算」窗口，防止晚到绑定复活已终止记录。 */
+  dispatchInFlight: true;
+  /** 期望的 parent session；attempt 已记录时精确匹配。 */
+  parentSessionId?: string | null;
+}
+
 export function bindAttemptChild(
   root: string,
   goalId: string,
@@ -9150,6 +9618,30 @@ export function bindAttemptChild(
   modelRoute?: string | null,
   mode?: string | null,
   modeSource?: "override" | "project" | "global" | "default" | null,
+  expect?: BindAttemptExpect,
+): void {
+  if (expect) {
+    withLocalLock(root, "execution-" + goalId, () => {
+      bindAttemptChildLocked(root, goalId, attemptId, childId, actor, parentSessionId, provider, model, modelRoute, mode, modeSource, expect);
+    });
+    return;
+  }
+  bindAttemptChildLocked(root, goalId, attemptId, childId, actor, parentSessionId, provider, model, modelRoute, mode, modeSource, undefined);
+}
+
+function bindAttemptChildLocked(
+  root: string,
+  goalId: string,
+  attemptId: string,
+  childId: string,
+  actor: string,
+  parentSessionId: string | undefined,
+  provider: string | null | undefined,
+  model: string | null | undefined,
+  modelRoute: string | null | undefined,
+  mode: string | null | undefined,
+  modeSource: "override" | "project" | "global" | "default" | null | undefined,
+  expect: BindAttemptExpect | undefined,
 ): void {
   const goalFile = findGoalFile(root, goalId);
   // backlog 目标没有目录结构，无法绑定 attempt child
@@ -9159,6 +9651,18 @@ export function bindAttemptChild(
   const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
   if (!existsSync(file)) throw new GraphError(`attempt 不存在：${attemptId}（目标 ${goalId}）`);
   const doc = loadGoal(file);
+  if (expect) {
+    const result = String(doc.meta.result ?? "pending");
+    if (doc.meta.detached === true || result === "cancelled") {
+      throw new GraphConflictError("attempt 已被解绑/取消——拒绝晚到绑定复活已终止记录");
+    }
+    if (doc.meta.dispatch_in_flight !== true) {
+      throw new GraphConflictError("attempt 已不处于首次启动窗口（dispatch_in_flight 缺失/已结算）——拒绝晚到绑定");
+    }
+    if (expect.parentSessionId && doc.meta.parent_session_id && String(doc.meta.parent_session_id) !== expect.parentSessionId) {
+      throw new GraphConflictError("attempt 的 parent session 已变化——拒绝晚到绑定");
+    }
+  }
   doc.meta.child_id = childId;
   // g-190：每次绑定生成新 binding token（CAS 能力）+ 递增 binding_version（审计）；
   // 解绑后重绑必然换新 token → 旧 token 立即失效（ABA 防护）。重绑 = 重新激活，清除解绑标记。
@@ -9167,6 +9671,8 @@ export function bindAttemptChild(
   delete doc.meta.detached;
   delete doc.meta.detached_at;
   delete doc.meta.detached_by;
+  // g-610：绑定成功 = 首次启动窗口结算（这是唯一会清除该标记的正常路径）。
+  delete doc.meta.dispatch_in_flight;
   if (parentSessionId) doc.meta.parent_session_id = parentSessionId;
   if (provider && provider.trim()) doc.meta.provider = provider.trim();
   if (model && model.trim()) doc.meta.model = model.trim();
@@ -10463,6 +10969,45 @@ export interface UnbindResult {
   child_id?: string | null;
 }
 
+/** g-610：首次 spawn 失败/未绑定结算——清除 `dispatch_in_flight`（事件先行）。
+ *  正常 provider 同步失败、spawn throw、subagents 不可用均走此路径；bind 成功由 bindAttemptChild 清除。
+ *  若事件/持久化失败，标记保留 ⇒ 后续派发继续拒绝，走既有 abandon 显式恢复（不自动按 PID 放行）。 */
+export function settleAttemptDispatchInFlight(
+  root: string,
+  goalId: string,
+  attemptId: string,
+  opts: { actor: string; error?: string },
+): void {
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") return;
+  const file = join(goalDirOf(goalFile), "attempts", attemptId, "attempt.md");
+  if (!existsSync(file)) return;
+  const result = withTx({ root, actor: opts.actor, goal: goalId }, { lockName: "execution-" + goalId }, () => {
+    const doc = loadGoal(file);
+    if (doc.meta.dispatch_in_flight !== true) return { value: undefined as void, events: [], persist: () => {} };
+    return {
+      value: undefined as void,
+      events: [{
+        actor: opts.actor,
+        event: "attempt.dispatch_failed",
+        goal: goalId,
+        details: { attempt: attemptId, error: String(opts.error ?? "").slice(0, 480), dispatch_call_settled: true },
+      }],
+      persist: () => {
+        delete doc.meta.dispatch_in_flight;
+        saveGoal(file, doc);
+      },
+    };
+  });
+  if (!result.ok) {
+    throw new TxError(
+      `结算 dispatch_in_flight 失败（phase=${result.phase}）：${result.error}`,
+      result.phase,
+      result.recoverable,
+    );
+  }
+}
+
 /** 从目标解绑执行子代理（g-190/g-282）：
  *  - 语义 = 安全 detach（不终止/不删除）：attempt、worktree、事件与日志全部保留并可审计。
  *  - 定位：goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 精确定位；
@@ -10511,7 +11056,7 @@ export function unbindGoalChild(
 
   const result = withTx(
     { root, actor, goal: goalId },
-    { lockName: "unbind-" + goalId },
+    { lockName: "execution-" + goalId },
     () => {
       const binding = readGoalBinding(root, goalId);
       // 无绑定：幂等 no-op（不重复记事件）
@@ -10715,7 +11260,7 @@ export function unbindGoalChild(
               });
             } catch { /* 诊断写入失败：绝不覆盖原始错误 */ }
             // 忽略旧 attempt 的失败，不影响当前解绑
-            console.warn("[g-190] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
+            console.warn("[dsh-graph] 标记旧 attempt " + oldAtt + " 为 superseded 失败:", e);
           }
         }
       }
@@ -10779,7 +11324,7 @@ export function abandonAttempt(
   let abandonedChildId: string | null = null;
   const result = withTx(
     { root, actor, goal: goalId },
-    { lockName: "unbind-" + goalId },
+    { lockName: "execution-" + goalId },
     () => {
       const goalFile = findGoalFile(root, goalId);
       const goalDoc = loadGoal(goalFile);
@@ -10804,6 +11349,17 @@ export function abandonAttempt(
 
       // 授权：主管或目标 owner
       authorizeUnbind(root, actor, goalDoc.meta.created_by, doc.meta.child_id);
+
+      // g-610（rev-02）：首次 spawn 尚未 bind 的持久窗口内**普通 abandon 一律拒绝**。
+      // 该窗口没有 child_id，旧实现会直接成功，随后第二派发与晚到 bind 会产出两个 child。
+      // 正常恢复只有两条：spawn 成功绑定（bind 清标记）或已确认无 child 的前置失败
+      // （settleAttemptDispatchInFlight 清标记）。不提供调用方声明/理由放行的旁路。
+      if (doc.meta.dispatch_in_flight === true && String(doc.meta.result ?? "pending") === "pending") {
+        throw new TxCasError(
+          "首次子代理启动尚未结算（dispatch_in_flight）——拒绝放弃；请等待其绑定/失败结算。"
+          + "若宿主已崩溃且无法结算，这是已记录的残余风险，需人工按宿主日志核实后另行处理",
+        );
+      }
 
       // 活跃状态门控：live running 时禁止放弃
       if (doc.meta.child_id) {
@@ -11126,10 +11682,150 @@ export function moveGoal(
 /** 归档目标：仅 draft/planning/delivered 可归档；移动到对应 archived 目录。
  *  版本 goals→versions/vX/archived/<id>/；standalone→goals/archived/<id>/；backlog→backlog/archived/<id>.md。
  *  归档后目标保持原状态不变，记 goal.archived 事件。 */
+/** g-610：公开 registry 的 child 活跃度（由宿主注入；core 不直接读私有 registry）。 */
+export type ExecutionLiveCheck = (childId: string) => "running" | "idle" | "gone" | "unknown";
+
+export type ExecutionGateScope = "dispatch" | "management";
+
+export interface ExecutionGateOptions {
+  /** 宿主公开 `agents.get` 探测；缺省 = 旧行为（只按 attempt 元数据，不新增阻断）。 */
+  liveCheck?: ExecutionLiveCheck;
+  /** 面向用户的动作名（派发 / 归档目标 / 删除目标 / 暂缓目标 / 清理工作树）。 */
+  action: string;
+  /** 同一公共同源策略：dispatch 严格（idle+pending 无结束事件仍拒）；management 仅在
+   *  running/unknown/首次 spawn 未结算时阻断（idle/gone 不阻断管理清理，但也不代表完成/
+   *  不授权重派）。默认 dispatch 保持既有宿主派发行为。 */
+  scope?: ExecutionGateScope;
+  /** 仅 management 清理工作树：只检查该候选 attempt，以及 worktreePath 相同的共享树占用。 */
+  onlyAttempt?: string;
+  worktreePath?: string;
+  /** 是否把「无 child 但 status_line/status_state 表明本地执行中」也算占用。
+   *  仅派发入口传 true；系统管理动作沿用既有 attemptIsActive 门禁，避免重复/误拦。 */
+  includeLocalActive?: boolean;
+}
+
+/**
+ * g-610：同一 workspace+goal 的执行是否仍占用（派发与系统管理动作共用的**真实契约**）。
+ *
+ * 判定只依赖既有 attempt.md 字段与宿主公开 registry，不新增持久状态机：
+ *  - `dispatch_in_flight === true`（首次 spawn 尚未 bind 的窗口）⇒ 占用；
+ *  - `child_id` 非空且 live=running ⇒ 占用（即使 result 已写成 completed 也不放行）；
+ *  - live=unknown ⇒ 无法确认，占用并明确说明（不承诺安全）；
+ *  - live=idle/gone：仅当 attempt result 已非 pending，或存在可信结束事件
+ *    （subagent/end results_written / abandoned / unbound / detached / superseded）才放行；
+ *    否则 idle 只表示“已登记未终结”，gone 也不单独证明完成 ⇒ 占用；
+ *  - 无 child：若 `dispatch_in_flight` 或 attemptIsActive（本地执行中）⇒ 占用；否则放行
+ *    （正常 spawn 前失败/旧 pending 可重试；不新增永久锁）。
+ *
+ * 这是“正常单机、用户非恶意”边界下的保守检查：不覆盖手工篡改/崩溃残留的自动恢复，
+ * 后者仍走既有 owner/主管 abandon/unbind 显式处理（abandon 不经过本门禁）。
+ */
+export function assertNoActiveExecutionChild(root: string, goalId: string, opts: ExecutionGateOptions): void {
+  const goalFile = findGoalFile(root, goalId);
+  if (basename(goalFile) !== "goal.md") return;
+  const attDir = join(goalDirOf(goalFile), "attempts");
+  if (!existsSync(attDir)) return;
+  let events: ReturnType<typeof readEvents> | null = null;
+  let eventsError = false;
+  const hasEndEvent = (attempt: string): boolean => {
+    if (events === null && !eventsError) {
+      try { events = readEvents(root); } catch { eventsError = true; }
+    }
+    if (!events) return false;
+    return events.some((e) => e.goal === goalId && e.details?.attempt === attempt && (
+      ["attempt.abandoned", "attempt.unbound", "attempt.detached", "attempt.superseded"].includes(e.event)
+      || (e.event === "attempt.results_written" && e.details?.source === "subagent/end")
+    ));
+  };
+  for (const a of readdirSync(attDir).filter((d) => d.startsWith("att-")).sort()) {
+    const f = join(attDir, a, "attempt.md");
+    if (!existsSync(f)) continue; // 既有语义：坏/缺失证据跳过（新边界不把手改损坏当强场景）
+    let doc: GoalDoc;
+    try { doc = loadGoal(f); } catch { continue; }
+    const result = String(doc.meta.result ?? "pending");
+    const terminal = result !== "pending";
+    const childId = doc.meta.child_id ? String(doc.meta.child_id) : null;
+    // g-610 rev-03：cleanWorktree 只对实际目标树归属的 attempt 做实时检查；同 goal 其它
+    // worktree/旧 attempt 不误阻。共享同一 worktree.path 的 attempt 仍纳入。
+    // 归属以候选 realpath + attempt 记录路径的 realpath 为准；无法证明不同且该 attempt 仍
+    // 绑定 child 时保守纳入（避免仅比较可能为空/相对路径而假放行）。
+    if (opts.onlyAttempt && a !== opts.onlyAttempt) {
+      const own = String(doc.meta.worktree?.path ?? "").trim();
+      let sameTree = false;
+      let provablyDifferent = false;
+      if (opts.worktreePath && own) {
+        try {
+          const aPath = realpathSync(resolve(opts.worktreePath));
+          const bPath = realpathSync(resolve(own));
+          sameTree = aPath === bPath;
+          provablyDifferent = !sameTree;
+        } catch {
+          sameTree = resolve(opts.worktreePath) === resolve(own);
+          // realpath 不可用 ⇒ 无法证明不同；有 child 时保守纳入。
+          provablyDifferent = false;
+        }
+      }
+      if (!sameTree) {
+        // 无 child ⇒ 与本次清理无关；有 child 且能证明路径不同 ⇒ 跳过；无法证明不同 ⇒ 保守纳入。
+        if (!childId || provablyDifferent) continue;
+      }
+    }
+    // g-610 rev-02：在途标记优先于 detached 跳过——即使记录已被取消/解绑，只要首次 spawn
+    // 尚未结算，就不能放行下一次派发（防止晚到 child 与第二个 child 并行）。
+    const scope = opts.scope ?? "dispatch";
+    if (doc.meta.dispatch_in_flight === true && !terminal) {
+      const tail = scope === "management"
+        ? "管理动作仅因首次 spawn 未结算而阻断；idle/gone 不阻断管理清理，但也不代表完成、不授权重派"
+        : "本次不创建第二个 child。请等待绑定/失败结算；若宿主已崩溃且无法结算，这是已记录的残余风险";
+      throw new GraphConflictError(
+        `拒绝${opts.action}：目标 ${goalId} 的 ${a} 首次子代理启动尚未结算（dispatch_in_flight）；${tail}`
+        + "（management blocks only in-flight/running/unknown; idle/gone is not proof of completion and does not authorize re-dispatch）",
+      );
+    }
+    if (doc.meta.detached === true) continue;
+    if (doc.meta.executor === "agent:collect") continue;
+    if (!childId) {
+      if (opts.includeLocalActive === true && attemptIsActive(doc.meta)) {
+        throw new GraphConflictError(
+          `拒绝${opts.action}：目标 ${goalId} 的 ${a} 仍有未结算的本地执行（status_state/status_line 表明进行中）`,
+        );
+      }
+      continue;
+    }
+    if (!opts.liveCheck) continue; // 旧调用方未提供 registry：保持既有语义
+    const live = opts.liveCheck(childId);
+    if (live === "running") {
+      throw new GraphConflictError(
+        `拒绝${opts.action}：目标 ${goalId} 的 ${a} 绑定的 child ${childId} 仍在运行（公开 registry=running）；` +
+          `请等待其结束，或用既有授权 interrupt/unbind/abandon 处理后再继续`
+          + (scope === "management"
+            ? "（management blocks only running/unknown/in-flight; idle/gone is not proof of completion and does not authorize re-dispatch）"
+            : ""),
+      );
+    }
+    if (live === "unknown") {
+      throw new GraphConflictError(
+        `拒绝${opts.action}：无法从公开 registry 确认目标 ${goalId} 的 ${a}/child ${childId} 是否仍在运行；` +
+          `服务不可用时不做“不存在”的安全承诺，请恢复 registry 后重试`
+          + (scope === "management"
+            ? "（management blocks only running/unknown/in-flight; idle/gone is not proof of completion and does not authorize re-dispatch）"
+            : ""),
+      );
+    }
+    if (scope === "management") continue; // 管理动作：idle/gone 不阻断，但不代表完成/不授权重派
+    if (terminal || hasEndEvent(a)) continue;
+    throw new GraphConflictError(
+      `拒绝${opts.action}：目标 ${goalId} 的 ${a} 绑定的 child ${childId} 当前 registry=${live}，` +
+        `但 result 仍为 pending 且无可信 subagent/end/解绑/abandon 事件；` +
+        `idle 只代表“已登记未终结”，不能据此创建第二个 child。请先完成或按既有授权处理`,
+    );
+  }
+}
+
 export function archiveGoal(
   root: string,
   id: string,
-  opts: { actor: string },
+  opts: { actor: string; liveCheck?: ExecutionLiveCheck },
 ): void {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
@@ -11145,6 +11841,8 @@ export function archiveGoal(
   if (targetRel === null) throw new GraphError(`无法确定目标 ${id} 的当前位置：${loc.rel}`);
   const targetFile = join(root, targetRel);
   if (existsSync(targetFile)) throw new GraphError(`归档位置已存在：${targetFile}`);
+  // g-610：搬走/写 archived 之前先核公开 registry，运行中的 child 一律拒绝。
+  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "归档目标", scope: "management" });
   // 标记已归档
   doc.meta.archived = true;
   // g-395：事件先行——`goal.archived` 追加失败时不再留下「目标已搬进 archived/、事件流无记录」
@@ -11268,7 +11966,7 @@ function _hasActiveAttempts_postpone(dir: string): boolean {
 export function postponeGoal(
   root: string,
   id: string,
-  opts: { actor: string; reason?: string },
+  opts: { actor: string; reason?: string; liveCheck?: ExecutionLiveCheck },
 ): void {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
@@ -11279,6 +11977,8 @@ export function postponeGoal(
     throw new GraphError(`目标 ${id} 已在 backlog，无需暂缓`);
   }
 
+  // g-610：搬走之前核公开 registry（先于既有元数据门禁的补充，不替代它）。
+  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "暂缓目标", scope: "management" });
   if (srcDir && _hasActiveAttempts_postpone(srcDir)) {
     const reason = "存在进行中的执行子代理";
     appendEvent(root, {
@@ -11340,7 +12040,7 @@ export function postponeGoal(
 export function deleteGoal(
   root: string,
   id: string,
-  opts: { actor: string },
+  opts: { actor: string; liveCheck?: ExecutionLiveCheck },
 ): void {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
@@ -11375,6 +12075,8 @@ export function deleteGoal(
       }
     }
   }
+  // g-610：删目录之前再核公开 registry；运行中/已登记未终结的 child 一律拒绝。
+  assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "删除目标", scope: "management" });
   // g-500 判据 1：关联工作树阻断闸门（在**任何**破坏性动作之前，含下面的 rmSync）。
   // 目标目录（含 attempts/）是这些工作树归属的唯一板内证据：删掉之后树立刻退化成
   // missing_attempt_evidence 孤儿而无法安全清理。故此处 fail-closed 阻断，并给出
@@ -11449,6 +12151,8 @@ export interface BoardGoal {
   } | null;
   created_at?: string | null;
   attempt_started_at?: string | null;
+  /** g-612：goal 级预计任务预算（整数秒；null = 继承项目/全局 care_threshold_seconds）。 */
+  budget_seconds?: number | null;
   /** 被复用派生（g-a92e1406）：子代理被跨目标复用时，旧绑定目标标 reused_by = 新目标 id */
   reused_by?: string | null;
   cards?: Array<Record<string, any>>;
@@ -11585,6 +12289,7 @@ function buildBoardGoalItem(
       : null,
     created_at: String(meta.created_at ?? ""),
     attempt_started_at: attemptChild.started_at ?? null,
+    budget_seconds: normalizeCareSeconds(meta.task_budget_seconds),
     reused_by: null,
     pk_lanes: meta.pk?.lanes ?? 1,
     blocked_reason: meta.blocked_reason ?? null,

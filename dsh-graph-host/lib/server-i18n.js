@@ -34,6 +34,7 @@ const zh = Object.freeze({
   "tool.graph_amend_goal": "记录对目标的修订/补充（人工反馈的一等记录）；可选把修订内容追加进目标描述，使目标内容体现最终修订。",
   "tool.graph_rename_goal": "重命名目标：更新 goal.md 的 meta.title，记 goal.renamed 事件（旧/新标题）。title 非空、去首尾空白；相同标题为 no-op。",
   "tool.graph_set_goal_tags": "设置目标标签列表（最多20个，每个不超过32字，禁止控制字符）。支持基于 base_tags 的乐观并发，force=true 时强制覆盖。写入前事件先行。",
+  "tool.graph_set_goal_budget": "设置/清空目标级预计任务预算（唯一可编辑真源 = goal meta.task_budget_seconds）：整数秒 30–86400，null 清空并继承项目/全局 care_threshold_seconds（默认300秒）。只改 goal 预算并记 goal.budget_set 事件（事件先行，非法值写前拒绝）；供关照调度使用，不写进子代理提示词、不改派发/send_message 参数、不增加模型调用。",
   "tool.graph_set_goal_type": "设置目标类型（feature/bug/task/improvement/patch/chore；patch/chore 为微小改动快速通道），只更新 meta.type 并记 goal.type_changed 事件（old_type/new_type/actor）；不改 status/version/执行。非法类型安全回退 task；相同类型为 no-op。",
   "tool.graph_validate": "全量不变式校验（状态、归属、判据、依赖环、卡片引用）。返回问题列表。",
   "tool.graph_rebuild": "从事件流重建各目标状态并与 frontmatter 对账。返回 drift 列表。",
@@ -59,6 +60,9 @@ const zh = Object.freeze({
   "tool.graph_unbind_goal_child": "从目标安全解绑执行子代理：按 goal + 唯一 selector（attempt 或 child_id）+ 当前 binding token 定位；仅授权主管或目标 owner 可执行（子代理不能自我解绑）。只清理绑定，attempt/事件/日志保留可审计；幂等。遗留缺 token 的绑定可显式 legacy: true 并给 reason 受控解绑（若存在 token 则禁止绕过）。",
   "tool.graph_abandon_attempt": "放弃陈旧/失联 attempt：把指定 attempt 标记为已放弃（result=cancelled、detached=true），清除绑定；仅授权主管或目标 owner 可执行；子代理仍运行（live registry）或状态不可确认时拒绝；事件先行（attempt.abandoned 含 reason/actor）。放弃后该 attempt 不再被判为活跃，目标可正常暂缓/归档/删除。",
   "tool.graph_get_settings": "读取当前 workspace 的项目配置（基于 readProjectConfig）：返回解析后的配置对象、配置文件路径与合法枚举/字段元信息。只读，不修改任何文件。",
+  // att-005 返工：只列三个取值不解释边界，已导致一次真实误分类（running+sleep300+预期静默被回传 progress）。
+  // 三值定义与 core/care.ts 的 CARE_OUTCOME_CONTRACT_ZH 逐条一致（由 g506-care-outcome-contract 测试守卫）。
+  "tool.graph_care_outcome": "提交一次长任务关照巡检结论（唯一窄回传入口）：必须带服务端下发的 inspection id + 本次巡检内的 goal/attempt/child 绑定 + outcome=progress|no-progress|unknown + 有界证据。分类契约（严格按定义判断，不得凭 elapsed/预期静默推断）：\n  · progress = 自上次关照（或任务开始）以来**新增且可核实**的实质进展：具体完成的步骤、工具结果或产物/状态变化；证据必须指出这个新事实，重复或已报告过的旧进展不算新。\n  · no-progress = 有**新鲜证据**表明反复无实质推进或问题仍未解决；仅仅长时间没有新输出、或处于正常等待，不构成 no-progress，也不得据此宣称卡死。\n  · unknown = 证据不足/无法判断，或长时操作仍在正常等待（如 sleep、长构建/测试/网络）；按「未确认进展」处理，继续观察或询问子代理；只看根元数据无法知道进度时选 unknown。\n  · 仅「仍在 running」、仅时间经过、符合预期的静默都**不是** progress；progress 归零计数但不解除人类锁，unknown 不递增也不归零，只有达到上限份数（默认 3）的新鲜 no-progress 才升级人工。\n服务端会核验精确 live 主管、新鲜度、一次性与当前绑定；evidence 仅校验非空与长度，服务端不做语义真实性验证（判断责任在提交者），不得据此声称模型必然遵循或已机器验证证据真实。不得伪造证据或冒充人类。",
   "tool.graph_update_settings": "更新当前 workspace 的项目配置（基于 writeProjectConfig）。传入部分 patch；保留 schema 校验、非法枚举拒绝、未知键与 YAML 注释保留、原子写，并记 project.config_set 事件。未传字段保持不变。",
   // === g-489：「使用说明 → 工具清单」的分类标签与工具简称（zh/en 必须对称）===
   // 分类归属表见文件末尾的 TOOL_TAXONOMY；与注册真源的一致性由 helpToolTaxonomyProblems 守卫。
@@ -85,6 +89,7 @@ const zh = Object.freeze({
   "toolShort.graph_rename_goal": "改标题",
   "toolShort.graph_set_goal_type": "设类型",
   "toolShort.graph_set_goal_tags": "设标签",
+  "toolShort.graph_set_goal_budget": "设预算",
   "toolShort.graph_set_relation": "目标关系",
   "toolShort.graph_amend_goal": "记录修订",
   "toolShort.graph_set_description": "写描述",
@@ -125,6 +130,7 @@ const zh = Object.freeze({
   "toolShort.graph_report_status": "报执行状态",
   "toolShort.graph_report_supervisor_status": "报主管状态",
   "toolShort.graph_get_settings": "读设置",
+  "toolShort.graph_care_outcome": "报巡检结论",
   "toolShort.graph_update_settings": "改设置",
   "toolShort.graph_validate": "校验不变量",
   "toolShort.graph_rebuild": "重建状态",
@@ -164,6 +170,7 @@ const en = Object.freeze({
   "tool.graph_amend_goal": "Record a revision or addition to a goal (a first-class human feedback record); optionally append the revision to the goal description so the goal reflects the final revision.",
   "tool.graph_rename_goal": "Rename a goal: update meta.title in goal.md and record a goal.renamed event (old/new titles). title must be non-empty and is trimmed; the same title is a no-op.",
   "tool.graph_set_goal_tags": "Set a goal's tag list (at most 20 tags, each at most 32 characters; control characters are forbidden). Supports optimistic concurrency based on base_tags; force=true overwrites unconditionally. Records the event before writing.",
+  "tool.graph_set_goal_budget": "Set or clear a goal-level expected task budget (the only editable source is meta.task_budget_seconds in goal.md): integer seconds 30–86400; null clears it and inherits the project/global care_threshold_seconds (default 300s). Only changes the goal budget and records a goal.budget_set event first (invalid values are rejected before writing). Used by care scheduling; it is not written into the child prompt, does not change dispatch/send_message parameters, and adds no model calls.",
   "tool.graph_set_goal_type": "Set a goal type (feature/bug/task/improvement/patch/chore; patch/chore are quick paths for small changes), updating only meta.type and recording a goal.type_changed event (old_type/new_type/actor); status/version/execution are unchanged. Invalid types safely fall back to task; the same type is a no-op.",
   "tool.graph_validate": "Validate all invariants (status, ownership, criteria, dependency cycles, and card references). Returns a list of problems.",
   "tool.graph_rebuild": "Rebuild each goal's state from the event stream and reconcile it with frontmatter. Returns a list of drift items.",
@@ -187,6 +194,10 @@ const en = Object.freeze({
   "tool.graph_unbind_goal_child": "Safely detach an execution subagent from a goal: locate by goal plus one selector (attempt or child_id) and the current binding token; only the supervisor or goal owner is authorized (a subagent cannot detach itself). Only the binding is cleared; attempt/event/log evidence remains auditable; repeated detaches are idempotent. For legacy bindings lacking a binding_token, supports explicitly declaring legacy: true with a reason for controlled detachment (bypassing with legacy while a token exists is forbidden).",
   "tool.graph_abandon_attempt": "Abandon a stale or lost attempt: mark the specified attempt as abandoned (result=cancelled, detached=true) and clear its binding; only the authorized supervisor or goal owner can execute this; rejected if the subagent is still running (live registry) or its status cannot be confirmed; event-first (attempt.abandoned records reason/actor). After being abandoned, the attempt is no longer considered active, allowing the goal to be postponed, archived, or deleted normally.",
   "tool.graph_get_settings": "Read the current workspace project configuration (based on readProjectConfig): returns the parsed config object, the config file path, and valid enum/field metadata. Read-only; no files are modified.",
+  // att-005: listing the three values without defining them let one real misclassification through
+  // (running + sleep 300 + expected silence reported as progress). The clauses below must match
+  // CARE_OUTCOME_CONTRACT_EN in core/care.ts line for line (guarded by g506-care-outcome-contract).
+  "tool.graph_care_outcome": "Report one long-task care inspection result (the only narrow result channel): include the server-issued inspection id, this inspection's goal/attempt/child binding, outcome=progress|no-progress|unknown, and bounded evidence. Outcome contract (judge strictly by these definitions; never infer from elapsed time or expected silence):\n  · progress = NEW and verifiable substantive progress since the last care round (or task start): a concrete completed step, tool result, or artifact/state change; the evidence must point at that new fact, and repeated or already-reported progress is not new.\n  · no-progress = FRESH evidence of repeated lack of substantive advance or an unresolved problem; a long silence with no new output, or a normal wait, is not no-progress and is never grounds for claiming a stall.\n  · unknown = evidence is insufficient/unverifiable, or a long operation is still normally waiting (sleep, long build/test/network); treat it as unconfirmed progress, keep observing or ask the child; if only root-level metadata is available, choose unknown.\n  · Merely \"still running\", merely elapsed time, and expected silence are NOT progress; progress resets the counter but never clears an existing human lock, unknown neither increases nor resets it, and only the configured limit (default 3) of fresh no-progress results escalates to the human.\nThe server verifies the exact live supervisor, freshness, one-shot resolution, and current binding; evidence is only checked for non-emptiness and length, never for semantic truth (that judgement stays with the reporter), so never claim that models must comply or that evidence truth is machine-verified. Never fabricate evidence or impersonate a human.",
   "tool.graph_update_settings": "Update the current workspace project configuration (based on writeProjectConfig). Pass a partial patch; schema validation, illegal-enum rejection, preservation of unknown keys and YAML comments, atomic writes, and a project.config_set event are retained. Omitted fields remain unchanged.",
   // === g-489: category labels and tool short names for "Help -> Tools" (zh/en stay symmetric) ===
   // The category assignment table is TOOL_TAXONOMY at the end of this file; helpToolTaxonomyProblems guards it against the registration source.
@@ -212,6 +223,7 @@ const en = Object.freeze({
   "toolShort.graph_rename_goal": "Rename",
   "toolShort.graph_set_goal_type": "Set type",
   "toolShort.graph_set_goal_tags": "Set tags",
+  "toolShort.graph_set_goal_budget": "Set budget",
   "toolShort.graph_set_relation": "Relations",
   "toolShort.graph_amend_goal": "Amend",
   "toolShort.graph_set_description": "Description",
@@ -252,6 +264,7 @@ const en = Object.freeze({
   "toolShort.graph_report_status": "Report status",
   "toolShort.graph_report_supervisor_status": "Report supervisor",
   "toolShort.graph_get_settings": "Get settings",
+  "toolShort.graph_care_outcome": "Report care result",
   "toolShort.graph_update_settings": "Update settings",
   "toolShort.graph_validate": "Validate",
   "toolShort.graph_rebuild": "Rebuild",
@@ -288,6 +301,7 @@ export const TOOL_TAXONOMY = Object.freeze({
   graph_rename_goal: "goal",
   graph_set_goal_type: "goal",
   graph_set_goal_tags: "goal",
+  graph_set_goal_budget: "goal",
   graph_set_relation: "goal",
   graph_amend_goal: "goal",
   graph_set_description: "goal",
@@ -328,6 +342,7 @@ export const TOOL_TAXONOMY = Object.freeze({
   graph_report_status: "ops",
   graph_report_supervisor_status: "ops",
   graph_get_settings: "settings",
+  graph_care_outcome: "exec",
   graph_update_settings: "settings",
   graph_validate: "diag",
   graph_rebuild: "diag",

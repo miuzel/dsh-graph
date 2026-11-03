@@ -827,6 +827,69 @@
       );
     }
 
+    // g-612：目标级预计预算（秒；空 = 继承项目/全局 care_threshold_seconds）。
+    // 只写 goal meta；不触发派发参数/提示词变化，也不额外调用模型。
+    // 预算唯一真源 = goal frontmatter 的 `meta.task_budget_seconds`（goalDetail 直接下发 doc.meta）；
+    // 组件直接消费该字段，调用方不再另造镜像/第二套解析。
+    function GoalBudgetEditor(props) {
+      const budgetSeconds = props.meta?.task_budget_seconds ?? null;
+      const [value, setValue] = React.useState(budgetSeconds == null ? "" : String(budgetSeconds));
+      const [saving, setSaving] = React.useState(false);
+      const [note, setNote] = React.useState(null);
+      React.useEffect(() => {
+        setValue(budgetSeconds == null ? "" : String(budgetSeconds));
+      }, [budgetSeconds]);
+      const save = async (rawOverride) => {
+        if (saving) return;
+        const raw = String(rawOverride ?? value).trim();
+        const num = raw === "" ? null : Number(raw);
+        if (num !== null && (!Number.isInteger(num) || num < 30 || num > 86400)) {
+          setNote(dgT("budget.invalid"));
+          return;
+        }
+        setSaving(true); setNote(null);
+        try {
+          const r = await fetch(graphUrl("/api/dsh-graph/set-goal-budget"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ goal: props.goalId, budget_seconds: num }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.error || dgT("budget.saveFail"));
+          setValue(num == null ? "" : String(num));
+          setNote(dgT("budget.saved"));
+          props.onChange?.();
+        } catch (e) {
+          const msg = String(e?.message ?? e);
+          setNote(msg);
+          if (typeof showToast === "function") showToast(dgT("budget.saveFail") + ": " + msg);
+        } finally { setSaving(false); }
+      };
+      return h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" } },
+        h("span", { style: { opacity: 0.72 } }, dgT("budget.label")),
+        h("input", {
+          type: "number", min: 30, max: 86400, step: 1,
+          value,
+          placeholder: dgT("budget.placeholder"),
+          title: dgT("budget.invalid"),
+          style: { ...S.promptInput, width: 88, minHeight: 22, maxHeight: 26, padding: "1px 4px", fontSize: 11 },
+          onChange: (e) => { setValue(e.target.value); setNote(null); },
+          onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } },
+        }),
+        h("span", { style: { opacity: 0.6, fontSize: 11 } }, dgT("budget.unit")),
+        h("button", {
+          style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+          disabled: saving, onClick: () => save(),
+        }, dgT("budget.save")),
+        value !== ""
+          ? h("button", {
+              style: { ...S.btn, fontSize: 11, padding: "1px 6px" }, className: "dg-btn",
+              disabled: saving, onClick: () => save(""),
+            }, dgT("budget.inherit"))
+          : null,
+        note ? h("span", { style: { ...S.meta, fontSize: 11 }, title: note }, note) : null);
+    }
+
     // g-272 att-002：服务端 worktree reason 为稳定枚举（core/worktree.ts），客户端按枚举 dgT 双语映射；
     // 非枚举值（如 git 原始错误、旧版服务端中文残留）原样透传兜底。
     const WORKTREE_REASON_ENUMS = ["path_not_canonical_name", "branch_not_canonical_name", "path_branch_mismatch",
@@ -1237,7 +1300,14 @@
                     tags: meta.tags ?? props.tags,
                     onChange: () => { load(); props.onTagsChanged?.(); },
                   }))
-              : null
+              : null,
+            h("span", { style: { opacity: 0.4, userSelect: "none" } }, "·"),
+            h(GoalBudgetEditor, {
+              goalId: props.id,
+              // 唯一真源 = goal frontmatter 的 meta.task_budget_seconds（goalDetail 直接下发 doc.meta）。
+              meta,
+              onChange: () => { load(); props.onTagsChanged?.(); },
+            })
           ),
           // g-223：归属版本在看板中被隐藏时的友好提示与恢复显示入口
           isVersionHidden

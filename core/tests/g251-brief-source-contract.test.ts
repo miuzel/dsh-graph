@@ -41,11 +41,12 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { formatAttemptPrompt } from "../../dist/index.js";
+import { entryHandler } from "./_http-auth-harness.ts";
 
 type Harness = ReturnType<typeof createHarness>;
 
 function routeOf(h: Harness, path: string) {
-  const route = h.routes.find((r: any) => r.path === path);
+  const route = { path: path, handler: entryHandler(h.routes) }; // g-507：唯一门禁入口（按 path 分发）
   assert.ok(route, `REST 路由未注册：${path}`);
   return route;
 }

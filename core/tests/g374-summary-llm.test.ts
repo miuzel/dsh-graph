@@ -20,6 +20,7 @@ import {
 } from "../ops.ts";
 import { readEvents } from "../events.ts";
 import { createHarness, prepare, dispatch, restCall } from "./_g374-harness.ts";
+import { entryHandler } from "./_http-auth-harness.ts";
 
 const archiveName = (items: string[]) => items.filter((n) => /^results-archive-\d{8}T\d{6}(-\d+)?\.md$/.test(n));
 const goalDirEntries = (dir: string) => readdirSync(dir).sort();
@@ -208,7 +209,7 @@ test("g-374 F5 降级：启动失败 ⇒ 立刻写 deterministic + fallback_reas
   const h = createHarness();
   const { goal } = prepare(h);
   appendGoalComment(h.root, goal, "降级用例。", "human:gui");
-  const route = h.routes.find((r: any) => r.path === "/api/dsh-graph/refresh-results");
+  const route = { path: "/api/dsh-graph/refresh-results", handler: entryHandler(h.routes) }; // g-507：唯一门禁入口（按 path 分发）
   assert.ok(route, "REST 路由必须存在");
   // 让 summarizer 无法启动：子代理服务返回无可用 provider。
   const ctxGet = h.handlers; void ctxGet;
@@ -323,7 +324,7 @@ test("g-374 F5 竞态负向对照：从未落盘的 child 结束仍必须降级�
 test("g-374 F5：REST 面 llm+content 同样互斥（400，且零派发）", async () => {
   const h = createHarness();
   const { goal } = prepare(h);
-  const route = h.routes.find((r: any) => r.path === "/api/dsh-graph/refresh-results");
+  const route = { path: "/api/dsh-graph/refresh-results", handler: entryHandler(h.routes) }; // g-507：唯一门禁入口（按 path 分发）
   const before = h.capturedRequests.length;
   const res = await restCall(route, { goal, llm: true, content: "## 结论\n成品正文。" });
   assert.equal(res.code, 400, "REST 必须与工具面同判，不得静默丢弃 content 并照常派发");
@@ -411,7 +412,7 @@ test("g-374 F5 缓存：REST llm:true 命中缓存时同步返回 cached（不�
   const { goal } = prepare(h);
   appendGoalComment(h.root, goal, "REST 缓存。", "human:gui");
   refreshGoalResults(h.root, goal, { actor: "agent:summarizer", content: "## 结论\nLLM 版。", source: "llm" });
-  const route = h.routes.find((r: any) => r.path === "/api/dsh-graph/refresh-results");
+  const route = { path: "/api/dsh-graph/refresh-results", handler: entryHandler(h.routes) }; // g-507：唯一门禁入口（按 path 分发）
   const before = h.capturedRequests.length;
   const res = await restCall(route, { goal, llm: true });
   assert.equal(res.code, 200);

@@ -8,21 +8,25 @@ import { resolveRoot, resolveCanonicalRoot } from "../../dist/core/root.js";
 import { apply } from "../../dist/index.js";
 import { ensureWatcher, generation, closeWatchers } from "../../dist/core/cache-state.js";
 import { readFileSync } from "node:fs";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function host(configRoot: string, workspace?: string, policyWorkspace: string | null | undefined = workspace) {
   const routes = new Map<string, any>(); let dispose = () => {};
-  const webServer = { register: (d: any) => { routes.set(d.path, d.handler); return () => {}; } };
-  const ctx: any = { get: (n: string) => n === "webServer" ? webServer : n === "sandboxPolicy" && policyWorkspace ? { workspaceRoot: policyWorkspace } : undefined, effect: (fn: any) => { dispose = fn(); return dispose; }, webServer, tools: { register: () => () => {}, get: () => ({}) } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
+  const ctx: any = { get: (n: string) => n === "webServer" ? webServer : n === "connection" ? ownerConnectionStub() : n === "sandboxPolicy" && policyWorkspace ? { workspaceRoot: policyWorkspace } : undefined, effect: (fn: any) => { dispose = fn(); return dispose; }, webServer, tools: { register: () => () => {}, get: () => ({}) } };
   apply(ctx, { root: configRoot });
-  return { routes, dispose };
+  return { routes: routeDefs, dispose };
 }
 function response() { const r: any = { code: 0, body: null }; r.writeHead = (c: number) => { r.code = c; }; r.end = (s?: string) => { r.body = s ? JSON.parse(s) : null; }; return r; }
-function badReq(url: string) { const listeners: any = {}; return { method: "POST", url, on: (e: string, cb: any) => { listeners[e] = cb; if (e === "data") cb("{bad"); if (e === "end") cb(); }, listeners }; }
-function validReq(url: string, body: unknown) { const listeners: any = {}; return { method: "POST", url, on: (e: string, cb: any) => { listeners[e] = cb; if (e === "data") cb(JSON.stringify(body)); if (e === "end") cb(); }, listeners }; }
+function badReq(url: string) { const listeners: any = {}; return { headers: { [OWNER_HEADER]: "1" }, method: "POST", url, on: (e: string, cb: any) => { listeners[e] = cb; if (e === "data") cb("{bad"); if (e === "end") cb(); }, listeners }; }
+function validReq(url: string, body: unknown) { const listeners: any = {}; return { headers: { [OWNER_HEADER]: "1" }, method: "POST", url, on: (e: string, cb: any) => { listeners[e] = cb; if (e === "data") cb(JSON.stringify(body)); if (e === "end") cb(); }, listeners }; }
 
 test("g212 malformed transition body is controlled 400", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "g212-malformed-")); const root = join(workspace, ".dsh-graph"); init(root);
-  const fixture = host(".dsh-graph", workspace); const h = fixture.routes.get("/api/dsh-graph/transition"); const res = response();
+  const fixture = host(".dsh-graph", workspace); const h = entryHandler(fixture.routes) /* /api/dsh-graph/transition */; const res = response();
   try { await h(badReq("/api/dsh-graph/transition"), res); assert.equal(res.code, 400); assert.match(String(res.body?.error), /JSON|body|格式/); } finally { fixture.dispose(); }
 });
 
@@ -45,11 +49,11 @@ test("g212 REST accepts explicit workspace regardless of sandboxPolicy", async (
   for (const [label, fixture] of cases) {
     try {
       const getResult = response();
-      await fixture.routes.get("/api/dsh-graph")({ method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace) }, getResult);
+      await entryHandler(fixture.routes) /* /api/dsh-graph */({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace) }, getResult);
       assert.equal(getResult.code, 200, `${label}: explicit workspace GET succeeds`);
 
       const postResult = response();
-      await fixture.routes.get("/api/dsh-graph/order")(validReq("/api/dsh-graph/order", { workspace, "g-001": ["planning"] }), postResult);
+      await entryHandler(fixture.routes) /* /api/dsh-graph/order */(validReq("/api/dsh-graph/order", { workspace, "g-001": ["planning"] }), postResult);
       assert.equal(postResult.code, 200, `${label}: body.workspace POST succeeds`);
       assert.equal(existsSync(join(graphRoot, "order.json")), true, `${label}: order written in requested workspace`);
     } finally { fixture.dispose(); }
@@ -58,11 +62,11 @@ test("g212 REST accepts explicit workspace regardless of sandboxPolicy", async (
   const absolute = host(graphRoot);
   try {
     const getAbsolute = response();
-    await absolute.routes.get("/api/dsh-graph")({ method: "GET", url: "/api/dsh-graph" }, getAbsolute);
+    await entryHandler(absolute.routes) /* /api/dsh-graph */({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: "/api/dsh-graph" }, getAbsolute);
     assert.equal(getAbsolute.code, 200, "absolute config.root GET works without policy or workspace");
 
     const postAbsolute = response();
-    await absolute.routes.get("/api/dsh-graph/order")(validReq("/api/dsh-graph/order", { "g-002": ["draft"] }), postAbsolute);
+    await entryHandler(absolute.routes) /* /api/dsh-graph/order */(validReq("/api/dsh-graph/order", { "g-002": ["draft"] }), postAbsolute);
     assert.equal(postAbsolute.code, 200, "absolute config.root POST works without policy or workspace");
     assert.equal(existsSync(join(graphRoot, "order.json")), true, "absolute config.root POST writes configured root");
   } finally { absolute.dispose(); }

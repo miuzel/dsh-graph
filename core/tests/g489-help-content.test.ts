@@ -2,7 +2,7 @@
  * g-489：「使用说明」弹窗重写 —— 入门第一步 + 九章分模块说明 + 工具清单分类表格。
  *
  * 覆盖面（对应目标判据 ①②③）：
- *  A. 工具分类真源：分类表 + 简称/类别文案 与**注册真源**精确相等（51 个，双向、可复算），
+ *  A. 工具分类真源：分类表 + 简称/类别文案 与**注册真源**精确相等（53 个，双向、可复算），
  *     且负向对照（漏一 / 多一 / 重名 / 缺简称 / 非法类别 / en 缺标签）逐条必红。
  *  B. 使用说明页签：入门第一步（主管技能 + 接管 claim + 可直接复制的示例提示词）与
  *     九章（看板/目标/版本管理/泳道/侧边栏/上下文卡片与项目知识库/记忆系统/子代理与 agent teams/
@@ -24,6 +24,10 @@ import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { apply, HELP_CATALOG_ROUTE } from "../../dist/index.js";
 import { HARNESS_MODULE_IDS } from "../ops.ts";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
@@ -50,6 +54,7 @@ function captureHost(): Capture {
     effect: (fn: any) => fn(),
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "skills") return { register: (def: any) => { skills.push(def); return () => {}; } };
       return null;
     },
@@ -65,7 +70,7 @@ const registeredToolNames = captured.registered.map((d) => String(d?.name ?? "")
 const registeredSkillNames = captured.skills.map((d) => String(d?.name ?? ""));
 
 // 注册真源的两条硬事实（新工具/新技能加入后本文件不会静默通过：计数与分类表守卫同时判红）。
-assert.equal(registeredToolNames.length, 51, "g-489 基线：注册真源应恰有 51 个工具（新增工具需同步分类表）");
+assert.equal(registeredToolNames.length, 53, "g-489 基线：注册真源应恰有 53 个工具（新增工具需同步分类表）");
 assert.ok(registeredSkillNames.includes("dsh-graph-supervisor"), "必须注册 dsh-graph-supervisor 技能");
 assert.ok(registeredSkillNames.includes("dsh-graph"), "必须注册 dsh-graph 技能");
 
@@ -264,14 +269,14 @@ function readHostAssets(): Map<string, string> {
 
 // ================================================================ A. 分类真源 ≡ 注册真源（+ 负向对照）
 
-test("g-489 A1：分类表 + 简称/类别文案 ≡ 注册真源（51，双向相等），且目录端点把分类/简称/红因都投给客户端", async () => {
+test("g-489 A1：分类表 + 简称/类别文案 ≡ 注册真源（53，双向相等），且目录端点把分类/简称/红因都投给客户端", async () => {
   assert.deepEqual(helpToolTaxonomyProblems(registeredToolNames), [], "生产守卫必须全绿（分类表 ≡ 注册真源）");
-  assert.equal(Object.keys(TOOL_TAXONOMY).length, 51, "分类表条目数必须等于注册真源工具数");
+  assert.equal(Object.keys(TOOL_TAXONOMY).length, 53, "分类表条目数必须等于注册真源工具数");
   assert.equal(new Set(TOOL_CATEGORIES).size, TOOL_CATEGORIES.length, "类别键不得重复");
   // 双向：分类表里没有注册真源之外的工具，注册真源也没有漏项。
   assert.deepEqual(Object.keys(TOOL_TAXONOMY).sort(), [...registeredToolNames].sort(), "分类表与注册真源必须逐项相等");
   const counts = TOOL_CATEGORIES.map((key: string) => Object.values(TOOL_TAXONOMY).filter((v) => v === key).length);
-  assert.equal(counts.reduce((a: number, b: number) => a + b, 0), 51, "八个类别必须覆盖全部 51 个工具");
+  assert.equal(counts.reduce((a: number, b: number) => a + b, 0), 53, "八个类别必须覆盖全部 53 个工具");
   assert.ok(counts.every((n: number) => n > 0), `每个类别至少要有一个工具（实得 ${JSON.stringify(counts)}）`);
   // 简称：2–6 字（zh），en 为短标签且零 CJK。
   for (const name of Object.keys(TOOL_TAXONOMY)) {
@@ -283,11 +288,12 @@ test("g-489 A1：分类表 + 简称/类别文案 ≡ 注册真源（51，双向�
   }
   // 目录端点：分类 + 每条工具的 category/short/description + taxonomy_problems。
   const { routes } = captureHostRoutes();
-  const route = routes.get(HELP_CATALOG_ROUTE);
-  assert.ok(route, `宿主必须注册 ${HELP_CATALOG_ROUTE}`);
+  // g-507：业务定义不再逐条注册 —— 目录端点经唯一受保护入口分发（入口覆盖整个命名空间）
+  const route = { path: HELP_CATALOG_ROUTE, handler: entryHandler(routes) };
+  assert.ok(route.handler, `宿主必须注册 ${HELP_CATALOG_ROUTE}（经唯一受保护入口分发）`);
   const body = await callRoute(route);
   assert.equal(body.taxonomy_problems.length, 0, "目录端点的运行期守卫必须为空");
-  assert.equal(body.tools.length, 51, "目录端点的工具条目数必须等于注册真源");
+  assert.equal(body.tools.length, 53, "目录端点的工具条目数必须等于注册真源");
   assert.deepEqual(body.categories.map((c: any) => c.key), TOOL_CATEGORIES, "目录端点的分类顺序必须来自分类真源");
   for (const t of body.tools) {
     assert.ok(TOOL_CATEGORIES.includes(t.category), `${t.name} 的 category 必须合法（实得 ${t.category}）`);
@@ -295,7 +301,7 @@ test("g-489 A1：分类表 + 简称/类别文案 ≡ 注册真源（51，双向�
     assert.ok(t.description && t.description.zh && t.description.en, `${t.name} 必须带 zh/en 用途`);
   }
   const grouped = body.categories.reduce((acc: number, c: any) => acc + body.tools.filter((t: any) => t.category === c.key).length, 0);
-  assert.equal(grouped, 51, "每个工具都必须被某个分类收下（页签不许丢项）");
+  assert.equal(grouped, 53, "每个工具都必须被某个分类收下（页签不许丢项）");
 });
 
 test("g-489 A2（负向对照）：漏一 / 多一 / 重名 / 缺简称 / 非法类别 / en 缺标签 ⇒ 守卫逐条必红", () => {
@@ -335,10 +341,10 @@ test("g-489 B2：文案 zh/en 对称、真实（锚点指向现存界面标签�
   const problems = copyProblems(zh, en, new Set(registeredToolNames), new Set(registeredSkillNames), readHostAssets());
   assert.deepEqual(problems, [], "文案断言必须全绿");
   // 红线条（g-495 改判）：help.*.md 不再声明**工具**数（改为功能模块清单 + 当前开关状态），
-  // 故计数真源从「注册工具数」改判为「引擎模块注册表长度」。工具侧不变：注册真源仍须 == 51。
+  // 故计数真源从「注册工具数」改判为「引擎模块注册表长度」。工具侧不变：注册真源仍须 == 53。
   const zhPrompt = readFileSync(helpZhPromptPath, "utf8");
   const enPrompt = readFileSync(helpEnPromptPath, "utf8");
-  assert.equal(registeredToolNames.length, 51, "g-489 基线：注册真源应恰有 51 个工具");
+  assert.equal(registeredToolNames.length, 53, "g-489 基线：注册真源应恰有 53 个工具");
   const zhModules = [...zhPrompt.matchAll(/共\s*(\d+)\s*个功能模块/g)].map((m) => Number(m[1]));
   assert.equal(zhModules.length, 1, "help.zh.md 必须保留一处模块计数表述（共 N 个功能模块）");
   for (const n of zhModules) assert.equal(n, HARNESS_MODULE_IDS.length, `help.zh.md 的模块计数必须是 ${HARNESS_MODULE_IDS.length}`);
@@ -438,18 +444,18 @@ test("g-489 D1：看板设置仍是五个页签（无「关于」），说明文
 
 // ---------------------------------------------------------------- 路由桩（A1 用）
 
-function captureHostRoutes(): { routes: Map<string, any> } {
+function captureHostRoutes(): { routes: any[] } {
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     inject: () => ctx,
     effect: (fn: any) => fn(),
-    get: (name: string) => (name === "webServer" ? webServer : null),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : null),
     tools: { register: () => () => {}, get: () => ({}) },
     webServer,
   };
   apply(ctx, {});
-  return { routes };
+  return { routes: routeDefs };
 }
 
 async function callRoute(route: any): Promise<any> {
@@ -458,6 +464,6 @@ async function callRoute(route: any): Promise<any> {
     writeHead() {},
     end(b: any) { body = b; },
   };
-  await route.handler({ method: "GET", url: HELP_CATALOG_ROUTE, headers: {} }, res);
+  await route.handler({ method: "GET", url: HELP_CATALOG_ROUTE, headers: { [OWNER_HEADER]: "1" } }, res);
   return JSON.parse(String(body));
 }

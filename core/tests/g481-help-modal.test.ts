@@ -47,6 +47,10 @@ import {
   apply, DESIGN_DIAGRAM_ROUTE, HELP_ASSET_ROUTE, HELP_CATALOG_ROUTE, HELP_PROMPT_ASSETS,
   helpAssetRelativePath, helpAssetOwnership, helpPromptAssetEntries, resolveHelpAssetRequest,
 } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, singleEntry, NAMESPACE } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const repoRoot = join(import.meta.dirname, "../..");
 const distRoot = join(repoRoot, "dist");
@@ -70,12 +74,12 @@ const sha256 = (buf: Buffer | string) => createHash("sha256").update(buf).digest
 
 // ---------------------------------------------------------------- 宿主桩（捕获路由 + 注册真源）
 
-type Capture = { routes: Map<string, any>; registered: any[] };
+type Capture = { route: any; registered: any[] };
 
 function captureRoutes(opts: { locale?: string } = {}): Capture {
   const routes = new Map<string, any>();
   const registered: any[] = [];
-  const webServer = { register: (def: any) => { routes.set(def.path, def); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   // 语言真源：settings 服务的 locale.preference（resolvePromptLanguage 的首选来源）。
   const settings = opts.locale
     ? { get: (ns: string) => (ns === "locale" ? { preference: opts.locale } : null), watch: () => () => {}, update: async () => {} }
@@ -83,12 +87,12 @@ function captureRoutes(opts: { locale?: string } = {}): Capture {
   const ctx: any = {
     inject: () => ctx,
     effect: (fn: any) => fn(),
-    get: (name: string) => (name === "webServer" ? webServer : name === "settings" ? settings : null),
+    get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "settings" ? settings : null),
     tools: { register: (def: any) => { registered.push(def); return () => {}; }, get: () => ({}) },
     webServer,
   };
   apply(ctx, {});
-  return { routes, registered };
+  return { route: singleEntry(routeDefs), registered };
 }
 
 function fakeRes() {
@@ -101,21 +105,22 @@ function fakeRes() {
 }
 
 const captured = captureRoutes();
-const assetRoute = captured.routes.get(HELP_ASSET_ROUTE);
-const catalogRoute = captured.routes.get(HELP_CATALOG_ROUTE);
-assert.ok(assetRoute, `宿主必须注册只读资产路由 ${HELP_ASSET_ROUTE}`);
-assert.ok(catalogRoute, `宿主必须注册帮助目录端点 ${HELP_CATALOG_ROUTE}`);
+// g-507：业务定义不再逐条注册 —— 两条资产端点都经唯一受保护入口分发。
+const assetRoute = captured.route;
+const catalogRoute = captured.route;
+assert.equal(assetRoute.path, NAMESPACE, `唯一入口覆盖命名空间（资产路由 ${HELP_ASSET_ROUTE} 在其内）`);
+assert.equal(assetRoute.kind, "prefix", "唯一入口必须是 prefix");
 
 async function callAsset(url: string, method = "GET") {
   const res = fakeRes();
-  await assetRoute.handler({ method, url, headers: {} }, res);
+  await assetRoute.handler({ headers: { OWNER_HEADER: "1" }, method, url, headers: { [OWNER_HEADER]: "1" } }, res);
   return res;
 }
 
 async function callCatalog(locale?: string) {
-  const route = locale ? captureRoutes({ locale }).routes.get(HELP_CATALOG_ROUTE) : catalogRoute;
+  const route = locale ? captureRoutes({ locale }).route : catalogRoute;
   const res = fakeRes();
-  await route.handler({ method: "GET", url: HELP_CATALOG_ROUTE, headers: {} }, res);
+  await route.handler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: HELP_CATALOG_ROUTE }, res);
   return res;
 }
 
@@ -504,7 +509,7 @@ test("g-481 B2：prompt_language 随宿主语言设置变化（settings.locale.p
   assert.equal(jsonOf(await callCatalog("zh")).prompt_language, "zh", "locale=zh ⇒ prompt_language=zh");
   // 方法面：目录端点是只读 GET。
   const res = fakeRes();
-  await catalogRoute.handler({ method: "POST", url: HELP_CATALOG_ROUTE, headers: {} }, res);
+  await catalogRoute.handler({ headers: { [OWNER_HEADER]: "1" }, method: "POST", url: HELP_CATALOG_ROUTE }, res);
   assert.equal(res.code, 405, "目录端点 POST 必须 405");
 });
 
@@ -638,8 +643,8 @@ test("g-481 C3：Graph 设计页签的两张图随包且真能经宿主只读路
   const block = (modal.match(/const DESIGN_DIAGRAM_TABS = \[([\s\S]*?)\];/) ?? [])[1] ?? "";
   const files = [...block.matchAll(/file: "([^"]+)"/g)].map((m) => m[1]!);
   assert.equal(files.length, 2, "Graph 设计页签必须恰有两张图（lifecycle / workflow）");
-  const diagramRoute = captured.routes.get(DESIGN_DIAGRAM_ROUTE);
-  assert.ok(diagramRoute, `宿主必须注册只读图路由 ${DESIGN_DIAGRAM_ROUTE}`);
+  const diagramRoute = captured.route;
+  assert.equal(diagramRoute.path, NAMESPACE, `唯一入口覆盖命名空间（图路由 ${DESIGN_DIAGRAM_ROUTE} 在其内）`);
   for (const file of files) {
     assert.ok(!/^https?:|^\/\//.test(file), `${file} 不得是绝对/外站 URL（必须同源随包）`);
     const src = join(repoRoot, "dsh-graph-host/diagrams", file);
@@ -647,7 +652,7 @@ test("g-481 C3：Graph 设计页签的两张图随包且真能经宿主只读路
     assert.ok(existsSync(src) && existsSync(dst), `${file} 必须随包发布（源与 dist 都在）`);
     assert.equal(sha256(readFileSync(dst)), sha256(readFileSync(src)), `${file} 随包副本必须与源逐字节一致`);
     const res = fakeRes();
-    await diagramRoute.handler({ method: "GET", url: `${DESIGN_DIAGRAM_ROUTE}/${file}`, headers: {} }, res);
+    await diagramRoute.handler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `${DESIGN_DIAGRAM_ROUTE}/${file}` }, res);
     assert.equal(res.code, 200, `${file} 必须能加载（200）`);
     assert.equal(res.headers["content-type"], "text/html; charset=utf-8", `${file} 必须回 text/html`);
     assert.equal(res.headers["x-content-type-options"], "nosniff", `${file} 必须带 nosniff`);
@@ -657,7 +662,7 @@ test("g-481 C3：Graph 设计页签的两张图随包且真能经宿主只读路
   assert.ok(modal.includes(`"${DESIGN_DIAGRAM_ROUTE}/"`), `客户端必须以内嵌图路由前缀 ${DESIGN_DIAGRAM_ROUTE}/ 拼 URL`);
   // 负向对照：未随包的图名必须 404（证明「能加载」不是路由对任何名字都放行）。
   const neg = fakeRes();
-  await diagramRoute.handler({ method: "GET", url: `${DESIGN_DIAGRAM_ROUTE}/not-a-diagram.html`, headers: {} }, neg);
+  await diagramRoute.handler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `${DESIGN_DIAGRAM_ROUTE}/not-a-diagram.html` }, neg);
   assert.equal(neg.code, 404, "未随包的图名必须 404");
 });
 

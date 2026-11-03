@@ -1,0 +1,202 @@
+// g-507 共用宿主桩：**经新注册入口**驱动 `/api/dsh-graph` 业务（既有业务回归用），并提供
+// 「本插件一个受保护命名空间入口」的结构断言工具。
+//
+// 为什么需要它：g-507 起插件只向宿主 webServer 注册**一个** `kind:"prefix", path:"/api/dsh-graph"`
+// 入口，**先**用宿主公开 `connection.admit(req)` + owner 判定鉴权，**后**才在插件内部按显式 exact
+// 元数据与两条资产 prefix 分发业务 handler。既有业务套件此前直接 `routes.get(path)(req, res)` 调
+// handler —— 那正是「绕过门禁直调业务」的形态，g-507 之后不再成立。
+//
+// 本 harness 的做法（**不是产品测试绕过开关**）：
+//   1. 用真实 `webServer.register` 桩捕获注册（只应捕获到一个 prefix 入口）；
+//   2. 调 `dispatch` 时把请求交给**被捕获的那个入口 handler**（= 生产同一段代码），
+//      因此 `admit` 门禁与 owner 判定**照常执行**；
+//   3. 鉴权通过所需的连接服务由本文件提供 `ownerConnectionStub()`（测试自有 owner 凭证夹具）——
+//      真实宿主签名凭证的验证在 `g507-http-auth-real-host.test.ts` 里用真实
+//      `HostConnectionService` + 测试内存 credentials 完成，两者互不替代。
+//
+// 安全性质：**不带 owner 凭证的请求不会被这些桩放行**（stub 对无凭证请求返回宿主同款
+// `{ rejection: 401 }`），故业务套件不会掩盖「未认证也能读写」这类回归。
+import assert from "node:assert/strict";
+
+/** 生产入口命名空间（与 dsh-graph-host 的 API_NAMESPACE 逐字一致；结构断言会对照真实导出）。 */
+export const NAMESPACE = "/api/dsh-graph";
+
+/** 测试自有 owner 凭证夹具：请求带 `x-dsh-graph-test-owner: 1` 即被视作已认证 owner Peer。 */
+/** 测试自有的真实宿主栈（真实 cordis Context + 真实 WebServer + 真实 HostConnectionService）。
+ *  只读引用**已安装**的 0.2.1-rc.2 公开包：不是 mock，也不是产品依赖（仅测试文件使用）。 */
+export const HOST_STACK = Object.freeze({
+  context: "/home/miuzel/.local/share/fnm/node-versions/v26.7.0/installation/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/cordis/lib/index.js",
+  webserver: "/home/miuzel/.local/share/fnm/node-versions/v26.7.0/installation/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-host-webserver/lib/index.js",
+  connection: "/home/miuzel/.local/share/fnm/node-versions/v26.7.0/installation/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js",
+});
+
+export const OWNER_HEADER = "x-dsh-graph-test-owner";
+
+/**
+ * 构造一个**仅在测试中**使用的 connection 桩：形状对齐宿主公开 `admit(req)` 契约
+ * （`{peer:{principal:{kind}}}` 或 `{rejection: 401|403}`），用于让业务套件经真实门禁调用业务。
+ *
+ * @param opts.owner 是否把带 owner 头的请求认作 owner（默认 true）
+ * @param opts.rejection 强制返回的拒绝码（用于断言拒绝路径）
+ */
+export function ownerConnectionStub(opts: { owner?: boolean; rejection?: 401 | 403 } = {}) {
+  const owner = opts.owner ?? true;
+  return {
+    admit(request: any) {
+      if (opts.rejection) return { rejection: opts.rejection };
+      const headers = request?.headers ?? {};
+      if (headers[OWNER_HEADER] !== "1") return { rejection: 401 as const };
+      if (!owner) return { peer: { principal: { kind: "remote" } } };
+      return { peer: { id: "peer-test-owner", principal: { kind: "owner" } } };
+    },
+  };
+}
+
+/** 注册捕获桩：真实 `webServer.register` 语义（记录 kind/path/handler，返回 disposer）。 */
+export function createRegisterStub() {
+  const routes: any[] = [];
+  const webServer = {
+    register: (def: any) => {
+      routes.push(def);
+      return () => {
+        const at = routes.indexOf(def);
+        if (at >= 0) routes.splice(at, 1);
+      };
+    },
+  };
+  return { routes, webServer };
+}
+
+/** 结构断言：注册集合必须**恰好**是一个 `prefix` 入口，路径为命名空间根，handler 是函数。 */
+export function assertSingleProtectedEntry(routes: any[], label = "插件") {
+  assert.equal(routes.length, 1, `${label}只应向 webServer 注册一个入口（实际 ${routes.length} 条）`);
+  const [only] = routes;
+  assert.equal(only.kind, "prefix", "唯一入口必须是 prefix（覆盖整个命名空间，含未知子路径）");
+  assert.equal(only.path, NAMESPACE, "唯一入口必须挂在命名空间根");
+  assert.equal(typeof only.handler, "function", "唯一入口必须有 handler");
+  return only;
+}
+
+/** 取唯一的命名空间入口 handler（未注册/多注册即判红）。 */
+export function entryHandler(routes: any[]): (req: any, res: any) => unknown {
+  return assertSingleProtectedEntry(routes).handler;
+}
+
+/**
+ * 既有业务套件的「取 handler」兼容入口：g-507 之后业务 handler 不再单独可见，
+ * 所有业务调用都必须经过**唯一门禁入口**（handler 内部先 admit + owner 判定，再按 url 分发）。
+ * 业务套件因此保留原有 `handler(req, res)` 形状，但每次都真的走认证路径。
+ */
+export function handlerFor(routes: any[]): (req: any, res: any) => unknown {
+  return entryHandler(routes);
+}
+
+/**
+ * 认证后路径分发口径（与生产 `dispatchRequest` 逐条同规则；生产的结构守卫要求这里与实现同口径）：
+ *   - exact 表逐字命中（尾斜杠不归一、不重定向：`/api/dsh-graph/` ≠ `/api/dsh-graph`）；
+ *   - prefix 只按**段边界**匹配（`p === path || p.startsWith(path + "/")`），取最长；
+ *   - query 不参与匹配。
+ * 返回 `{ kind: "exact"|"prefix", base: string, pathname: string }`；未知返回 null。
+ */
+export function matchEndpoint(
+  pathname: string,
+  table: { exactPaths: readonly string[]; prefixPaths: readonly string[] },
+): { kind: "exact" | "prefix"; base: string; pathname: string } | null {
+  const exactSet = new Set(table.exactPaths);
+  if (exactSet.has(pathname)) return { kind: "exact", base: pathname, pathname };
+  let best: string | null = null;
+  for (const p of table.prefixPaths) {
+    if (pathname !== p && !pathname.startsWith(`${p}/`)) continue;
+    if (best === null || p.length > best.length) best = p;
+  }
+  return best === null ? null : { kind: "prefix", base: best, pathname };
+}
+
+/** 取唯一的命名空间入口**定义**（kind/path/handler）；未注册或多注册即判红。 */
+export function singleEntry(routes: any[]) {
+  return assertSingleProtectedEntry(routes);
+}
+
+/**
+ * g-507 B 层用：在**真实** cordis Context 上按「独立 fiber」装配一个真实服务（白盒小适配）。
+ *
+ * 为什么需要：`ctx.extend()` 是**原型继承的视图**，与父上下文共享同一个 `fiber`；对它调用
+ * `fiber.dispose()` 会连带解绑根上下文上的其它服务（实测：释放 connection 会顺带关掉 webServer
+ * 监听）。宿主的真实形态是**每个插件一条独立 fiber**（`ctx.plugin(...)`），因此测试也用同一形态：
+ * 回调拿到插件自己的 `ctx`，在其中 `new` 真实服务并通过 `ctx.effect` 绑定生命周期。
+ *
+ * @param root 真实根 Context
+ * @param name 插件名（仅诊断用）
+ * @param setup 在该插件的独立 ctx 上装配服务
+ * @returns `{ ctx, fiber, service }` —— `fiber.dispose()` 即真实卸载
+ */
+export async function loadServicePlugin(root: any, name: string, setup: (ctx: any) => unknown) {
+  let captured: unknown = null;
+  let pluginCtx: any = null;
+  const fiber = root.plugin({
+    name,
+    apply: (ctx: any) => {
+      pluginCtx = ctx;
+      captured = setup(ctx);
+    },
+  });
+  await fiber;
+  return { ctx: pluginCtx, fiber, service: captured };
+}
+
+/**
+ * **逐端点真实可达性**断言（g-507 返工，恢复基线 `routes.has(p)` 的强度）。
+ *
+ * 基线断言的是「这条 path 在宿主路由表里存在」；g-507 之后业务不再逐条注册，等价强度必须落在
+ * **插件自己的分发口径**上：对同一个入口表按 `lookupRoute`（与 `dispatchRequest` 同口径的纯查询）
+ * 逐条判定「这个 pathname 命中哪条业务定义」。
+ *
+ * 判定区分三种情况，**不使用**「status != 404」这类模糊口径：
+ *   - `"defined"`：该 path 在表里有业务定义（端点存在）；
+ *   - `"not-defined"`：表里没有任何定义命中 ⇒ 认证后分发会落到 404（端点缺失/被删）；
+ *     ⇒ 若期望端点存在，则**必红**。
+ *   - 端点存在但业务自身返回 404（如 `name-required`）不在此判定范围：本 helper 只看分发命中。
+ *
+ * @param table `buildRouteTable()` 的产物
+ * @param paths 期望**可达**的端点 pathname 列表
+ * @param lookup `lookupRoute` 实现（由调用方从产品模块导入，避免 helper 反向依赖产品）
+ */
+export function assertEndpointsDefined(table: any, paths: string[], lookup: (t: any, url: string) => { defined: boolean; matchedPath?: string }) {
+  const missing: string[] = [];
+  for (const p of paths) {
+    const hit = lookup(table, p);
+    // 端点必须**精确**命中自己（不能只是落进某个更宽 prefix 范围里被"兜住"）
+    if (!hit.defined || hit.matchedPath !== p) missing.push(`${p}${hit.defined ? `（实际命中 ${hit.matchedPath}）` : ""}`);
+  }
+  assert.deepEqual(missing, [], `以下端点经唯一入口分发不可达（分发会 404 或落进别的范围）：${missing.join(", ")}`);
+}
+
+/** 反向断言：这些路径在表里**没有**业务定义（用于证明「删掉/不存在」确实被判为不可达）。 */
+export function assertEndpointsUndefined(table: any, paths: string[], lookup: (t: any, url: string) => { defined: boolean }) {
+  const found = paths.filter((p) => lookup(table, p).defined);
+  assert.deepEqual(found, [], `以下路径本应无业务定义却仍被命中：${found.join(", ")}`);
+}
+
+/**
+ * 双向对账：实现路由集合 与 测试全集 必须逐条相等（任何一侧多/少一条都判红）。
+ *
+ * 用于把「新增路由逃出拒绝矩阵」与「删掉受测路由无人发现」两类漂移同时钉住；
+ * 判定基于**真实注册快照**（path + kind），不依赖源码文本形状（单行新增同样会被捕获）。
+ * @param impl 实现侧快照 `[{path, kind}]`
+ * @param expected 测试全集 `[{path, kind}]`（或 path 字符串数组，按 exact 处理）
+ */
+export function assertSameRouteSet(impl: Array<{ path: string; kind?: string }>, expected: Array<{ path: string; kind?: string }> | string[]) {
+  const norm = (list: Array<{ path: string; kind?: string }> | string[]) =>
+    list
+      .map((e) => (typeof e === "string" ? `${e}|exact` : `${e.path}|${e.kind ?? "exact"}`))
+      .sort();
+  const a = norm(impl);
+  const b = norm(expected);
+  const onlyImpl = a.filter((x) => !b.includes(x));
+  const onlyExpected = b.filter((x) => !a.includes(x));
+  assert.deepEqual(
+    { onlyImpl, onlyExpected },
+    { onlyImpl: [], onlyExpected: [] },
+    `路由集合漂移：实现独有=[${onlyImpl.join(", ")}] 测试独有=[${onlyExpected.join(", ")}]`,
+  );
+}

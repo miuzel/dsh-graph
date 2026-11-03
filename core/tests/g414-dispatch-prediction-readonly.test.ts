@@ -31,6 +31,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createGoal, findGoalFile, goalDetail, init, loadGoal, setCriteria } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 const REPO_ROOT = join(import.meta.dirname, "../..");
 const DISPATCH_SOURCE = join(REPO_ROOT, "dsh-graph-host/index.js");
@@ -55,10 +59,11 @@ function createHarness({ gitRepo = false } = {}) {
   const spawnedAt: string[] = [];
   const registeredTools: any[] = [];
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（门禁入口）
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "subagents") {

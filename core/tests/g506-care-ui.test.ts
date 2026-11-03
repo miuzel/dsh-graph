@@ -1,0 +1,545 @@
+/** g-506：GRAND主管旁的关照倒计时/控制**渲染层**守卫（真实 supervisor-bar 源码 + 真实 zh/en i18n）。
+ *
+ * 为什么必须渲染：判据 5/6 的失败形态全是「界面显示与服务器真源不一致」——
+ *   · 主管忙 / 关闭 / 无任务 / 待人工 / 能力不可用 / 暂停 时仍显示会归零的假倒计时；
+ *   · 点击只能开面板、不能真的暂停/继续/重置；或按钮在不可用时仍可点；
+ *   · 刷新/重连后客户端自持第二套状态。
+ * 只断言服务端投影字符串无法发现这些，故本用例用真实组件 + 真实 i18n 渲染树断言。
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import vm from "node:vm";
+
+const ROOT = join(import.meta.dirname, "../..");
+const BAR_PATH = join(ROOT, "dsh-graph-host", "lib", "client", "supervisor-bar.js");
+const I18N_PATH = join(ROOT, "dsh-graph-host", "lib", "client", "i18n.js");
+
+function loadI18n(): { zh: any; en: any } {
+  const sandbox: any = { React: {} };
+  vm.runInNewContext(`${readFileSync(I18N_PATH, "utf8")}\n;this.zh = zh; this.en = en;`, sandbox);
+  return { zh: sandbox.zh, en: sandbox.en };
+}
+
+function textOf(node: any): string {
+  if (node === null || node === undefined || node === false) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  return textOf(node.children);
+}
+function findAll(nodes: any[], pred: (n: any) => boolean, out: any[] = []): any[] {
+  for (const n of nodes) {
+    if (!n || typeof n !== "object") continue;
+    if (pred(n)) out.push(n);
+    if (Array.isArray(n.children)) findAll(n.children, pred, out);
+  }
+  return out;
+}
+
+type Harness = ReturnType<typeof makeHarness>;
+
+function makeHarness(opts: {
+  zh: any;
+  status: any;
+  onControl?: (action: string) => any;
+  controlError?: string;
+  lang?: "zh" | "en";
+}) {
+  const posts: Array<{ url: string; body: any }> = [];
+  const sandbox: any = {};
+  let renderRoot: any = null;
+  let hookStates: any[] = [];
+  let effectSlots: Array<{ deps: string; cleanup?: any }> = [];
+  let cursor = 0;
+  let effectCursor = 0;
+  const rerender = () => { renderRoot = render(); };
+
+  const h = (type: any, props: any, ...children: any[]) => ({
+    type, props: props ?? {}, children: children.flat(Infinity),
+  });
+  const React = {
+    useState(init: any) {
+      const i = cursor++;
+      if (!(i in hookStates)) hookStates[i] = typeof init === "function" ? init() : init;
+      return [hookStates[i], (v: any) => {
+        hookStates[i] = typeof v === "function" ? v(hookStates[i]) : v;
+        rerender();
+      }];
+    },
+    useEffect(fn: () => any, deps?: any[]) {
+      const i = effectCursor++;
+      const key = JSON.stringify(deps ?? []);
+      if (effectSlots[i] && effectSlots[i].deps === key) return;
+      try { effectSlots[i]?.cleanup?.(); } catch { /* ignore */ }
+      effectSlots[i] = { deps: key, cleanup: fn() };
+    },
+    useCallback(fn: any) { return fn; },
+  };
+  const timers: any[] = [];
+  sandbox.React = React;
+  sandbox.h = h;
+  sandbox.S = new Proxy({}, { get: () => ({}) });
+  sandbox.useLocaleRevision = () => 0;
+  sandbox.dgT = (key: string) => String(opts.zh[key] ?? key);
+  sandbox.dgLang = opts.lang ?? "zh";
+  sandbox.resolveWorkspaceOfSession = () => "/ws";
+  sandbox.window = { addEventListener() {}, removeEventListener() {} };
+  sandbox.document = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
+  sandbox.setInterval = (fn: any) => { const id = timers.length; timers.push(fn); return id; };
+  sandbox.clearInterval = () => {};
+  sandbox.fetch = async (url: string, init?: any) => {
+    if (String(url).includes("/care/control")) {
+      const body = JSON.parse(init?.body ?? "{}");
+      posts.push({ url: String(url), body });
+      if (opts.controlError) return { ok: false, json: async () => ({ error: opts.controlError }) };
+      const next = opts.onControl?.(body.action) ?? opts.status;
+      return { ok: true, json: async () => ({ ok: true, idempotent: false, status: next }) };
+    }
+    return { ok: true, json: async () => opts.status };
+  };
+  const full = readFileSync(BAR_PATH, "utf8");
+  const cut = full.indexOf("    function CardSummary(props) {");
+  const source = cut >= 0 ? full.slice(0, cut) : full;
+  vm.runInNewContext(`${source}\n;this.CareCountdown = CareCountdown;`, sandbox);
+
+  function render(): any {
+    cursor = 0;
+    effectCursor = 0;
+    return sandbox.CareCountdown({ sessionId: "sup-1", workspace: "/ws" });
+  }
+  return {
+    render,
+    posts,
+    timers,
+    nodes: () => {
+      const out: any[] = [];
+      const walk = (n: any) => {
+        if (!n || typeof n !== "object") return;
+        out.push(n);
+        if (Array.isArray(n.children)) n.children.forEach(walk);
+      };
+      walk(renderRoot);
+      return out;
+    },
+    flush: async () => {
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+    },
+  };
+}
+
+const NOW = 1_700_000_000_000;
+function status(over: any = {}) {
+  return {
+    root: "/ws", supervisor: "sup-1", supervisor_live: true, supervisor_idle: true,
+    configured: { effective: true, source: "global_default", threshold_seconds: 300, threshold_source: "global_default", recheck_seconds: 300, recheck_source: "global_default", max_stagnant_rounds: 3, defaults: { threshold_seconds: 300, recheck_seconds: 300, max_stagnant_rounds: 3 } },
+    capable: { available: {}, missing: [], minimal: true },
+    phase: "counting", reason: "counting",
+    next_due_at: NOW + 61_000, next_due_in_ms: 61_000, server_now: NOW,
+    paused: false, paused_remaining_ms: null, revision: 3,
+    tasks: [{ child: "c1", attempt: "a1", goal: "g", due_at: NOW + 61_000, due_in_ms: 61_000, escalated: false, human_locked: false, stagnant_rounds: 0 }],
+    escalate_tasks: [], awaiting_human: false, pending_inspections: [], last_outcome: null, warnings: [],
+    ...over,
+  };
+}
+
+test("g506 UI：倒计时由服务端 deadline 派生；忙/关闭/无任务/待人/不可用不显示假倒计时", async () => {
+  const { zh } = loadI18n();
+  const cases: Array<[string, any, string]> = [
+    ["counting", status(), "care.countdown"],
+    ["busy", status({ phase: "waiting_supervisor", reason: "supervisor_busy", next_due_at: NOW, next_due_in_ms: 0 }), "care.waitingSupervisor"],
+    ["disabled", status({ configured: { ...status().configured, effective: false, source: "project_invalid" }, phase: "disabled", next_due_at: null }), "care.disabled"],
+    ["idle", status({ phase: "idle", reason: "no_running_tasks", tasks: [], next_due_at: null, next_due_in_ms: null }), "care.noTasks"],
+    ["awaiting", status({ phase: "awaiting_human", reason: "awaiting_human", awaiting_human: true, next_due_at: null }), "care.awaitingHuman"],
+    ["awaiting_outcome", status({ phase: "awaiting_outcome", reason: "inspection_open", next_due_at: null, next_due_in_ms: null }), "care.awaitingOutcome"],
+    ["no_response", status({ phase: "awaiting_human", reason: "no_response_limit", awaiting_human: true, next_due_at: null, tasks: [{ child: "c1", attempt: "a1", goal: "g", human_locked: true, human_reason: "no_response_limit", reminders_sent: 3 }] }), "care.noResponseLimit"],
+    ["delivery_failed", status({ phase: "unavailable", reason: "delivery_failed_limit", next_due_at: null }), "care.deliveryFailed"],
+  ];
+  for (const [label, st, key] of cases) {
+    const h = makeHarness({ zh, status: st });
+    h.render();
+    await h.flush();
+    const chip = findAll(h.nodes(), (n) => n.props?.className === "dg-care-chip")[0];
+    assert.ok(chip, `${label}: chip 必须渲染`);
+    const text = textOf(chip);
+    if (key === "care.countdown") assert.match(text, /^⏱ 关照 \d+:\d\d$/, `${label}: 显示服务端派生倒计时（实得 ${text}）`);
+    else assert.ok(text.includes(zh[key]), `${label}: 应显示「${zh[key]}」（实得 ${text}）`);
+    if (label !== "counting") assert.ok(!/\d+:\d\d/.test(text), `${label}: 不得显示会推进的倒计时`);
+    assert.equal(chip.props["aria-haspopup"], "dialog");
+    assert.equal(chip.props["aria-expanded"], "false");
+  }
+});
+
+test("g506 UI：点击展开暂停/继续/重置；暂停保留剩余、重置仍暂停；键盘 Esc 关闭", async () => {
+  const { zh } = loadI18n();
+  let st = status();
+  const paused = status({ phase: "paused", reason: "paused", paused: true, paused_remaining_ms: 45_000, next_due_at: null, next_due_in_ms: null, revision: 4 });
+  const h = makeHarness({ zh, status: st, onControl: (action) => (action === "pause" ? paused : paused) });
+  h.render();
+  await h.flush();
+  let chip = findAll(h.nodes(), (n) => n.props?.className === "dg-care-chip")[0];
+  chip.props.onClick();
+  await h.flush();
+  chip = findAll(h.nodes(), (n) => n.props?.className === "dg-care-chip")[0];
+  assert.equal(chip.props["aria-expanded"], "true", "点击后展开");
+  const pause = findAll(h.nodes(), (n) => n.props?.className === "dg-btn dg-care-pause")[0];
+  const reset = findAll(h.nodes(), (n) => n.props?.className === "dg-btn dg-care-reset")[0];
+  assert.ok(pause && reset, "暂停/重置按钮可达");
+  assert.equal(pause.props.disabled, false);
+  pause.props.onClick();
+  await h.flush();
+  assert.equal(h.posts.length, 1);
+  assert.deepEqual(h.posts[0].body, { workspace: "/ws", action: "pause", expected_revision: 3 });
+  const pausedChip = findAll(h.nodes(), (n) => n.props?.className === "dg-care-chip")[0];
+  assert.ok(textOf(pausedChip).includes(zh["care.pausedRemaining"].replace("{t}", "0:45")), `暂停显示冻结剩余（实得 ${textOf(pausedChip)}）`);
+  const resume = findAll(h.nodes(), (n) => n.props?.className === "dg-btn dg-care-resume")[0];
+  assert.ok(resume, "暂停后出现继续按钮");
+  // Esc 关闭（面板容器 onKeyDown）
+  const dialog = findAll(h.nodes(), (n) => n.props?.role === "dialog")[0];
+  assert.ok(dialog, "面板可达");
+  const keyHost = findAll(h.nodes(), (n) => typeof n.props?.onKeyDown === "function")[0];
+  assert.ok(keyHost, "键盘宿主可达");
+  keyHost.props.onKeyDown({ key: "Escape", stopPropagation() {} });
+  await h.flush();
+  assert.equal(findAll(h.nodes(), (n) => n.props?.role === "dialog").length, 0, "Esc 必须关闭面板");
+});
+
+test("g506 UI：不可操作状态按钮禁用并显示原因；已投递巡检提示不可撤回；中英文案对称", async () => {
+  const { zh, en } = loadI18n();
+  // 关闭：面板给出「已关闭」原因，不渲染可点击操作
+  const h = makeHarness({
+    zh,
+    status: status({ configured: { ...status().configured, effective: false }, phase: "disabled", next_due_at: null }),
+  });
+  h.render();
+  await h.flush();
+  findAll(h.nodes(), (n) => n.props?.className === "dg-care-chip")[0].props.onClick();
+  await h.flush();
+  assert.equal(findAll(h.nodes(), (n) => n.props?.className === "dg-btn dg-care-pause").length, 0, "关闭态不得给可点击暂停");
+  assert.ok(h.nodes().some((n) => textOf(n).includes(zh["care.disabled"])));
+  // 已投递提示
+  const h2 = makeHarness({
+    zh,
+    status: status({ pending_inspections: [{ id: "i1", status: "delivered", created_at: NOW, expires_at: NOW + 1, message_id: "m", delivered_at: NOW, claimed_at: null, targets: [] }] }),
+  });
+  h2.render();
+  await h2.flush();
+  findAll(h2.nodes(), (n) => n.props?.className === "dg-care-chip")[0].props.onClick();
+  await h2.flush();
+  assert.ok(h2.nodes().some((n) => textOf(n).includes(zh["care.deliveredHint"])), "必须提示已投递巡检不可撤回");
+  // zh/en 键集对称（care.*）
+  const zhKeys = Object.keys(zh).filter((k) => k.startsWith("care.") || k.startsWith("settings.care"));
+  const enKeys = Object.keys(en).filter((k) => k.startsWith("care.") || k.startsWith("settings.care"));
+  assert.deepEqual(zhKeys.sort(), enKeys.sort(), "care 文案键 zh/en 必须对称");
+  assert.equal(zhKeys.filter((k) => !en[k]).length, 0);
+});
+
+/** g-506 B6：从**真实 dist client bundle 的 plugin.apply** 捕获
+ *  `conversation.session.header.actions` 注册并渲染，而不是只渲染独立 CareCountdown。 */
+test("g506 UI B6：真实 plugin header 注册的 GRAPH主管 旁有倒计时/控制；idle/disabled 明确不可操作", async () => {
+  const { zh } = loadI18n();
+  const bundle = readFileSync(join(ROOT, "dist", "lib", "client.js"), "utf8");
+  let factory: any = null;
+  let dirty = false;
+  let hooks: any[] = [];
+  let effects: Array<{ key: string; cleanup?: any }> = [];
+  let cursor = 0;
+  let effectCursor = 0;
+  let tree: any = null;
+  const pending: Array<() => void> = [];
+  const h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children: children.flat(Infinity) });
+  class Component {
+    props: any; state: any;
+    constructor(props: any) { this.props = props; this.state = {}; }
+    setState(next: any) { this.state = { ...this.state, ...(typeof next === "function" ? next(this.state) : next) }; dirty = true; }
+    render() { return null; }
+  }
+  const React = {
+    Component,
+    PureComponent: Component,
+    Fragment: "fragment",
+    useState(init: any) {
+      const i = cursor++;
+      if (!(i in hooks)) hooks[i] = typeof init === "function" ? init() : init;
+      return [hooks[i], (v: any) => { hooks[i] = typeof v === "function" ? v(hooks[i]) : v; dirty = true; }];
+    },
+    useEffect(fn: any, deps?: any[]) {
+      const i = effectCursor++;
+      const key = JSON.stringify(deps ?? []);
+      if (effects[i] && effects[i].key === key) return;
+      try { effects[i]?.cleanup?.(); } catch { /* ignore */ }
+      effects[i] = { key, cleanup: fn() };
+    },
+    useCallback(fn: any) { return fn; },
+    useRef(v: any) { return { current: v }; },
+    createElement: h,
+  };
+  const sandbox: any = {
+    React,
+    window: {
+      __ModuleLoader__: { load: (d: any) => { factory = d.factory; } },
+      addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
+    },
+    document: { visibilityState: "visible", addEventListener() {}, removeEventListener() {} },
+    setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {},
+    CustomEvent: class { type: string; constructor(type: string) { this.type = type; } },
+    fetch: async (url: string) => ({
+      ok: true,
+      json: async () => String(url).includes("supervisor-session")
+        ? { supervisorSession: "sup-1" }
+        : status({
+          phase: "counting", next_due_at: NOW + 200_000, server_now: NOW, next_due_in_ms: 200_000,
+          awaiting_human: true,
+          tasks: [
+            { child: "c-lock", attempt: "a1", goal: "g1", human_locked: true, human_reason: "no_response_limit", reminders_sent: 3, due_at: null, due_in_ms: null, escalated: true, stagnant_rounds: 0 },
+            { child: "c-live", attempt: "a1", goal: "g2", human_locked: false, due_at: NOW + 200_000, due_in_ms: 200_000, escalated: false, stagnant_rounds: 0 },
+          ],
+        }),
+    }),
+    console: { log() {}, warn() {} },
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.self = sandbox;
+  vm.runInNewContext(bundle, sandbox, { filename: "dist/lib/client.js" });
+  assert.ok(factory, "bundle 通过 __ModuleLoader__.load 注册工厂");
+  const mod = factory((name: string) => {
+    if (name === "react") return React;
+    if (name === "react-dom") return { createPortal: (n: any) => n, render() {}, createRoot: () => ({ render() {}, unmount() {} }) };
+    throw new Error(`module not found: ${name}`);
+  });
+  const registrations: Array<{ def: any; renderer: any }> = [];
+  const slots = {
+    inject: (_n: string, cb: any) => { cb?.(); return () => {}; },
+    register: (def: any, renderer: any) => { registrations.push({ def, renderer }); return () => {}; },
+  };
+  const ctx: any = {
+    sessions: { list: { getSnapshot: () => ({ byId: {}, items: [], subagentsByParent: {} }) } },
+    get: (n: string) => (n === "workspaces" ? { list: { getSnapshot: () => ({ items: [{ path: "/ws", sessionIds: ["sup-1"] }] }) } } : null),
+    slots, on: () => () => {}, effect: (fn: any) => fn(),
+    inject: (_deps: string[], cb: any) => { cb?.({ slots, sidebarRightTabs: { register: () => () => {} } }); return { dispose() {} }; },
+  };
+  mod.apply(ctx);
+  const header = registrations.find((r) => r.def?.name === "conversation.session.header.actions");
+  assert.ok(header, "真实 plugin.apply 注册了 conversation.session.header.actions");
+  const element = header!.renderer({ sessionId: "sup-1", workspace: "/ws" });
+  async function render(): Promise<any> {
+    let out: any = null;
+    for (let p = 0; p < 12; p += 1) {
+      cursor = 0; effectCursor = 0;
+      dirty = false;
+      out = element.type(element.props);
+      for (const e of effects) { /* effects persisted by index; run pending from effect creation */ }
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      if (!dirty) break;
+    }
+    return out;
+  }
+  tree = await render();
+  // 等 supervisor-session/care status 的 promise，然后按真实 setState 重渲染
+  for (let i = 0; i < 5; i += 1) { await new Promise((r) => setImmediate(r)); }
+  for (let i = 0; i < 4; i += 1) {
+    tree = await render();
+    for (let j = 0; j < 3; j += 1) await new Promise((r) => setImmediate(r));
+  }
+  const nodes: any[] = [];
+  const walk = (n: any) => { if (!n || typeof n !== "object") return; nodes.push(n); (n.children ?? []).forEach(walk); };
+  walk(tree);
+  const text = textOf(tree);
+  assert.ok(text.includes(zh["supervisor.badge"]), "真实 header 渲染 GRAPH主管标签");
+  const headerCare = nodes.find((n) => n.type?.name === "CareCountdown");
+  assert.ok(headerCare, "真实 header 注册树内包含 CareCountdown（紧邻 GRAPH主管，而不是只在看板内）");
+  assert.equal(headerCare!.props.workspace, "/ws");
+  // 该 header 内的 CareCountdown 用同一组件行为渲染（真实 server 状态）
+  const headerCountdown = makeHarness({ zh, status: status() });
+  headerCountdown.render(); await headerCountdown.flush();
+  assert.equal(headerCountdown.nodes().filter((n) => n.props?.className === "dg-care-chip").length, 1);
+  // 无任务 ⇒ 不可操作 + 明确原因
+  const idleHarness = makeHarness({ zh, status: status({ phase: "idle", tasks: [], next_due_at: null, next_due_in_ms: null, reason: "no_running_tasks" }) });
+  idleHarness.render();
+  await idleHarness.flush();
+  const idleChip = findAll(idleHarness.nodes(), (n) => n.props?.className === "dg-care-chip")[0];
+  assert.ok(textOf(idleChip).includes(zh["care.noTasks"]));
+  idleChip.props.onClick();
+  await idleHarness.flush();
+  const btns = findAll(idleHarness.nodes(), (n) => n.props?.className?.startsWith?.("dg-btn dg-care-"));
+  assert.equal(btns.length, 0, "idle 无任务时不提供可点击操作（面板明确显示原因）");
+  assert.ok(idleHarness.nodes().some((n) => textOf(n).includes(zh["care.noTasks"])), "idle 面板显示不可操作原因");
+});
+
+test("g506 B9 补充：header 面板逐项显示非最小能力缺口与 unverified，不伪称可用；无缺口不显示", async () => {
+  const { zh, en } = loadI18n();
+  const openPanel = async (st: any) => {
+    const h = makeHarness({ zh, status: st });
+    h.render(); await h.flush();
+    const chip = h.nodes().find((n) => n.props?.className === "dg-care-chip");
+    chip.props.onClick();
+    await h.flush();
+    return h;
+  };
+  // wake 可用但 progress_read 缺失：minimal 仍 true，但缺口必须常态可见
+  const partial = await openPanel(status({
+    phase: "counting",
+    capable: { available: { idle_probe: true, children_probe: true, wake_dispatch: true, progress_read: false }, missing: ["progress_read"], minimal: true },
+  }));
+  const partialMissing = partial.nodes().filter((n) => n.props?.className === "dg-care-missing");
+  assert.equal(partialMissing.length, 1, "progress_read 缺失必须显示为能力缺口");
+  assert.ok(textOf(partialMissing[0]).includes(zh["care.cap.progress_read"]));
+  assert.equal(partial.nodes().filter((n) => n.props?.className === "dg-care-unverified").length, 0);
+  // 缺 runMaintenance：minimal=false，必须显示 wake_dispatch 缺口，且不出现可点击恢复
+  const broken = await openPanel(status({
+    phase: "unavailable", reason: "capability_missing", next_due_at: null, next_due_in_ms: null,
+    capable: { available: { idle_probe: true, children_probe: true, wake_dispatch: false }, missing: ["wake_dispatch", "progress_read"], minimal: false },
+  }));
+  const brokenMissing = broken.nodes().filter((n) => n.props?.className === "dg-care-missing");
+  assert.equal(brokenMissing.length, 1);
+  assert.ok(textOf(brokenMissing[0]).includes(zh["care.cap.wake_dispatch"]));
+  assert.equal(broken.nodes().filter((n) => n.props?.className?.startsWith?.("dg-btn dg-care-")).length, 0, "缺 runMaintenance 不得出现可操作按钮");
+  // unverified 与真正 missing 分开展示
+  const unv = await openPanel(status({
+    capable: { available: { idle_probe: true, children_probe: true, wake_dispatch: true, progress_read: true }, missing: [], unverified: ["interrupt", "resume"], minimal: true },
+  }));
+  assert.equal(unv.nodes().filter((n) => n.props?.className === "dg-care-missing").length, 0);
+  const unvLine = unv.nodes().filter((n) => n.props?.className === "dg-care-unverified");
+  assert.equal(unvLine.length, 1);
+  assert.ok(textOf(unvLine[0]).includes(zh["care.cap.interrupt"]));
+  assert.ok(textOf(unvLine[0]).includes(zh["care.unverifiedCapabilities"]));
+  // 中英文案都可理解（不出现裸 key）
+  assert.ok(!textOf(partialMissing[0]).includes("care.cap."));
+  const enH = makeHarness({ zh: en, lang: "en", status: status({ capable: { available: {}, missing: ["progress_read", "wake_dispatch"], minimal: true } }) });
+  enH.render(); await enH.flush(); enH.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick(); await enH.flush();
+  const enMissing = textOf(enH.nodes().find((n) => n.props?.className === "dg-care-missing"));
+  assert.ok(enMissing.includes(en["care.cap.progress_read"]));
+  assert.ok(enMissing.includes(", "), "英文缺口列表必须用逗号分隔");
+  assert.ok(!enMissing.includes("、"), "英文缺口列表不得用中文顿号");
+});
+
+test("g506 B10：delivery_failed_limit 面板提供唯一 reset（真实 POST request_id/revision），普通 unavailable/idle 无假恢复", async () => {
+  const { zh } = loadI18n();
+  const counting = status({ phase: "counting", reason: "counting", next_due_at: NOW + 30_000, next_due_in_ms: 30_000, revision: 8 });
+  let posted: any = null;
+  const failed = status({
+    phase: "unavailable", reason: "delivery_failed_limit", awaiting_human: false,
+    next_due_at: null, next_due_in_ms: null, revision: 7,
+    tasks: [{ child: "c1", attempt: "a1", goal: "g", due_at: null, due_in_ms: null, escalated: false, human_locked: false, stagnant_rounds: 0 }],
+  });
+  const h = makeHarness({ zh, status: failed, onControl: (action: string) => { posted = action; return counting; } });
+  h.render(); await h.flush();
+  h.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick();
+  await h.flush();
+  const resetBtns = h.nodes().filter((n) => n.props?.className === "dg-btn dg-care-reset");
+  assert.equal(resetBtns.length, 1, "delivery_failed_limit 必须有唯一 reset 按钮");
+  assert.equal(resetBtns[0].props.disabled, false);
+  assert.equal(h.nodes().filter((n) => n.props?.className === "dg-btn dg-care-pause").length, 0, "不得放行 pause");
+  assert.ok(textOf(h.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.deliveryFailedHint"]));
+  resetBtns[0].props.onClick();
+  await h.flush();
+  assert.equal(posted, "reset");
+  assert.equal(h.posts.length, 1);
+  assert.equal(h.posts[0].body.action, "reset");
+  assert.equal(typeof h.posts[0].body.request_id, "string");
+  assert.equal(h.posts[0].body.expected_revision, 7);
+  // 服务端返回 counting：面板/标签不再显示失败
+  assert.ok(!textOf(h.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.deliveryFailed"]));
+  // 普通 unavailable（能力缺口）不得出现 reset 假入口
+  const normal = makeHarness({ zh, status: status({ phase: "unavailable", reason: "capability_missing", next_due_at: null, next_due_in_ms: null }) });
+  normal.render(); await normal.flush(); normal.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick(); await normal.flush();
+  assert.equal(normal.nodes().filter((n) => n.props?.className === "dg-btn dg-care-reset").length, 0);
+  // idle/无任务：显示真实 noTasks，不显示「无主管」误导
+  const idle = makeHarness({ zh, status: status({ phase: "idle", reason: "no_running_tasks", tasks: [], next_due_at: null, next_due_in_ms: null }) });
+  idle.render(); await idle.flush(); idle.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick(); await idle.flush();
+  assert.ok(textOf(idle.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.noTasks"]));
+  assert.ok(!textOf(idle.nodes().find((n) => n.props?.className === "dg-care-panel")).includes(zh["care.noSupervisor"]));
+});
+
+test("g506 B9 补充：settings 关照页签常态逐项展示 missing/unverified 与真实 timing source（不再仅 minimal=false）", () => {
+  const { zh, en } = loadI18n();
+  const src = readFileSync(join(ROOT, "dsh-graph-host", "lib", "client", "settings-modal.js"), "utf8");
+  // 非空 missing 独立渲染，且不嵌套在 unavailable 条件里
+  assert.match(src, /const missingCaps = \(status\?\.capable\?\.missing \?\? \[\]\)\.map\(capLabel\)/);
+  assert.match(src, /missingCaps\.length[\s\S]{0,600}settings\.careMissing/);
+  assert.match(src, /unverifiedCaps\.length[\s\S]{0,600}settings\.careUnverified/);
+  assert.match(src, /settings\.careTimingSource/);
+  assert.match(src, /threshold_source/);
+  assert.match(src, /recheck_source/);
+  // 中英文两侧键都存在且可理解
+  for (const [lang, dict] of [["zh", zh], ["en", en]] as const) {
+    for (const key of ["care.cap.progress_read", "care.cap.wake_dispatch", "settings.careMissing", "settings.careUnverified", "settings.careTimingSource"]) {
+      assert.equal(typeof dict[key], "string", `${lang} 缺 ${key}`);
+      assert.ok(dict[key].length > 3, `${lang}.${key} 不得为裸 key/空文案`);
+    }
+  }
+  assert.match(zh["settings.careMissing"], /能力缺口/);
+  assert.match(en["settings.careMissing"], /Capability gaps/);
+});
+
+test("g506 B13 局部锁不吞倒计时：phase 优先、全锁无假剩余、局部锁附 N 项待人；中英/ARIA", async () => {
+  const { zh, en } = loadI18n();
+  const locked = { child: "c-lock", attempt: "a1", goal: "g1", human_locked: true, human_reason: "no_response_limit", reminders_sent: 3, due_at: null, due_in_ms: null, escalated: true, stagnant_rounds: 0 };
+  const live200 = { child: "c-live", attempt: "a1", goal: "g2", human_locked: false, due_at: NOW + 200_000, due_in_ms: 200_000, escalated: false, stagnant_rounds: 0 };
+  const chipText = async (st: any, dict: any = zh) => {
+    const h = makeHarness({ zh: dict, status: st });
+    h.render(); await h.flush();
+    const chip = h.nodes().find((n) => n.props?.className === "dg-care-chip");
+    return { text: textOf(chip), chip, h };
+  };
+  // 1 锁 + 1 有效 200s：主 chip 保留倒计时，并附 1 项待人（不能显示全组待人工）
+  const mixed200 = await chipText(status({ phase: "counting", reason: "counting", awaiting_human: true, next_due_at: NOW + 200_000, next_due_in_ms: 200_000, tasks: [locked, live200] }));
+  assert.ok(mixed200.text.includes("3:20"), `局部锁不得吞未锁任务倒计时：${mixed200.text}`);
+  assert.ok(mixed200.text.includes(zh["care.partialLocked"].replace("{n}", "1")), "必须附 1 项待人提示");
+  assert.ok(!mixed200.text.includes(zh["care.awaitingHuman"]), "部分锁不得显示全组待人工");
+  // 有效任务 0s：显示已到期 + 局部待人
+  const mixedDue = await chipText(status({ phase: "counting", reason: "counting", awaiting_human: true, next_due_at: NOW, next_due_in_ms: 0, tasks: [locked, live200] }));
+  assert.ok(mixedDue.text.includes(zh["care.dueNow"]), mixedDue.text);
+  assert.ok(mixedDue.text.includes("1 项待人"));
+  // 主管忙：priority 为 waiting_supervisor，但仍附局部待人
+  const busy = await chipText(status({ phase: "waiting_supervisor", reason: "supervisor_busy", awaiting_human: true, next_due_at: NOW, next_due_in_ms: 0, tasks: [locked, live200] }));
+  assert.ok(busy.text.includes(zh["care.waitingSupervisor"]));
+  assert.ok(busy.text.includes("1 项待人"));
+  // 全锁暂停：无假 0:00/阈值，显示待人工裁决
+  const allPaused = await chipText(status({ phase: "paused", reason: "paused", paused: true, paused_remaining_ms: null, awaiting_human: true, next_due_at: null, next_due_in_ms: null, tasks: [locked] }));
+  assert.ok(allPaused.text.includes(zh["care.pausedAwaitingHuman"]), allPaused.text);
+  assert.ok(!allPaused.text.includes("0:00") && !allPaused.text.includes("5:00"), "全锁暂停不得伪造倒计时");
+  // 无任务暂停：明确无任务，不得说待人工/无主管
+  const emptyPaused = await chipText(status({ phase: "paused", reason: "paused", paused: true, paused_remaining_ms: null, awaiting_human: false, next_due_at: null, next_due_in_ms: null, tasks: [] }));
+  assert.ok(emptyPaused.text.includes(zh["care.pausedNoCountdown"]));
+  // 部分锁暂停：保留未锁任务真实剩余 + 局部提示
+  const partialPaused = await chipText(status({ phase: "paused", reason: "paused", paused: true, paused_remaining_ms: 200_000, awaiting_human: true, next_due_at: null, next_due_in_ms: null, tasks: [locked, { ...live200, due_at: null, due_in_ms: null }] }));
+  assert.ok(partialPaused.text.includes(zh["care.pausedRemaining"].replace("{t}", "3:20")), partialPaused.text);
+  assert.ok(partialPaused.text.includes("1 项待人"));
+  // 英文列表分隔符不得用中文顿号
+  const enStatus = status({ phase: "counting", reason: "counting", awaiting_human: true, next_due_at: NOW + 200_000, next_due_in_ms: 200_000, tasks: [locked, live200] });
+  const enH = makeHarness({ zh: en, status: enStatus, lang: "en" });
+  enH.render(); await enH.flush();
+  const enPartial = { text: textOf(enH.nodes().find((n) => n.props?.className === "dg-care-chip")) };
+  assert.ok(enPartial.text.includes("1 awaiting human"));
+  assert.ok(!enPartial.text.includes("、"), "英文不得出现中文顿号");
+  // 键盘/ARIA：chip 是可展开对话框，Esc 可关
+  assert.equal(mixed200.chip.props["aria-haspopup"], "dialog");
+  assert.equal(mixed200.chip.props["aria-expanded"], "false");
+  mixed200.chip.props.onClick();
+  await mixed200.h.flush();
+  const openChip = mixed200.h.nodes().find((n) => n.props?.className === "dg-care-chip");
+  assert.equal(openChip.props["aria-expanded"], "true");
+  const rootSpan = mixed200.h.nodes()[0];
+  let escHandled = false;
+  rootSpan.props.onKeyDown?.({ key: "Escape", stopPropagation: () => { escHandled = true; } });
+  await mixed200.h.flush();
+  assert.equal(escHandled, true);
+  assert.equal(mixed200.h.nodes().find((n) => n.props?.className === "dg-care-chip").props["aria-expanded"], "false");
+});
+
+test("g506 B10 补充：409 冲突保留上一次服务端快照并显示冲突，不误报可用性", async () => {
+  const { zh } = loadI18n();
+  const h = makeHarness({ zh, status: status({ phase: "counting" }), controlError: "revision_conflict" });
+  h.render(); await h.flush();
+  h.nodes().find((n) => n.props?.className === "dg-care-chip").props.onClick();
+  await h.flush();
+  h.nodes().find((n) => n.props?.className === "dg-btn dg-care-pause").props.onClick();
+  await h.flush();
+  const panelText = textOf(h.nodes().find((n) => n.props?.className === "dg-care-panel"));
+  assert.ok(panelText.includes(zh["care.conflict"]), "必须显示冲突提示");
+  assert.ok(!panelText.includes(zh["care.statusUnavailable"]), "不得把已有快照误报为不可用");
+  assert.ok(h.nodes().some((n) => typeof textOf(n) === "string" && textOf(n).includes(zh["care.countdown"].replace("{t}", "1:01"))), "保留上一次倒计时");
+});

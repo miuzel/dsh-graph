@@ -25,7 +25,7 @@
 
 本插件采用**一体化单包分发**（npm 包名 `dsh-graph`），同时集成两大核心能力：
 
-- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 51 个 `graph_*` 工具，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
+- **Host 端**：向 DSH Agent 提供覆盖目标全生命周期的 53 个 `graph_*` 工具，并暴露 `/api/dsh-graph*` REST API（支持看板投影、目标详情查询与写操作）；
 - **Client 端**：无缝内嵌于 DSH Web 控制台（`conversation.view` 槽位）的浏览器二维泳道看板，提供直观的可视化交互与实时追踪。
 
 数据以本地纯文本与事件流形式存储于工作区的 `.dsh-graph/` 目录，Git 友好、天然支持协同对账与审计追踪。
@@ -40,27 +40,27 @@
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**当前版本**：v0.22.0。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
+**当前版本**：v0.23.0。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
-**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
+**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。⚠️ 上列是**历史轮次**的安装/启停/REST 结论，覆盖的是各自版本的产品代码；g-507 引入的 **HTTP 鉴权入口**只在 `0.2.1-rc.2` 实测（见下文「HTTP 鉴权」一节），**不得**据本段推断其它版本上的鉴权结论。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
 **平台状态**：
 
 | 平台 | 本版状态 |
 |------|----------|
 | Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；H 系列共享探针在本版全绿） |
-| 原生 Windows | ⏳ **本版结论一律以台账为准**：真机轮次结论（逐版本、逐宿主代际）登记在 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（该文档**不随包发布**）—— **本行不预称任何轮次结果，也不得读出「已通过」**。台账中已完成的历史轮次示例：`v0.20.1`（2026-10-10，`win32/x64` + Node `v24.21.0`，宿主 `0.2.0-rc.2` 与 `0.2.1-alpha.2` 两代际，T1–T5 = 通过 15 / 失败 0 / 告警 1、T3 = 32/32 步）—— 历史轮次**只覆盖安装 / 启动 / REST 层**，且只覆盖该版本的产品代码，**不替代**本版结论。 |
-| macOS | ⏳ **本版未验证**：`v0.22.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（不随包发布）为准。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖各自版本的产品代码。 |
+| 原生 Windows | ✅ **本版已实测通过（2026-11-02，win32/x64 + Node v24.21.0，宿主 `0.2.1-rc.5`，通过 22 / 失败 0 / 告警 0）**：详见 [platform-gate §7.13 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) —— T1 静态/台账（67 项 268 处命中未登记 0）/ 派发可用（零硬编码 shell 名）/ H 组合探针（H1–H6 除 H3 外全绿）全部通过；T3 看板文件系统生命周期 32 步盘面断言全通过；T4/T5 实例启动就绪与 REST 鉴权换票冒烟通过。 |
+| macOS | ⏳ **本版未验证**：`v0.23.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（不随包发布）为准。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖各自版本的产品代码。 |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
-**最新亮点（v0.22.0）**
+**最新亮点（v0.23.0）**
 
-- **完成摘要去冗余瘦身与交回报文精简**：目标弹窗的「完成摘要」页签全面重构，告别动辄数十 KB 的历史评论与流程沿革全量搬运，收敛为聚焦最新成果、判据达成与自动化证据引用的「终态交付快照」；子代理交回报文骨架彻底解耦执行者与评审者结构，阅读负担与无谓 Token 消耗直降 90% 以上。
-- **目标删除与隔离工作树清理防护闭环**：删除已归档目标前主动检测其关联的 Git 隔离工作树，存在未清理分支树时严格阻断，防止残留失控；同时支持安全清理已删除目标的残留孤儿工作树，彻底消解真实宿主归属标记下的清理死锁。
-- **共享卡片全生命周期与保底解除通道**：工具层补齐安全删除零引用共享卡片的能力（非零引用严格拒绝）；在工作区按需裁剪关闭共享卡片模块后，依然为目标保留保底解除引用的操作手段，彻底根除模块裁剪时的配置死锁。
-- **目标流转评审记录自愈消除死链**：目标在跨版本排期、移回独立目录或归档/取消归档移动过程中，其历史独立评审记录自动同步重写文件新路径，根除因目标物理搬迁导致的评审报告死链。
-- **全新官方插件图标与评审统计口径披露**：新增符合 DSH 插件规范的高质感拓扑看板官方矢量图标（`icon.svg`）；并在使用说明中完整披露代码评审变更规模统计中非产品路径（如 `docs/*`）的白名单判定与计算规则，消除认知与策略偏差。
+- **长任务智能关照与僵局干预**：主管空闲期间对进行中的子代理长任务按生效间隔自动发起巡检与状态把关；支持连续未回复/进展停滞自动升级等待人工，到期只触发巡检而不武断中断执行，支持整组关照的暂停、继续与重置。
+- **子代理时间预算调度与动态基准重算**：支持在目标中显式配置预计任务时间预算（未配置继承项目/全局默认阈值）；首次派发、运行中调整预算或主管向运行中子代理发送新消息时，立即依据最新时间基准重新计算关照截止，并保持至少 5 分钟无答有效冷却防频发唤醒。
+- **运行轮次精确隔离与历史保真追溯**：子代理运行按起止时点划定独立轮次，停止即停表，重新运行自起新轮；精确记录每轮起始预算与变更时间线，禁止以停止时刻预算冒充整轮预算，正常宿主重建遇到同一运行中任务不拆分轮次并如实标注观察空窗。
+- **主管会话智能保活机制**：名下有子代理在运行且主管处于空闲时，自动在适当时机进行有界续期与单次防离线保活，避免长时间未交互导致上下文失效。
+- **插件 HTTP 接口安全加固与派发去重**：全面封闭无凭证访问风险，对齐宿主统一鉴权与身份白名单校验；强化派发准入门禁，严格防止同一目标并发派发重复执行尝试，杜绝状态冲突与资源争用。
 
 完整变更史见 [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。已发布版本支持通过 npm 与 dsh-market 生态分发。
 
@@ -148,7 +148,7 @@ attempt 与结果面、独立复核与留痕真源、版本泳道与发布红线
 
 ### Agent 工具速查表
 
-dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具），按功能划分为以下分类：
+dsh-graph 为 Agent 提供了完善的工具链（共 53 个 `graph_*` 工具），按功能划分为以下分类：
 
 | 分类 | 工具名称 | 核心说明 |
 |------|----------|----------|
@@ -158,6 +158,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具）
 | | `graph_set_directive` | 为下一次 Attempt 注入补充指令与边界要求 |
 | | `graph_set_goal_type` | 设置目标类型（feature / bug / task / improvement / patch / chore） |
 | | `graph_set_goal_tags` | 设置目标标签列表（最多 20 个，乐观并发） |
+| | `graph_set_goal_budget` | 设置/清空目标预计任务预算（整数秒 30–86400；空=继承项目/全局关照阈值） |
 | | `graph_amend_goal` | 记录对目标的修订补充，可自动同步至描述 |
 | | `graph_transition` | 推进目标状态机迁移（进入 blocked 需附原因） |
 | | `graph_postpone_goal` | 暂缓目标，移回 Backlog 并置为 draft |
@@ -194,13 +195,14 @@ dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具）
 | | `graph_memory_replace` | 替换已有记忆条目内容 |
 | **状态汇报** | `graph_report_status` | 汇报当前 Attempt 进度（看板卡片实时显示） |
 | | `graph_report_supervisor_status` | Supervisor 汇报全局工作状态（顶部状态栏动画） |
+| | `graph_care_outcome` | 子代理关照巡检回传（仅绑定主管；一次性、事件先行、有证据才计数） |
 | **评审裁决** | `graph_resolve_accept` | 裁决交付验收（verdict: accept / object） |
 | **协作与交接** | `graph_add_comment` | 向目标追加可追溯的讨论与反馈历史 |
 | | `graph_write_results` | 人工写入 attempt 完成摘要（source=manual + 写入者标注；无子代理的轻量改动兜底） |
 | | `graph_refresh_results` | 重写 `results.md`：零 LLM 兜底拼装，或采用专用摘要子代理/人工产出的 `content`（旧版自动归档；支持批量 goals[]） |
 | | `graph_handoff` | 生成跨会话交接文档 `HANDOFF.md` |
 | | `graph_claim_supervisor` | 新会话接管 Supervisor 并更新会话元数据 |
-| | `graph_help` | 输出插件功能说明与 51 个工具速查清单 |
+| | `graph_help` | 输出插件功能说明与 53 个工具速查清单 |
 | **数据与校验** | `graph_validate` | 执行全量不变式检查（状态、依赖环、卡片引用） |
 | | `graph_rebuild` | 从事件流完全重建目标状态并与元数据对账 |
 
@@ -236,6 +238,25 @@ dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具）
 
 ---
 
+### HTTP 鉴权（Web 看板的 REST 入口）
+
+本插件在 Web 宿主里提供一组 `/api/dsh-graph/**` REST 入口（浏览器看板与脚本都用它）。从 g-507 起，这些入口的安全模型是**单一受保护入口**：
+
+- **一个入口，不是 63 个**：插件只向宿主 `webServer` 注册**一条** `kind:"prefix"`、`path:"/api/dsh-graph"` 的路由；原有的 63 条业务路由不再是宿主的独立路由，只在插件内部按 `exact` / 两条资产 `prefix`（`/diagram`、`/help/asset`）分发。
+- **先鉴权，后业务**：入口每请求先调用宿主的**公开** `connection.admit(req)`（保留 `this` 绑定），再判定调用方是否为 owner。认证之前**不读请求体、不解析目标路径、不初始化工作区、不触碰任何文件与派发**。
+- **拒绝面（固定口径）**：
+  | 情形 | 状态码 |
+  |---|---|
+  | 匿名 / 凭证无效（宿主 401） | `401` |
+  | 信任边界拒绝（宿主 403：Host / Origin / cross-site） | `403` |
+  | 凭证有效但**不是 owner** | `403`（`not-owner`） |
+  | 宿主未提供 `connection` 服务、未提供 `admit`、`admit` 抛错、或返回不可判定的结构 | `503`（**fail-closed**，不带任何内部细节） |
+  | 认证通过但路径不存在 / 方法不符 | `404` / `405`（认证之后才返回） |
+- **能力依赖**：判定完全依赖宿主公开能力 `connection.admit`。宿主没提供它时，HTTP 入口**一律 503 fail-closed**（不会退化成匿名放行）；该情形**不影响** Agent 工具面（`graph_*` 工具不经过 HTTP 入口）。
+- **尾斜杠与 query**：`/api/dsh-graph` 与 `/api/dsh-graph/` 不是同一路径（后者认证后 404）；两条资产 `prefix` 的 `prefix/` 会进入业务并由业务给 400（非法文件名）；query 不参与匹配。
+- **实测范围（如实）**：本节的鉴权行为只在 **DSH `0.2.1-rc.2`** 上实测（真实宿主 `BrowserAuth` + 真实 Token 交换 + 真实 HTTP）。`engines.dsh` 声明的其余宿主版本（含 `0.1.x`、`0.2.0` 各版本）**本次未逐版验证**；若某宿主缺少公开 `admit`，按上表 HTTP 入口会 503，这一点**未经逐版核实**，因此不能把声明范围读成「当前 Web 鉴权结论」。兼容范围的取舍由维护者决定，本版不做收窄或扩张。
+
+
 ### Profile 全局设置（子代理默认值）
 
 子代理默认 provider / model、推理档位、执行模式、提示词语言与补充提示词是 **profile 级全局默认** —— 写入当前 DSH profile、**跨 workspace 生效**，且 workspace 的 `project.yaml` 明确配置与单次派发参数都更优先。
@@ -268,7 +289,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 51 个 `graph_*` 工具）
 
 Distributed as a **single unified package** (npm package name: `dsh-graph`), it provides both halves out-of-the-box:
 
-- **Host Side**: Exposes 51 `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
+- **Host Side**: Exposes 53 `graph_*` tools to DSH Agents covering the entire goal lifecycle, along with `/api/dsh-graph*` REST endpoints for board projections, goal details, and mutations;
 - **Client Side**: A browser 2D swimlane kanban board integrated into DSH Web (the `conversation.view` slot) for intuitive visualization and real-time tracking.
 
 All data is stored locally as human-readable files and an append-only event log under `.dsh-graph/`, making it Git-friendly, easily auditable, and collaborative.
@@ -283,27 +304,27 @@ Install the plugin using the DSH CLI:
 dsh plugin --profile <profile-name> add dsh-graph
 ```
 
-**Current version**: v0.22.0. **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
+**Current version**: v0.23.0. **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
-**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
+**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). ⚠️ Those are **historical rounds** covering install/boot/REST on their own version's product code; the **HTTP authentication entry** introduced by g-507 was measured on `0.2.1-rc.2` only (see "HTTP authentication" below) and must **not** be inferred for other versions from this paragraph. The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
 **Platform status**:
 
 | Platform | Status for this release |
 |----------|-------------------------|
 | Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures; the shared H-series probes are all green on this release) |
-| Native Windows | ⏳ **The verdict for this release is the ledger, and only the ledger**: on-device round results (per version, per host DSH generation) are recorded in the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (**that document is not shipped inside the package**) — **this row pre-claims no round result and must not be read as "passed"**. Example of a completed historical round in that ledger: `v0.20.1` (2026-10-10, `win32/x64` + Node `v24.21.0`, host DSH generations `0.2.0-rc.2` and `0.2.1-alpha.2`; T1–T5 15 passed / 0 failed / 1 warning, T3 32/32 steps) — historical rounds **cover the install / boot / REST layers only** and only that version's product code, so they **do not substitute** for this release's verdict. |
-| macOS | ⏳ **Not verified for this release**: `v0.22.0` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**; the verdict likewise comes from the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (not shipped in the package). Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and cover each of those versions' product code only. |
+| Native Windows | ✅ **Verified on-device for this release (2026-11-02, win32/x64 + Node v24.21.0, host `0.2.1-rc.5`, 22 passed / 0 failed / 0 warnings)**: see [platform-gate §7.13 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) — T1 static / ledger (67 sites, 268 hits, 0 unrecorded) / dispatch capability (0 hardcoded shell names) / H combo probes (H1–H6 all green except H3) all passed; T3 kanban filesystem lifecycle 32-step assertions all passed; T4/T5 instance startup and REST auth exchange smoke passed. |
+| macOS | ⏳ **Not verified for this release**: `v0.23.0` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**; the verdict likewise comes from the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (not shipped in the package). Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and cover each of those versions' product code only. |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 
-**What's new (v0.22.0)**
+**What's new (v0.23.0)**
 
-- **Concise Results Summaries & Streamlined Report Skeletons**: Completely redesigned the goal completion summary modal tab, moving away from bloating dozens of kilobytes of verbatim historical comments and timeline logs to a lean "Final Deliverable Snapshot" focusing on latest attempt accomplishments, criteria verifications, and automated test evidence; decoupled the child agent report skeleton between executor and reviewer structures, reducing cognitive overhead and token waste by over 90%.
-- **Worktree Orphan Cleanup & Goal Deletion Protection**: Proactively inspects associated Git isolated worktrees before deleting archived goals, strictly blocking deletion when active/uncleaned trees remain; safely cleans orphan worktrees from previously deleted goals, fully resolving cleanup deadlocks caused by host attribution markers.
-- **Shared Card Full Lifecycle & Fallback Detachment**: Enhances tooling to safely delete zero-reference shared cards (strictly rejecting deletion when references exist); retains a fallback detachment mechanism for goals even when the `shared_cards` module is deactivated in the workspace, eliminating configuration deadlocks.
-- **Self-Healing Review Report Paths on Goal Relocation**: Automatically rewrites relative/absolute paths of historical review reports when goals are scheduled across versions, moved back to standalone goals, or archived/unarchived, completely eliminating dead links caused by directory moves.
-- **Official Plugin Icon & Review Scale Classification Disclosure**: Ships a high-quality topological kanban vector icon (`icon.svg`) matching DSH plugin specifications; thoroughly documents non-product path rules (such as `docs/*` counting as 0 product lines) in the usage guide to align user expectations with code review policies.
+- **Smart Subagent Long-Task Care & Deadlock Intervention**: Proactively conducts status checks on running subagent long tasks during supervisor idle intervals; automatically escalates to human intervention on consecutive unresponsiveness or stagnation without arbitrary aborts, supporting whole-group pause, resume, and reset.
+- **Estimated Task Time Budgets & Dynamic Base Recalculation**: Supports explicit goal-level expected time budget configuration (inheriting project/global defaults when unset); immediately recomputes care deadlines upon initial dispatch, mid-run budget edits, or new supervisor messages to running child agents, with an enforced 5-minute unanswered cooldown.
+- **Run Boundary Isolation & Audit-True Budget Provenance**: Groups subagent execution into distinct runs delimited by actual start/stop events; accurately records initial budgets and timeline changes without overwriting past history with terminal values, while preserving unified run identities and marking unobserved gaps across host recreations.
+- **Intelligent Supervisor Context Keepalive**: Automatically performs bounded renewals and single-shot AFK keepalives when child agents are running and the supervisor is idle, preventing context expiration during extended periods of inactivity.
+- **Plugin HTTP API Hardening & Duplicate Dispatch Guards**: Eliminates unauthenticated access risks by aligning with unified host authentication and identity allowlists; tightens dispatch admission gates to strictly prevent concurrent duplicate execution attempts for the same goal.
 
 See the [CHANGELOG](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md) for the full history. Official releases are distributed via npm and the dsh-market ecosystem.
 
@@ -407,7 +428,7 @@ split, with no file, function or internal artifact names inside the figures; the
 
 ### Agent Tools Reference
 
-dsh-graph equips Agents with a comprehensive set of `graph_*` tools (51 in total):
+dsh-graph equips Agents with a comprehensive set of `graph_*` tools (53 in total):
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -417,6 +438,7 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (51 in total
 | | `graph_set_directive` | Inject instructions and boundaries for the upcoming attempt |
 | | `graph_set_goal_type` | Set goal type (feature / bug / task / improvement / patch / chore) |
 | | `graph_set_goal_tags` | Set goal tags (max 20, optimistic concurrency) |
+| | `graph_set_goal_budget` | Set/clear the goal budget (integer seconds 30–86400; empty inherits the project/global care threshold) |
 | | `graph_amend_goal` | Record amendments, optionally appending to description |
 | | `graph_transition` | Advance goal through lifecycle states (reason required for blocked) |
 | | `graph_postpone_goal` | Postpone goal back to Backlog as draft |
@@ -453,13 +475,14 @@ dsh-graph equips Agents with a comprehensive set of `graph_*` tools (51 in total
 | | `graph_memory_replace` | Replace an existing memory entry's content |
 | **Status Reporting** | `graph_report_status` | Report progress of current attempt (live card display) |
 | | `graph_report_supervisor_status` | Report supervisor status (top status bar animation) |
+| | `graph_care_outcome` | Report a subagent-care inspection outcome (bound supervisor only; one-shot, event-first, evidence required for counting) |
 | **Review & Verdict** | `graph_resolve_accept` | Accept or object to delivered attempts |
 | **Collaboration** | `graph_add_comment` | Append historical discussion or human feedback |
 | | `graph_write_results` | Manually write an attempt completion summary (source=manual + writer annotation; fallback for subagent-less changes) |
 | | `graph_refresh_results` | Regenerate `results.md`: zero-LLM fallback assembly, or a caller-supplied `content` body from the dedicated summarizer subagent / a human (previous version archived; supports a goals[] batch) |
 | | `graph_handoff` | Export cross-session handover document (`HANDOFF.md`) |
 | | `graph_claim_supervisor` | Claim supervisor role in new session & update metadata |
-| | `graph_help` | Display usage instructions and the 51-tool checklist |
+| | `graph_help` | Display usage instructions and the 53-tool checklist |
 | **Validation** | `graph_validate` | Validate full invariants (states, cycles, card refs) |
 | | `graph_rebuild` | Rebuild goal state from `events.jsonl` and reconcile |
 
@@ -493,6 +516,27 @@ The sidebar's "**Kanban**" tile and the conversation page's "**Kanban**" tab are
 See [screenshot/sidebar-kanban.png](https://github.com/miuzel/dsh-graph/blob/main/screenshot/sidebar-kanban.png) in the repository for a screenshot (fictional demo data nebula-notes, sidebar width in the `< 480px` single-lane tier); this npm package does not ship the repository's `screenshot/` directory, so only the repository path is given here.
 
 ---
+
+---
+
+### HTTP authentication (REST entry points behind the Web kanban)
+
+The plugin serves a set of `/api/dsh-graph/**` REST endpoints in the Web host (used by both the kanban UI and scripts). Since g-507 the security model is a **single protected entry point**:
+
+- **One entry, not 63**: the plugin registers exactly **one** `kind:"prefix"` route with `path:"/api/dsh-graph"`. The 63 business routes are no longer host routes; they are dispatched inside the plugin as `exact` routes plus two asset prefixes (`/diagram`, `/help/asset`).
+- **Authenticate first, business second**: every request first calls the host's **public** `connection.admit(req)` (with `this` preserved), then checks whether the caller is the owner. Before admission it never reads the body, resolves the target path, initializes a workspace, touches files, or dispatches anything.
+- **Rejection matrix (fixed)**:
+  | Situation | Status |
+  |---|---|
+  | Anonymous / invalid credential (host 401) | `401` |
+  | Trust-boundary rejection (host 403: Host / Origin / cross-site) | `403` |
+  | Valid credential but **not the owner** | `403` (`not-owner`) |
+  | Host has no `connection` service, no `admit`, `admit` throws, or returns an undecidable shape | `503` (**fail-closed**, no internal detail) |
+  | Admitted but unknown path / wrong method | `404` / `405` (only after admission) |
+- **Capability dependency**: everything hinges on the host's public `connection.admit`. When the host does not provide it, the HTTP entry points answer **503 fail-closed** (never a silent anonymous pass-through); the **tool surface is unaffected** (`graph_*` tools do not go through the HTTP entry).
+- **Trailing slash and query**: `/api/dsh-graph` and `/api/dsh-graph/` are different paths (the latter is 404 after admission); `prefix/` on the two asset prefixes enters business handling and yields a 400 (illegal file name); query does not participate in matching.
+- **Verified scope, stated plainly**: the behaviour in this section was measured **only on DSH `0.2.1-rc.2`** (real host `BrowserAuth`, real token exchange, real HTTP). The other host versions declared in `engines.dsh` (including `0.1.x` and the `0.2.0` line) were **not verified version by version** in this round. If a host lacks the public `admit`, the table above implies 503 for HTTP entry points — that implication is **not verified per version**, so the declared range must not be read as a current Web-authentication verdict. Widening or narrowing the range is the maintainer's call; this release does neither.
+
 
 ### Profile-wide settings (subagent defaults)
 

@@ -6,10 +6,10 @@
  *    显式 true/false 生效；畸形值（字符串/数字）⇒ `invalid_value` 且**按开启**处理（fail-safe，绝不猜「关」）。
  *  · ② 真裁剪：`agent/created` → `agent.ctx.tools.restrict({deny})`，受管工具**从模型可见清单消失**
  *    （量测口 = `tools.schemas(agent)`）；跨会话（子代理链）逐个生效；deny 名单**作用域过滤**；
- *    能力缺失（旧宿主/测试夹具无 `ctx.on` / `tools.restrict`）⇒ 静默降级、零报错、51 个工具照常可见。
+ *    能力缺失（旧宿主/测试夹具无 `ctx.on` / `tools.restrict`）⇒ 静默降级、零报错、53 个工具照常可见。
  *  · ③ 提示词面裁剪：`memory` 关 ⇒ 常驻记忆段不注入；`automation_prompts` 关 ⇒ 六键指导段不追加；
  *    三个自有 section 的工具名提及按行剔除；**全开时逐字节相同**（`stripModuleToolMentions` 返回同一字符串）。
- *  · ④ 51 红线：apply 期注册**无条件**、不因配置跳过（任何配置下注册数恒为 51）。
+ *  · ④ 53 红线：apply 期注册**无条件**、不因配置跳过（任何配置下注册数恒为 53）。
  *  · ⑤ 数据安全 / 单一真源：关闭 = 隐藏，不删数据；`memory.tools_enabled` 旧键只作**读侧默认**，
  *    写 `modules.memory` 时同一原子写里删除旧键行 ⇒ 不存在两个真源。
  *  · ⑥ GUI：「模块」页签（g-479 页签结构内）渲染 5 个开关、绑定同一草稿、稀疏提交 `modules.<id>`、
@@ -206,7 +206,7 @@ test("g-480 ①：写入入口 schema —— 未知模块键与非布尔值一�
 
 test("g-480 ①：映射表以**真实注册清单**为真源 —— 不漏一个受管工具、不越界、不重复归属", () => {
   const real = registeredToolNames();
-  assert.equal(real.length, 51, `真实注册清单应为 51 个工具（实得 ${real.length}）`);
+  assert.equal(real.length, 53, `真实注册清单应为 53 个工具（实得 ${real.length}）`);
   const managed = moduleToolNames();
   const realSet = new Set(real);
   for (const name of managed) {
@@ -228,7 +228,7 @@ test("g-480 ①：映射表以**真实注册清单**为真源 —— 不漏一�
   assert.deepEqual([...MODULE_TOOL_NAMES.automation_prompts], [], "automation_prompts 是纯提示词面模块（无受管工具）");
   // 边界如实登记：graph_add_card 属于**目标自有卡片**（组装目标的部件），不随 shared_cards 关闭
   assert.ok(!managed.includes("graph_add_card"), "shared_cards 不越界禁目标自有卡片工具 graph_add_card");
-  assert.ok(realSet.has("graph_add_card"), "graph_add_card 仍在 51 个注册工具内（只不受模块开关管理）");
+  assert.ok(realSet.has("graph_add_card"), "graph_add_card 仍在 53 个注册工具内（只不受模块开关管理）");
 
   // prompt_face 面：每个模块都必须在 host 侧登记其提示词投影口径（新增模块漏登记 ⇒ 必红）
   const hostSrc = readFileSync(join(HOST, "index.js"), "utf8");
@@ -288,7 +288,7 @@ test("g-480 ⑤：memory 单一真源 —— 旧键只作读侧默认，写入�
 });
 
 // ---------------------------------------------------------------------------
-// 宿主模拟：真裁剪（②）、提示词面（③）、51 红线与降级（④）
+// 宿主模拟：真裁剪（②）、提示词面（③）、53 红线与降级（④）
 // ---------------------------------------------------------------------------
 
 type RestrictCall = { agentId: string; deny: string[]; allow?: string[] };
@@ -310,7 +310,7 @@ type HostMock = {
  * ⚠️ 本夹具**刻意不宽松**：分层语义与真源 `dsh-tools/lib/index.js` 的 `view()` 同构（`knownNames` /
  * `restrictableNames` / `visible` 三个集合），因为「deny 名单作用域过滤」这条硬约束的全部价值就在于
  * **夹具会像真宿主一样抛错**：
- *   · global 平面（本插件 `ctx.tools.register` 的 51 个工具 + `opts.hostTools` 的宿主自带工具）；
+ *   · global 平面（本插件 `ctx.tools.register` 的 53 个工具 + `opts.hostTools` 的宿主自带工具）；
  *   · ancestor 平面（`opts.ancestor`：祖先层 / agent 平面自有工具）⇒ **后代**可点名，全局视图里没有；
  *   · own 平面（`opts.own`：本会话自己层注册）⇒ `restrictableNames` **不含**它 ⇒ 点名必抛 `unknown global tool`。
  * `restrict` 与真源一样**先全量校验再落地**（空过滤 / 保留名 `run_code` / 未知名 ⇒ 抛错且**零副作用**，
@@ -336,7 +336,7 @@ function makeHostMock(
   // `hideGlobal`：模拟宿主**漂移**（该工具被挪出全局层：改成会话/agent 平面注册，或本版本根本没有）
   // ⇒ 插件照常注册（计数红线），但 `tools.get(name)`（全局视图）读不到它。
   const hideGlobal = new Set<string>(opts.hideGlobal ?? []);
-  // `refuseRegister`：模拟宿主**拒收/去重**某个注册（注册面少一个工具）⇒ 用于 51 红线的负向对照
+  // `refuseRegister`：模拟宿主**拒收/去重**某个注册（注册面少一个工具）⇒ 用于 53 红线的负向对照
   const refuseRegister = new Set<string>(opts.refuseRegister ?? []);
   const ctx: any = {
     get: (key: string) => (key === "systemPrompt" ? { section: (s: any) => { sections.push(s); return () => {}; } } : undefined),
@@ -349,7 +349,7 @@ function makeHostMock(
         if (!hideGlobal.has(def.name)) globalSet.add(def.name);
         return () => {};
       },
-      // 全局视图（不传 scope）：本插件注册的 51 个工具（+ 宿主自带）
+      // 全局视图（不传 scope）：本插件注册的 53 个工具（+ 宿主自带）
       get: (name: string) => (globalSet.has(name) ? { name } : undefined),
     },
   };
@@ -433,23 +433,23 @@ const OFF_TAGS_ATTACH = "modules:\n  tags: false\n  attachments: false\n";
 const OFF_ALL = "modules:\n  tags: false\n  memory: false\n  shared_cards: false\n  automation_prompts: false\n  attachments: false\n";
 
 test("g-480 ②：真裁剪 —— 关闭模块的工具从模型可见清单消失（量测口 tools.schemas；含子代理链）", () => {
-  // 全开基线：一次 restrict 都不调，可见面 51、与改造前逐字节一致
+  // 全开基线：一次 restrict 都不调，可见面 53、与改造前逐字节一致
   const on = makeWorkspace("");
   const ho = makeHostMock(on.ws);
   applyHost(ho);
-  assert.equal(ho.registered.length, 51, "apply 期注册 51 个工具");
+  assert.equal(ho.registered.length, 53, "apply 期注册 53 个工具");
   const aOn = createAgent(ho, { id: "s-on" });
-  assert.equal(schemaNames(aOn).length, 51, "全开 ⇒ 模型可见 51 个工具");
+  assert.equal(schemaNames(aOn).length, 53, "全开 ⇒ 模型可见 53 个工具");
   assert.deepEqual(ho.restrictCalls, [], "全开 ⇒ 零 restrict（未配置路径行为不变）");
 
   // 关闭 tags + attachments
   const off = makeWorkspace(OFF_TAGS_ATTACH);
   const h = makeHostMock(off.ws);
   applyHost(h);
-  assert.equal(h.registered.length, 51, "关闭模块**不改变**注册面（判据 4：不做 apply 期条件跳过）");
+  assert.equal(h.registered.length, 53, "关闭模块**不改变**注册面（判据 4：不做 apply 期条件跳过）");
   const a = createAgent(h, { id: "s-1" });
   const names = schemaNames(a);
-  assert.equal(names.length, 48, "48 = 51 − 3（tags 1 + attachments 2）");
+  assert.equal(names.length, 50, "50 = 53 − 3（tags 1 + attachments 2）");
   for (const n of ["graph_set_goal_tags", "graph_store_attachment", "graph_delete_attachment"]) {
     assert.ok(!names.includes(n), `${n} 必须从模型可见清单消失（真裁剪，非 UI 隐藏）`);
   }
@@ -459,12 +459,12 @@ test("g-480 ②：真裁剪 —— 关闭模块的工具从模型可见清单消
   // 子代理链：restrict 不沿 scope 链继承 ⇒ 每个新建会话各自 wire（全局监听覆盖宿主派发的每个子代理）
   const b = createAgent(h, { id: "sub-1" });
   assert.equal(h.restrictCalls.length, 2, "每个新会话各自调用一次 restrict（子代理链同样被覆盖）");
-  assert.equal(schemaNames(b).length, 48, "子代理会话同样看不到被关模块的工具");
-  assert.equal(schemaNames(a).length, 48, "先建会话的可见面不被后建会话影响（各自独立作用域）");
+  assert.equal(schemaNames(b).length, 50, "子代理会话同样看不到被关模块的工具");
+  assert.equal(schemaNames(a).length, 50, "先建会话的可见面不被后建会话影响（各自独立作用域）");
 
   // 无 cwd：不裁剪、不抛错（避免错 workspace 误判）
   const c = createAgent(h, { id: "s-nocwd", cwd: null });
-  assert.equal(schemaNames(c).length, 51, "无 cwd ⇒ 不裁剪（fail-safe）");
+  assert.equal(schemaNames(c).length, 53, "无 cwd ⇒ 不裁剪（fail-safe）");
   assert.equal(h.restrictCalls.length, 2, "无 cwd 不产生 restrict 调用");
 });
 
@@ -478,23 +478,23 @@ test("g-480 ②：deny 名单**作用域过滤**（硬约束②）—— 不可�
   //     ⇒ 点名这种名字必抛 `unknown global tool`，而在 setup / 会话创建路径上抛错会**回滚整个会话**。
   const h = makeHostMock(ws, { hideGlobal: ["graph_memory_remove"] });
   applyHost(h);
-  assert.equal(h.registered.length, 51, "注册面不受影响（判据 4 的 51 红线：漂移只影响可见性解析）");
+  assert.equal(h.registered.length, 53, "注册面不受影响（判据 4 的 53 红线：漂移只影响可见性解析）");
   const a = createAgent(h, { id: "s-drift", own: ["graph_memory_remove"] });
   assert.equal(h.restrictCalls.length, 1, "漂移候选被剔除后仍有 3 个候选 ⇒ 照常完成一次裁剪（不抛错）");
   assert.deepEqual(h.restrictCalls[0].deny, MEM.filter((n) => n !== "graph_memory_remove"), "漂移候选不进 deny");
-  assert.equal(schemaNames(a).length, 51 - 3, "可见面 = 51 − 3；own 层那个名字不在 deny 内 ⇒ 仍可见");
+  assert.equal(schemaNames(a).length, 53 - 3, "可见面 = 53 − 3；own 层那个名字不在 deny 内 ⇒ 仍可见");
   assert.ok(schemaNames(a).includes("graph_memory_remove"), "own 层注册不受 restriction 影响（不误删会话自有工具）");
   // 反证：本夹具**不宽松** —— 直接点名该名字确实抛 `unknown global tool`，
   // ⇒ 上面的绿灯来自我们的作用域过滤（`tools.get(name)` 全局视图判定），而不是夹具对未知名的宽容。
   assert.throws(() => a.ctx.tools.restrict({ deny: ["graph_memory_remove"] }), /unknown global tool/);
-  assert.equal(schemaNames(a).length, 51 - 3, "抛错零副作用（真源校验先于落地，不留半截限制）");
+  assert.equal(schemaNames(a).length, 53 - 3, "抛错零副作用（真源校验先于落地，不留半截限制）");
 
   // (b) 该名字在任何平面都解析不到（宿主版本已移除）⇒ 两个条件都不过 ⇒ 同样被过滤，不抛错
   const h2 = makeHostMock(ws, { hideGlobal: ["graph_memory_recall"] });
   applyHost(h2);
   const b = createAgent(h2, { id: "s-gone" });
   assert.deepEqual(h2.restrictCalls[0].deny, MEM.filter((n) => n !== "graph_memory_recall"));
-  assert.equal(schemaNames(b).length, 50 - 3, "可见面 = 50 − 3");
+  assert.equal(schemaNames(b).length, 52 - 3, "可见面 = 52 − 3");
 
   // (c) own 层同名遮蔽全局同名：**全局同名仍在** ⇒ 仍可点名（restrictableNames 含它），
   //     且 deny 只作用于继承面 ⇒ 不误删会话自有工具。
@@ -504,14 +504,14 @@ test("g-480 ②：deny 名单**作用域过滤**（硬约束②）—— 不可�
   assert.equal(h3.restrictCalls.length, 1);
   assert.deepEqual(h3.restrictCalls[0].deny, MEM, "全局同名仍进 deny（known 集含全局名）");
   assert.ok(schemaNames(c).includes("graph_memory_add"), "own 层注册不受 restriction 影响");
-  assert.equal(schemaNames(c).length, 51 - 3, "另外 3 个受管工具照常从可见面消失");
+  assert.equal(schemaNames(c).length, 53 - 3, "另外 3 个受管工具照常从可见面消失");
 
   // (d) 候选全部被祖先层遮蔽（可见面里已无）⇒ 过滤后名单为空 ⇒ 一次 restrict 都不调（不做空调用）
   const h4 = makeHostMock(ws);
   applyHost(h4);
   const d = createAgent(h4, { id: "s-hidden", hidden: MEM });
   assert.deepEqual(h4.restrictCalls, [], "过滤后名单为空 ⇒ 不调用 restrict");
-  assert.equal(schemaNames(d).length, 51 - MEM.length, "候选本就被祖先层遮蔽（可见面已少 4）⇒ 不再重复 deny");
+  assert.equal(schemaNames(d).length, 53 - MEM.length, "候选本就被祖先层遮蔽（可见面已少 4）⇒ 不再重复 deny");
 });
 
 test("g-480 ②：监听器的 workspace 口径**与工具侧/提示面同源**（header.cwd，无兜底）+ 监听器结构不变式", () => {
@@ -542,8 +542,12 @@ test("g-480 ②：监听器的 workspace 口径**与工具侧/提示面同源**�
   // ③ 硬约束②的作用域过滤必须双条件（全局视图 + 该 agent 视图）
   assert.ok(/at\.get\(name\)\s*!==\s*undefined/.test(block), "必须用全局视图 tools.get(name) 判定可点名");
   assert.ok(/at\.get\(name,\s*agent\)\s*!==\s*undefined/.test(block), "必须用该 agent 视图 tools.get(name, agent) 判定可解析");
-  // ④ 硬约束①的 try/catch 兜底 + 留痕（抛错不得逃逸到会话创建路径）
-  assert.ok(/catch \(e\) \{\s*\n\s*\/\/[^\n]*\n\s*process\.stderr\.write\(`\[dsh-graph-host\] g-480/.test(block), "裁剪体必须有兜底 catch 并写 stderr 留痕");
+  // ④ 硬约束①的 try/catch 兜底 + 留痕（抛错不得逃逸到会话创建路径）；
+  // g-561 起留痕文案用中性功能描述，不得再带历史目标编号（本断言锚定整行）
+  const catchWrite = block.match(/catch \(e\) \{\s*\n\s*\/\/[^\n]*\n\s*(process\.stderr\.write\(`[^`]*`\))/);
+  assert.ok(catchWrite, "裁剪体必须有兜底 catch 并写 stderr 留痕");
+  assert.match(catchWrite![1], /\[dsh-graph-host\] 模块裁剪跳过: \$\{e\?\.message \?\? e\}/, "留痕保留中性功能描述与错误摘要");
+  assert.doesNotMatch(catchWrite![1], /\bg-\d+\b/, "留痕不得包含目标编号");
   // ⑤ 未配置/全开路径**一次 restrict 都不调**（行为逐字节不变的结构保证）
   assert.ok(block.includes("if (!switches.disabledTools.length) return;"), "全开必须提前返回（零 restrict 调用）");
   assert.ok(block.includes("if (!cwd) return;"), "无 cwd ⇒ 提前返回（fail-safe：不裁剪）");
@@ -551,19 +555,19 @@ test("g-480 ②：监听器的 workspace 口径**与工具侧/提示面同源**�
   assert.ok(src.includes("ex?.agent?.session?.header?.cwd ?? ctx.get?.(\"sandboxPolicy\")?.workspaceRoot ?? null"), "工具侧 sessionWorkspace() 的既有口径不得被改动（两边同源）");
 });
 
-test("g-480 ④：能力缺失静默降级 —— 无 ctx.on / 无 tools.restrict 时零报错、零裁剪、51 个工具照常可见", () => {
+test("g-480 ④：能力缺失静默降级 —— 无 ctx.on / 无 tools.restrict 时零报错、零裁剪、53 个工具照常可见", () => {
   for (const opts of [{ on: false }, { restrict: false }, { on: false, restrict: false }]) {
     const { ws } = makeWorkspace(OFF_TAGS_ATTACH);
     const h = makeHostMock(ws, opts);
     applyHost(h); // 不得抛错（旧宿主 / 测试夹具只有 tools.register+get）
-    assert.equal(h.registered.length, 51, `降级 ${JSON.stringify(opts)} 下注册数恒为 51`);
+    assert.equal(h.registered.length, 53, `降级 ${JSON.stringify(opts)} 下注册数恒为 53`);
     const a = createAgent(h, { id: "s" });
-    assert.equal(schemaNames(a).length, 51, "降级时不裁剪（可见面与改造前一致）");
+    assert.equal(schemaNames(a).length, 53, "降级时不裁剪（可见面与改造前一致）");
     assert.deepEqual(h.restrictCalls, []);
   }
 });
 
-test("g-480 ④：apply 期注册无条件 —— 五模块全关时注册清单仍与全开逐项相同（51 红线不随配置漂移）", () => {
+test("g-480 ④：apply 期注册无条件 —— 五模块全关时注册清单仍与全开逐项相同（53 红线不随配置漂移）", () => {
   const on = makeWorkspace("");
   const ho = makeHostMock(on.ws);
   applyHost(ho);
@@ -571,11 +575,11 @@ test("g-480 ④：apply 期注册无条件 —— 五模块全关时注册清单
   const hf = makeHostMock(off.ws);
   applyHost(hf);
   assert.deepEqual([...hf.registered].sort(), [...ho.registered].sort(), "注册清单与配置无关（无条件注册）");
-  assert.equal(hf.registered.length, 51);
+  assert.equal(hf.registered.length, 53);
   // 全关时：所有受管工具都从可见面消失，其余工具（含不受模块管理的 graph_add_card）仍在
   const a = createAgent(hf, { id: "s" });
   const names = schemaNames(a);
-  assert.equal(names.length, 51 - moduleToolNames().length, `全关后可见面 = 51 − ${moduleToolNames().length} 个受管工具`);
+  assert.equal(names.length, 53 - moduleToolNames().length, `全关后可见面 = 53 − ${moduleToolNames().length} 个受管工具`);
   for (const n of moduleToolNames()) assert.ok(!names.includes(n), `${n} 应不可见`);
   for (const n of hf.registered) if (!moduleToolNames().includes(n)) assert.ok(names.includes(n), `${n} 不受模块开关管理，必须仍可见`);
 });
@@ -602,21 +606,22 @@ test("g-480 ②：接线永不抛错（硬约束①）—— restrict 抛错被�
   // （`dsh-agent-loop` 的 publish :1789 与 initializeAgent :1944 在同一个 try 里 ⇒ 抛出去就是会话创建回滚）
   a.ctx.tools.restrict = () => { throw new Error("simulated restrict failure"); };
   const notes = captureStderr(() => { for (const fn of h.events.get("agent/created") ?? []) fn({ agent: a }); });
-  assert.match(notes, /g-480 模块裁剪跳过[\s\S]*simulated restrict failure/, "必须 try/catch 并留痕（可诊断，不静默）");
-  assert.equal(schemaNames(a).length, 51, "裁剪失败 ⇒ 可见面保持原状（fail-open 到「全开」= 等价降级）");
+  assert.match(notes, /模块裁剪跳过[\s\S]*simulated restrict failure/, "必须 try/catch 并留痕（可诊断，不静默）");
+  assert.doesNotMatch(notes, /\bg-\d+\b/, "裁剪失败留痕不得包含目标编号（中性功能描述）");
+  assert.equal(schemaNames(a).length, 53, "裁剪失败 ⇒ 可见面保持原状（fail-open 到「全开」= 等价降级）");
   assert.equal(h.restrictCalls.length, 0, "抛错的 restrict 不记账");
 
   // 接线无残留状态：一次抛错不得毒化后续会话
   const b = createAgent(h, { id: "s-after" });
-  assert.equal(schemaNames(b).length, 48, "前一会话抛错不影响后一会话的裁剪（48 = 51 − 3）");
+  assert.equal(schemaNames(b).length, 50, "前一会话抛错不影响后一会话的裁剪（50 = 53 − 3）");
   assert.deepEqual(h.restrictCalls.map((c) => c.agentId), ["s-after"]);
 
   // 事件注册本身抛错（旧宿主 / 事件名不支持）⇒ 特性探测静默降级，注册面不漂移
   const h2 = makeHostMock(ws, { onThrows: true });
   assert.doesNotThrow(() => applyHost(h2), "ctx.on 抛错必须被吞掉（特性探测）");
-  assert.equal(h2.registered.length, 51, "降级路径不改变注册面");
+  assert.equal(h2.registered.length, 53, "降级路径不改变注册面");
   const c = createAgent(h2, { id: "s-nolisten" });
-  assert.equal(schemaNames(c).length, 51, "无监听 ⇒ 零裁剪（与改造前一致）");
+  assert.equal(schemaNames(c).length, 53, "无监听 ⇒ 零裁剪（与改造前一致）");
 
   // info 形状退化（无 agent.ctx.tools）/ 无 cwd：监听器只 return，不抛错
   const h3 = makeHostMock(ws);
@@ -964,10 +969,10 @@ function modulesSchemaProblems(validate: (v: unknown, s: unknown) => { valid: bo
   return problems;
 }
 
-/** 不变式 C：51 红线（注册面不多不少、无重名、受管工具都在注册面里）。 */
+/** 不变式 C：53 红线（注册面不多不少、无重名、受管工具都在注册面里）。 */
 function registrationProblems(registered: string[], map: Record<string, readonly string[]>): string[] {
   const problems: string[] = [];
-  if (registered.length !== 51) problems.push(`注册数 ${registered.length} ≠ 51（判据 4 红线）`);
+  if (registered.length !== 53) problems.push(`注册数 ${registered.length} ≠ 53（判据 4 红线）`);
   if (registered.length !== new Set(registered).size) problems.push("注册清单有重复项");
   const set = new Set(registered);
   for (const names of Object.values(map)) for (const n of names) if (!set.has(n)) problems.push(`${n} 未被无条件注册`);
@@ -981,7 +986,7 @@ function driftTrim(applyFn: (ctx: any, cfg: any) => void, ws: string) {
   applyFn(h.ctx, {});
   const a = makeAgent(h, { id: "s-drift", own: ["graph_memory_remove"] });
   const notes = captureStderr(() => { for (const fn of h.events.get("agent/created") ?? []) fn({ agent: a }); });
-  return { trimmed: 51 - schemaNames(a).length, deny: h.restrictCalls[0]?.deny ?? [], notes, registered: h.registered.length };
+  return { trimmed: 53 - schemaNames(a).length, deny: h.restrictCalls[0]?.deny ?? [], notes, registered: h.registered.length };
 }
 
 test("g-480 ⑧：负向对照 —— 四条变异（漏工具 / 去作用域过滤 / 放宽 schema / 注册少一个）都必须报红", async () => {
@@ -996,7 +1001,7 @@ test("g-480 ⑧：负向对照 —— 四条变异（漏工具 / 去作用域过
   assert.deepEqual(registrationProblems(hOn.registered, MODULE_TOOL_NAMES), []);
   const good = driftTrim((ctx, cfg) => apply(ctx, cfg), ws);
   assert.deepEqual([good.trimmed, good.deny.length, good.notes], [3, 3, ""], "真 dist：漂移候选被过滤、3 个工具真被裁掉、零错误留痕");
-  assert.equal(good.registered, 51, "漂移不影响注册面");
+  assert.equal(good.registered, 53, "漂移不影响注册面");
 
   // —— 变异 ①：映射表漏一个受管工具（模拟「漏 deny 映射」）——
   const leaked: Record<string, readonly string[]> = {
@@ -1008,7 +1013,7 @@ test("g-480 ⑧：负向对照 —— 四条变异（漏工具 / 去作用域过
   // —— 变异 ④：注册面少一个工具（夹具层：宿主拒收一个注册）——
   const hRefuse = makeHostMock(ws, { refuseRegister: ["graph_set_goal_tags"] });
   applyHost(hRefuse);
-  assert.ok(registrationProblems(hRefuse.registered, MODULE_TOOL_NAMES).length > 0, "注册面少一个工具必须报红（51 红线）");
+  assert.ok(registrationProblems(hRefuse.registered, MODULE_TOOL_NAMES).length > 0, "注册面少一个工具必须报红（53 红线）");
 
   // —— 变异 ②/③：在 dist **私有副本**上真实变异后实跑（不碰真 dist）——
   const copy = mkdtempSync(join(TMP_ROOT, "g480-mut-"));
@@ -1030,7 +1035,7 @@ test("g-480 ⑧：负向对照 —— 四条变异（漏工具 / 去作用域过
     const bad = driftTrim((ctx, cfg) => mutated.apply(ctx, cfg), ws);
     assert.equal(bad.trimmed, 0, "去掉全局视图判定 ⇒ restrict 抛 unknown global tool ⇒ 被吞掉 ⇒ 该会话**零裁剪**（过滤器缺失的代价）");
     assert.match(bad.notes, /模块裁剪跳过[\s\S]*unknown global tool/, "留痕点名真因（可诊断，不静默）");
-    assert.equal(bad.registered, 51, "裁剪失效不改变注册面");
+    assert.equal(bad.registered, 53, "裁剪失效不改变注册面");
 
     const mutatedSchema: any = await import(pathToFileURL(schPath).href);
     assert.ok(

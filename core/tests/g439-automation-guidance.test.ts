@@ -469,7 +469,7 @@ test("g-439 判据4：指南（源码 + dist）如实记录六键 -> 动作指�
 
 test("g-439 判据6：不新增工具与 API 授权（工具计数不变），指导文本不声称引擎强制", () => {
   const h = harness(yamlWith("session-super", "  automation:\n    release: human\n"));
-  assert.equal(h.registered.length, 51, "graph_* 工具计数不因本目标增加");
+  assert.equal(h.registered.length, 53, "graph_* 工具计数不因本目标增加");
   const out = renderAt(h, "session-super");
   assert.ok(out.includes("不构成引擎强制"), "指导如实声明不构成引擎强制");
   assert.ok(out.includes("不改变工具权限"), "指导如实声明不改变工具权限");

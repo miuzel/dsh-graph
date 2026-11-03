@@ -25,6 +25,11 @@ import {
   writeHandoff,
 } from "../../dist/core/ops.js";
 import { apply } from "../../dist/index.js";
+import { handlerFor, createRegisterStub, ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
+
+// g-507：捕获到的注册定义（setupHostApp 内赋值）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function setupTempGraph() {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-cache-test-"));
@@ -42,18 +47,13 @@ function setupTempGraph() {
 }
 
 function setupHostApp(workspace?: string) {
-  const routes = new Map<string, Function>();
-  const webServer = {
-    register: (def: any) => {
-      routes.set(def.path, def.handler);
-      return () => {};
-    },
-  };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const mockCtx = {
     inject: () => mockCtx,
     effect: (fn: any) => fn(),
     get: (name: string) => {
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具
       if (name === "sandboxPolicy") return workspace ? { workspaceRoot: workspace } : null;
       return null;
     },
@@ -63,7 +63,7 @@ function setupHostApp(workspace?: string) {
     webServer,
   };
   apply(mockCtx as any);
-  return routes;
+  return routeDefs;
 }
 
 function fakeResponse() {
@@ -96,13 +96,13 @@ test("g-212 判据 1：首次 GET /api/dsh-graph 返回 200、完整看板数据
   const { ws, root, cleanup } = setupTempGraph();
   try {
     createGoal(root, { title: "测试目标1", actor: "test" });
-    const routes = setupHostApp(ws);
-    const handler = routes.get("/api/dsh-graph");
+    setupHostApp(ws);
+    const handler = handlerFor(routeDefs) /* /api/dsh-graph */;
     assert.ok(handler, "GET /api/dsh-graph 必须已注册");
 
     // 1. 首次 GET，无 If-None-Match
     const res1 = fakeResponse();
-    handler({ method: "GET", url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`, headers: {} }, res1);
+    handler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`, }, res1);
     assert.equal(res1._code, 200);
     assert.ok(res1._body, "首次响应有 body");
     assert.equal(res1._body.backlog.length, 1);
@@ -115,7 +115,7 @@ test("g-212 判据 1：首次 GET /api/dsh-graph 返回 200、完整看板数据
       {
         method: "GET",
         url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`,
-        headers: { "if-none-match": etag1 },
+        headers: { [OWNER_HEADER]: "1", "if-none-match": etag1 },
       },
       res2,
     );
@@ -129,7 +129,7 @@ test("g-212 判据 1：首次 GET /api/dsh-graph 返回 200、完整看板数据
       {
         method: "GET",
         url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`,
-        headers: { "if-none-match": 'W/"different-etag"' },
+        headers: { [OWNER_HEADER]: "1", "if-none-match": 'W/"different-etag"' },
       },
       res3,
     );
@@ -190,13 +190,13 @@ test("g-212 watcher idle/reopen 保留稳定 ETag，并校验关闭期间的外�
     assert.deepEqual(repeat.payload, first.payload);
 
     const routes = setupHostApp(workspace);
-    const handler = routes.get("/api/dsh-graph");
+    const handler = handlerFor(routeDefs) /* /api/dsh-graph */;
     const initial = fakeResponse();
     handler(
       {
         method: "GET",
         url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace),
-        headers: {},
+        headers: { [OWNER_HEADER]: "1" },
       },
       initial,
     );
@@ -209,7 +209,7 @@ test("g-212 watcher idle/reopen 保留稳定 ETag，并校验关闭期间的外�
       {
         method: "GET",
         url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace),
-        headers: { "if-none-match": httpEtag },
+        headers: { [OWNER_HEADER]: "1", "if-none-match": httpEtag },
       },
       notModified,
     );
@@ -230,7 +230,7 @@ test("g-212 watcher idle/reopen 保留稳定 ETag，并校验关闭期间的外�
       {
         method: "GET",
         url: "/api/dsh-graph?workspace=" + encodeURIComponent(workspace),
-        headers: { "if-none-match": httpEtag },
+        headers: { [OWNER_HEADER]: "1", "if-none-match": httpEtag },
       },
       changed,
     );
@@ -276,11 +276,11 @@ test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，�
   const { ws, root, cleanup } = setupTempGraph();
   try {
     const goalId = createGoal(root, { title: "初始目标", actor: "test" });
-    const routes = setupHostApp(ws);
-    const handler = routes.get("/api/dsh-graph");
+    setupHostApp(ws);
+    const handler = handlerFor(routeDefs) /* /api/dsh-graph */;
 
     const res1 = fakeResponse();
-    handler({ method: "GET", url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`, headers: {} }, res1);
+    handler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`, }, res1);
     const etag1 = res1._headers["etag"];
 
     // 执行 Core 写操作：renameGoal
@@ -292,7 +292,7 @@ test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，�
       {
         method: "GET",
         url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`,
-        headers: { "if-none-match": etag1 },
+        headers: { [OWNER_HEADER]: "1", "if-none-match": etag1 },
       },
       res2,
     );
@@ -304,8 +304,9 @@ test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，�
     // 再次测试 POST /api/dsh-graph/order 写操作端点失效
     const cachedBeforeOrder = getCachedBoardPayload(root);
     assert.equal(cachedBeforeOrder.fromCache, true);
-    const orderHandler = routes.get("/api/dsh-graph/order");
+    const orderHandler = handlerFor(routeDefs) /* /api/dsh-graph/order */;
     const orderReq = {
+      headers: { [OWNER_HEADER]: "1" }, // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
       method: "POST",
       url: `/api/dsh-graph/order?workspace=${encodeURIComponent(ws)}`,
       on: (event: string, cb: any) => {
@@ -328,7 +329,7 @@ test("g-212 判据 3：REST/Core 写操作完成后主动失效对应缓存，�
       {
         method: "GET",
         url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}`,
-        headers: { "if-none-match": etag2 },
+        headers: { [OWNER_HEADER]: "1", "if-none-match": etag2 },
       },
       res3,
     );

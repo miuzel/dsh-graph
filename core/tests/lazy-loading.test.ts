@@ -18,6 +18,10 @@ import {
   GraphError,
 } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function setupTestProject(): { root: string; ws: string; cleanup: () => void } {
   const ws = mkdtempSync(join(tmpdir(), "dsh-lazy-test-"));
@@ -141,9 +145,9 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
     createGoal(root, { title: "Backlog 待办", actor: "test" });
 
     const registered = new Map<string, any>();
-    const webServer = { register: (def: any) => { registered.set(def.path, def.handler); return () => {}; } };
+    { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
     const fakeCtx = {
-      get: (name: string) => (name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: ws } : undefined),
+      get: (name: string) => (name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: ws } : undefined),
       effect: (fn: () => unknown) => fn(),
       webServer,
       tools: { register: () => () => {}, get: () => ({}) },
@@ -152,7 +156,7 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
     apply(fakeCtx as any, { root });
 
     // 1. 测试 GET /api/dsh-graph?lazy=1
-    const boardHandler = registered.get("/api/dsh-graph");
+    const boardHandler = handlerFor(routeDefs) /* /api/dsh-graph */;
     assert.ok(boardHandler, "GET /api/dsh-graph 端点存在");
 
     let boardResBody = "";
@@ -161,7 +165,7 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
       writeHead(code: number, headers?: any) { boardStatusCode = code; },
       end(chunk?: any) { if (chunk) boardResBody = String(chunk); },
     };
-    boardHandler({ method: "GET", url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}&lazy=1`, headers: {} }, fakeBoardRes);
+    boardHandler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `/api/dsh-graph?workspace=${encodeURIComponent(ws)}&lazy=1` }, fakeBoardRes);
     assert.equal(boardStatusCode, 200);
     const boardJson = JSON.parse(boardResBody);
     assert.equal(boardJson.lazy, true);
@@ -173,7 +177,7 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
     assert.equal(v01.lazy, true);
 
     // 2. 测试 GET /api/dsh-graph/version-goals?slug=v0.1
-    const vGoalsHandler = registered.get("/api/dsh-graph/version-goals");
+    const vGoalsHandler = handlerFor(routeDefs) /* /api/dsh-graph/version-goals */;
     assert.ok(vGoalsHandler, "GET /api/dsh-graph/version-goals 端点存在");
 
     let vgBody: any = null;
@@ -183,7 +187,7 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
       setHeader() {},
       end(chunk?: any) { if (chunk) vgBody = JSON.parse(chunk); },
     };
-    await vGoalsHandler({ method: "GET", url: `/api/dsh-graph/version-goals?workspace=${encodeURIComponent(ws)}&slug=v0.1` }, fakeVgRes);
+    await vGoalsHandler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `/api/dsh-graph/version-goals?workspace=${encodeURIComponent(ws)}&slug=v0.1` }, fakeVgRes);
     assert.equal(vgStatus, 200);
     assert.equal(vgBody.ok, true);
     assert.equal(vgBody.slug, "v0.1");
@@ -197,7 +201,7 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
       setHeader() {},
       end() {},
     };
-    await vGoalsHandler({ method: "GET", url: `/api/dsh-graph/version-goals?workspace=${encodeURIComponent(ws)}` }, fakeVgErrRes);
+    await vGoalsHandler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `/api/dsh-graph/version-goals?workspace=${encodeURIComponent(ws)}` }, fakeVgErrRes);
     assert.equal(vgErrStatus, 400);
 
     // 4. 测试 POST 方法拒绝
@@ -207,11 +211,11 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
       setHeader() {},
       end() {},
     };
-    await vGoalsHandler({ method: "POST", url: `/api/dsh-graph/version-goals?workspace=${encodeURIComponent(ws)}&slug=v0.1` }, fakeVgMethodRes);
+    await vGoalsHandler({ headers: { [OWNER_HEADER]: "1" }, method: "POST", url: `/api/dsh-graph/version-goals?workspace=${encodeURIComponent(ws)}&slug=v0.1` }, fakeVgMethodRes);
     assert.equal(vgMethodStatus, 405);
 
     // 5. 测试 GET /api/dsh-graph/backlog-goals
-    const bgHandler = registered.get("/api/dsh-graph/backlog-goals");
+    const bgHandler = handlerFor(routeDefs) /* /api/dsh-graph/backlog-goals */;
     assert.ok(bgHandler, "GET /api/dsh-graph/backlog-goals 端点存在");
 
     let bgBody: any = null;
@@ -221,7 +225,7 @@ test("g-258 REST API：/api/dsh-graph?lazy=1、/api/dsh-graph/version-goals 与 
       setHeader() {},
       end(chunk?: any) { if (chunk) bgBody = JSON.parse(chunk); },
     };
-    await bgHandler({ method: "GET", url: `/api/dsh-graph/backlog-goals?workspace=${encodeURIComponent(ws)}` }, fakeBgRes);
+    await bgHandler({ headers: { [OWNER_HEADER]: "1" }, method: "GET", url: `/api/dsh-graph/backlog-goals?workspace=${encodeURIComponent(ws)}` }, fakeBgRes);
     assert.equal(bgStatus, 200);
     assert.equal(bgBody.ok, true);
     assert.equal(bgBody.goals.length, 1);

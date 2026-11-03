@@ -70,6 +70,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createGoal, findGoalFile, init, setCriteria, transition } from "../ops.ts";
 import { apply } from "../../dist/index.js";
+import { entryHandler, ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
 
 /** 汉字判定：判据给定的 U+3400–U+4DBF ∪ U+4E00–U+9FFF（CJK 扩展 A + 统一表意文字主区）。 */
 const HAN = /[\u3400-\u4dbf\u4e00-\u9fff]/;
@@ -144,6 +145,7 @@ function makeHarness() {
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "webServer") return webServer;
+      if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具
       // resolvePromptLanguage 的首选通道：DSH settings 服务的 locale 命名空间。
       if (name === "settings") return { get: (ns: string) => (ns === "locale" ? { preference: lang.value } : undefined) };
       if (name === "subagents") {
@@ -188,7 +190,7 @@ function restCall(route: any, body: any) {
   const req: any = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
   req.method = "POST";
   req.url = route.path;
-  req.headers = {};
+  req.headers = { [OWNER_HEADER]: "1" }; // g-507：经唯一门禁入口 ⇒ 测试自有 owner 凭证
   const res: any = {
     code: 0, payload: null,
     writeHead(code: number) { this.code = code; },
@@ -198,8 +200,8 @@ function restCall(route: any, body: any) {
 }
 
 function routeOf(h: Harness, path: string) {
-  const route = h.routes.find((r: any) => r.path === path);
-  assert.ok(route, `REST 路由未注册：${path}`);
+  const route = { path, handler: entryHandler(h.routes) }; // g-507：唯一门禁入口（按 path 分发）
+  assert.equal(typeof route.handler, "function", `命名空间门禁入口可用（业务端点经其分发）：${path}`);
   return route;
 }
 

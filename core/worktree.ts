@@ -4,7 +4,7 @@ import { resolve, relative, join, sep, dirname, isAbsolute } from "node:path";
 import { appendEvent, readEvents, nowIso } from "./events.ts";
 import { discoverGitWorktree, isScratchWorkspace } from "./root.ts";
 import { parseNumstatZ, parsePorcelainZ, summarizeProductLinesStrict } from "./review-policy.ts";
-import { atomicWrite, findGoalFile, loadGoal } from "./ops.ts";
+import { atomicWrite, findGoalFile, loadGoal, assertNoActiveExecutionChild, type ExecutionLiveCheck } from "./ops.ts";
 import { GraphError } from "./machine.ts";
 
 export interface WorktreeCandidate {
@@ -387,7 +387,7 @@ export function goalWorktreeDeleteBlocker(root: string, goalId: string): string 
     `确认列表清空后再执行 graph_delete_goal`
   );
 }
-export function cleanWorktree(root: string, id: string, actor = "human:gui", confirm = false): { ok: boolean; candidate?: WorktreeCandidate; reason?: string } {
+export function cleanWorktree(root: string, id: string, actor = "human:gui", confirm = false, liveCheck?: ExecutionLiveCheck): { ok: boolean; candidate?: WorktreeCandidate; reason?: string } {
   const c = listWorktrees(root).find(x => x.id === id);
   if (!confirm) return { ok: false, ...(c ? { candidate: c } : {}), reason: "confirm_required" };
   const block = (reason: string) => { appendEvent(root, { actor, event: "worktree.clean_blocked", goal: c?.goal, details: { id, reason, candidate: c ?? null } }); return { ok: false, ...(c ? { candidate: c } : {}), reason }; };
@@ -421,6 +421,14 @@ export function cleanWorktree(root: string, id: string, actor = "human:gui", con
   const realRel = relative(main, realPath);
   if (!realRel.startsWith(`.worktrees${sep}`) || realRel === ".worktrees" || realRel.startsWith(`..${sep}`)) return block("realpath_escape");
   if (goalStatus(root, c.goal) !== "delivered" || isActive(root, c.goal, c.attempt)) return block("state_changed");
+  // g-610：真正 `git worktree remove` 之前再核公开 registry（运行中/已登记未终结的 child 拒绝）。
+  if (liveCheck) {
+    try {
+      assertNoActiveExecutionChild(root, c.goal, { liveCheck, action: "清理工作树", scope: "management", onlyAttempt: c.attempt, worktreePath: realPath });
+    } catch (e) {
+      return block(String((e as Error)?.message ?? e));
+    }
+  }
   try { git(main, ["worktree", "remove", c.path]); appendEvent(root, { actor, event: "worktree.cleaned", goal: c.goal, details: { ...c, cleaned_at: nowIso() } }); return { ok: true, candidate: c }; }
   catch (error) { return block(String(error instanceof Error ? error.message : error)); }
 }

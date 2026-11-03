@@ -268,7 +268,11 @@ isolatedTest("g-351 判据3：旧形态（settings 有 register、无 describe�
     assert.equal(registerCalls[0].ns, "dsh-graph", "namespace 契约不变");
     assert.deepEqual(
       (registerCalls[0].options as any)?.base,
-      { subagentProvider: "", subagentModel: "", subagentMode: "", subagentReasoningEffort: "", subagentPrompt: "", promptLanguage: "follow" },
+      {
+        subagentProvider: "", subagentModel: "", subagentMode: "", subagentReasoningEffort: "",
+        subagentPrompt: "", promptLanguage: "follow", supervisorKeepAlive: "",
+        supervisorCare: "", supervisorCareThresholdSeconds: "", supervisorCareRecheckSeconds: "",
+      },
       "旧路径的 base 默认层不变",
     );
     assert.equal(/settings 注册失败|能力不可用/.test(stderr), false, "旧路径正常注册时不得有任何降级告警");
@@ -323,7 +327,8 @@ isolatedTest("g-351 判据3：两种能力都缺失时如实报「能力不可�
   const stderr = captureStderr(() => apply(ctx, { root: ".dsh-graph" }));
 
   assert.equal(/settings 注册失败/.test(stderr), false, "不得再输出误导性的「注册失败」");
-  assert.match(stderr, /g-351 settings 能力不可用/, "必须如实说明是能力缺失");
+  assert.match(stderr, /设置能力不可用/, "必须如实说明是能力缺失（中性功能描述）");
+  assert.doesNotMatch(stderr, /\bg-\d+\b/, "降级诊断不得包含目标编号");
   // 降级但绝不中断：skill 仍按默认语言（zh）注册
   const supervisor = registeredSkills.find((s) => s.name === "dsh-graph-supervisor");
   assert.equal(supervisor?.content, guideZh(), "能力缺失时回落默认语言，插件照常可用");

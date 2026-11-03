@@ -40,6 +40,10 @@ import { STATUSES } from "../machine.ts";
 import { readEvents } from "../events.ts";
 import { validateVersionRelease } from "../version-lane.ts";
 import { apply } from "../../dist/index.js";
+import { ownerConnectionStub, entryHandler, createRegisterStub, OWNER_HEADER, handlerFor } from "./_http-auth-harness.ts";
+// g-507：捕获到的注册定义（setup/fixture 内赋值；helper 经唯一门禁入口分发时读取）
+let routeDefs: any[] = [];
+let webServer: any = null;
 
 function tmpRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g379-"));
@@ -619,10 +623,10 @@ test("g-379：deriveGoalRelations 在空索引/缺目标时安全降级", () => 
 
 function restHarness(root: string) {
   const routes = new Map<string, any>();
-  const webServer = { register: (def: any) => { routes.set(def.path, def.handler); return () => {}; } };
+  { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
     get: (name: string) =>
-      name === "webServer" ? webServer : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined,
+      name === "webServer" ? webServer : name === "connection" ? ownerConnectionStub() : name === "sandboxPolicy" ? { workspaceRoot: root } : undefined,
     effect: (fn: () => unknown) => fn(),
     webServer,
     tools: { register: () => () => {}, get: () => ({}) },
@@ -632,13 +636,13 @@ function restHarness(root: string) {
 }
 
 function fakeReq(method: string, url: string) {
-  const req: any = { method, url, _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; } };
+  const req: any = { headers: { [OWNER_HEADER]: "1" }, method, url, _listeners: {} as Record<string, (v?: any) => void>, on(ev: string, cb: (v?: any) => void) { req._listeners[ev] = cb; } };
   return req;
 }
 
 async function callRoute(routes: Map<string, any>, method: string, path: string, body?: unknown) {
   const bare = path.split("?")[0];
-  const handler = routes.get(bare);
+  const handler = handlerFor(routeDefs) /* /api/dsh-graph/relations */;
   assert.ok(handler, `路由 ${bare} 应已注册`);
   const req = fakeReq(method, path);
   const res: any = { _code: 0, _body: null };

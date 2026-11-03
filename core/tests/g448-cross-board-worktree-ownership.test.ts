@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { init, createGoal, setCriteria, goalDetail, findGoalFile, loadGoal } from "../ops.ts";
+import { init, createGoal, setCriteria, goalDetail, findGoalFile, loadGoal, abandonAttempt } from "../ops.ts";
 import { appendEvent } from "../events.ts";
 import { prepareAttemptWorktree, readBoardOwner } from "../worktree.ts";
 import { apply } from "../../dist/index.js";
@@ -308,6 +308,7 @@ test("g-448 判据 1（真实入口）：tool 入口同号跨板派发必须明�
   assert.equal(aMeta.worktree.canonical_root, rootA);
 
   // 同板重派仍幂等复用（真实入口，不因新增归属核验而回退）
+  abandonAttempt(rootA, goalA, { actor: "human:gui", attempt: resA.attempt, reason: "fixture: prior attempt ended", liveCheck: () => "gone" });
   const resA2: any = await hA.dispatch({ goal: goalA, attempt_brief: "板 A 重派" });
   assert.equal(resA2.attempt, "att-002", "新 attempt 编号 ⇒ 另建新树，不影响 att-001 归属");
   assert.equal(resA2.worktree.canonical_root, rootA);

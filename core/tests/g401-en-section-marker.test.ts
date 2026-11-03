@@ -56,6 +56,7 @@ import { fileURLToPath } from "node:url";
 import {
   addCard, createGoal, fillCard, init, recordAttemptHandoff, reviewCard,
   setCriteria, setGoalDirective, writeProjectConfig,
+  abandonAttempt, goalDetail,
 } from "../ops.ts";
 import { apply, formatAttemptPrompt } from "../../dist/index.js";
 
@@ -258,8 +259,21 @@ function createGoalWithMaterials(h: Harness, m: Materials, withCard = true): str
   return goal;
 }
 
+
+/** g-610：同一目标重派前，把上一 attempt 按既有授权正常结束（模拟真实完成后的再派发）。 */
+function closePriorAttempts(root: string, goal: string): void {
+  for (const a of goalDetail(root, goal).attempts) {
+    if (a.result === "pending") {
+      abandonAttempt(root, goal, {
+        actor: "human:test", attempt: a.id, reason: "fixture: prior attempt ended",
+        liveCheck: () => "gone",
+      });
+    }
+  }
+}
 /** 经**真实** `graph_start_attempt` 派发，返回 `subagents.startContinuable` 捕获的最终 prompt。 */
 async function startAttempt(h: Harness, goal: string, brief: string): Promise<string> {
+  closePriorAttempts(h.root, goal);
   const before = h.captured.length;
   const tool = h.registered.find((d: any) => d.name === "graph_start_attempt");
   assert.ok(tool, "graph_start_attempt 必须已注册");
