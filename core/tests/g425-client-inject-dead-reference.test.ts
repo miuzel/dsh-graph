@@ -82,7 +82,8 @@ const INJECT_REGISTRY: Record<string, InjectEntry> = {
       "该包清单**无 `dsh` 字段** ⇒ 永远成不了客户端清单行（0.2.1-alpha.2 安装树 " +
       ".pnpm/@deepseek-ai+dsh-client-ui-primitives@0.2.1-alpha.2_*/…/package.json 亦 grep \"dsh\" 0 命中）；" +
       "本仓客户端 _wrapper-top.js 以 require(\"@deepseek-ai/dsh-client-ui-primitives\") 当模块用（MarkdownText 原语）；" +
-      "0.2.2-rc.1：安装树 .pnpm/@deepseek-ai+dsh-client-ui-primitives@*/node_modules/@deepseek-ai/dsh-client-ui-primitives/package.json 无匹配；effective-config.yml 搜该名无命中",
+      "0.2.2-rc.1：该包**在安装树中整体不存在**（`find … -name dsh-client-ui-primitives` 0 命中、`.pnpm` 无该包目录），" +
+      "`effective-config.yml` 搜该名亦 0 命中 ⇒ 不可能成为客户端清单行（此为「宿主不再提供该模块」而非「包在但无 dsh 字段」）",
   },
 };
 
