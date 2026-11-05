@@ -943,7 +943,8 @@
       if (!parentId || !childId) return null;
       try {
         const direct = rt?.subagentAddress?.(childId);
-        if (direct) return direct;
+        // The host indexes by child only; reject a stale or foreign direct parent.
+        if (direct) return direct.parentSessionId === parentId && direct.childSessionId === childId ? direct : null;
       } catch { /* 地址探测不可用 → 走目录 */ }
       const entry = catalogChildEntry(subagentCatalogEntries(rt, parentId), childId);
       return entry ? { parentSessionId: parentId, childSessionId: childId, mode: catalogAddressMode(entry) } : null;

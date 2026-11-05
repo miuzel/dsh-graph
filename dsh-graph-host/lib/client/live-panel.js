@@ -111,18 +111,21 @@
 
     // Recent records use the host's session namespace, not connection.api.
     function RecentRecords(props) {
-      const [state, setState] = React.useState({ loading: true });
+      const token = React.useMemo(() => ({}), [props.parentId, props.childId, props.mode]);
+      const [storedState, setState] = React.useState(() => ({ token, loading: true }));
+      // Never render a previous request's records or error, even on A → B → A.
+      const state = storedState.token === token ? storedState : { loading: true };
       React.useEffect(() => {
         let alive = true;
         const controller = new AbortController();
-        setState({ loading: true });
+        setState({ token, loading: true });
         const loadHistory = async () => {
           try {
             const remoteSession = appCtx?.get?.("remote.session") ?? null;
             const result = await readRecentRecords(remoteSession, props.parentId, props.childId, props.mode, controller.signal);
-            if (alive) setState({ loading: false, ...result });
+            if (alive) setState({ token, loading: false, ...result });
           } catch (e) {
-            if (alive) setState({ loading: false, error: String(e?.message ?? e) });
+            if (alive) setState({ token, loading: false, error: String(e?.message ?? e) });
           }
         };
         loadHistory();

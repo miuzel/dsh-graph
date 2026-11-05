@@ -4,7 +4,7 @@
     // 发指令走 session.prompt（continuable 子代理自动路由 api.subagents.prompt，仅文本），
     // 最近记录走 connection.api.subagents.history。
 
-    const boundSetup = new Map(); // parent+child identity -> Promise（地址配置只做一次）
+    const boundSetup = new Map(); // parent+child identity -> active setup lease
     // g-351：值为**具体**模式 'one-shot' | 'continuable'；宿主给「未判定」（0.1.7 'unknown'）时为 null
     //（展示层据此省略会话模式，不把未判定冒充成「一次性」）。
     const boundModes = new Map(); // parent+child identity -> 'one-shot' | 'continuable' | null
@@ -129,10 +129,8 @@
     async function resolveSessionRetainTarget(parentId, childId) {
       if (!childId) return null;
       if (!parentId) return childId; // 顶层会话（supervisor）：id 即 retain 目标
-      try {
-        const direct = sessionsRt?.subagentAddress?.(childId);
-        if (direct) return direct;
-      } catch (e) { /* 地址探测不可用 → 继续走目录路径 */ }
+      // subagentAddressFromCatalog validates both parent and child even for the
+      // host's direct child-only lookup before allowing any retain.
       const cached = subagentAddressFromCatalog(parentId, childId);
       if (cached) return cached;
       await refreshSubagentCatalog(sessionsRt, parentId);
@@ -300,11 +298,17 @@
     // 实时窗口（session.open()）由 openBoundSessionStream 按 g-224 实时显示开关门控，不在此处打开。
     function setupBoundSession(parentId, childId, session) {
       const identity = bindIdentity(parentId, childId);
-      if (boundSetup.has(identity)) return boundSetup.get(identity);
-      const p = (async () => {
+      const existing = boundSetup.get(identity);
+      if (existing && existing.session === session) { existing.users += 1; return existing; }
+      const lease = { session, users: 1, promise: null };
+      boundSetup.set(identity, lease);
+      lease.promise = (async () => {
         if (parentId) {
           try {
             await refreshSubagentCatalog(sessionsRt, parentId);
+            // Retired identities and earlier ABA generations may not mutate session routing.
+            if (boundSetup.get(identity) !== lease) return;
+            if (!subagentAddressFromCatalog(parentId, childId)) return;
             // g-351：与子会话导航/地址构造共用同一 entry 形状探测函数（旧带 kind、新无 kind）。
             const entry = catalogChildEntry(subagentCatalogEntries(sessionsRt, parentId), childId);
             if (entry) {
@@ -322,8 +326,7 @@
           }
         }
       })();
-      boundSetup.set(identity, p);
-      return p;
+      return lease;
     }
 
     // g-224：打开会话实时窗口（输出流数据源）。受实时显示开关门控——
@@ -380,12 +383,20 @@
       React.useEffect(() => {
         if (!session) return;
         let alive = true;
-        setupBoundSession(parentId, childId, session).then(() => {
-          if (alive) setModeState({ token: modeToken, mode: boundModes.get(identity) ?? null });
+        const lease = setupBoundSession(parentId, childId, session);
+        lease.promise.then(() => {
+          if (alive && boundSetup.get(identity) === lease) setModeState({ token: modeToken, mode: boundModes.get(identity) ?? null });
         });
         // g-224：输出流窗口打开受开关门控（内部再判断 getLiveDisplay()，切换即触发重评估）
         openBoundSessionStream(childId, session);
-        return () => { alive = false; };
+        return () => {
+          alive = false;
+          lease.users -= 1;
+          if (lease.users === 0 && boundSetup.get(identity) === lease) {
+            boundSetup.delete(identity);
+            boundModes.delete(identity);
+          }
+        };
       }, [session, parentId, childId, liveEnabled]);
       return { session, mode, eventSource };
     }

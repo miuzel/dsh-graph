@@ -144,6 +144,8 @@ test("A → B → A 在 B 未完成时，RecentRecords 回切首帧仍为空", a
   const start = f.renders.length;
   f.switchTo("a");
   assert.deepEqual(f.renders[start].records, { parentId: "parent", childId: "a", mode: null }, "回切首帧不能复活旧 A 状态");
+  assert.equal(f.requests.length, 3, "回切须建立新的有效代际");
+  f.requests[2].resolve();
   await flushAsync();
   assert.deepEqual(f.records(), { parentId: "parent", childId: "a", mode: "continuable" });
   f.requests[1].resolve();
