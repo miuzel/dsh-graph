@@ -48,7 +48,7 @@ interface InjectEntry {
 }
 
 /** 本包宿主兼容范围覆盖的受支持宿主线（验收范围，勿擅自扩表）。 */
-const SUPPORTED_HOSTS = ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2"];
+const SUPPORTED_HOSTS = ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2", "0.2.2-rc.1"];
 
 /**
  * inject 登记表：源清单里每个名字都必须在此登记，否则 fail-closed 判红。
@@ -57,21 +57,23 @@ const SUPPORTED_HOSTS = ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.
 const INJECT_REGISTRY: Record<string, InjectEntry> = {
   "@deepseek-ai/dsh-client-ui-settings": {
     class: "row",
-    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2"],
+    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2", "0.2.2-rc.1"],
     evidence:
       "0.1.x：隔离实例 dsh 0.1.5-rc.2 / 0.1.7-rc.2 的 web profile effective-config.yml 客户端清单均含该行；" +
       "0.2.0-rc.2：安装树 .pnpm/@deepseek-ai+dsh-client-ui-settings/*/package.json 声明 dsh.client（platform:web）；" +
       "0.2.1-alpha.2：实读安装树 .pnpm/@deepseek-ai+dsh-client-ui-settings@0.2.1-alpha.2_*/node_modules/@deepseek-ai/dsh-client-ui-settings/package.json " +
       "L28-33 声明 dsh.client（inject=[@deepseek-ai/dsh-api-remotes]、platform:\"web\"）；composed 配置 " +
-      "tmp/dsh-test/0.2.1-alpha.2/effective-config.yml L538-539 亦有该 id/name 行",
+      "tmp/dsh-test/0.2.1-alpha.2/effective-config.yml L538-539 亦有该 id/name 行；" +
+      "0.2.2-rc.1：读取安装树 dsh-client-ui-settings/package.json L29-35，dsh.client platform=web；grep -n dsh-client-ui-settings tmp/dsh-test/0.2.2-rc.1/effective-config.yml 命中 L554",
   },
   "@deepseek-ai/dsh-client-ui-sidebar-right": {
     class: "row",
-    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2"],
+    hosts: ["0.1.5-rc.2", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2", "0.2.2-rc.1"],
     evidence:
       "同 ui-settings 口径：0.1.x effective-config.yml 客户端清单行 + 0.2.0-rc.2 安装树 .pnpm/@deepseek-ai+dsh-client-ui-sidebar-right/*/package.json 声明 dsh.client；" +
       "0.2.1-alpha.2：实读安装树 .pnpm/@deepseek-ai+dsh-client-ui-sidebar-right@0.2.1-alpha.2_*/node_modules/@deepseek-ai/dsh-client-ui-sidebar-right/package.json " +
-      "L28-38（dsh.client，platform:\"web\"）；composed 配置 tmp/dsh-test/0.2.1-alpha.2/effective-config.yml L526 该 name 行",
+      "L28-38（dsh.client，platform:\"web\"）；composed 配置 tmp/dsh-test/0.2.1-alpha.2/effective-config.yml L526 该 name 行；" +
+      "0.2.2-rc.1：读取安装树 dsh-client-ui-sidebar-right/package.json L29-41，dsh.client platform=web；grep -n dsh-client-ui-sidebar-right tmp/dsh-test/0.2.2-rc.1/effective-config.yml 命中 L541",
   },
   "@deepseek-ai/dsh-client-ui-primitives": {
     class: "inert-module",
@@ -79,7 +81,9 @@ const INJECT_REGISTRY: Record<string, InjectEntry> = {
     evidence:
       "该包清单**无 `dsh` 字段** ⇒ 永远成不了客户端清单行（0.2.1-alpha.2 安装树 " +
       ".pnpm/@deepseek-ai+dsh-client-ui-primitives@0.2.1-alpha.2_*/…/package.json 亦 grep \"dsh\" 0 命中）；" +
-      "本仓客户端 _wrapper-top.js 以 require(\"@deepseek-ai/dsh-client-ui-primitives\") 当模块用（MarkdownText 原语）",
+      "本仓客户端 _wrapper-top.js 以 require(\"@deepseek-ai/dsh-client-ui-primitives\") 当模块用（MarkdownText 原语）；" +
+      "0.2.2-rc.1：该包**在安装树中整体不存在**（`find … -name dsh-client-ui-primitives` 0 命中、`.pnpm` 无该包目录），" +
+      "`effective-config.yml` 搜该名亦 0 命中 ⇒ 不可能成为客户端清单行（此为「宿主不再提供该模块」而非「包在但无 dsh 字段」）",
   },
 };
 
