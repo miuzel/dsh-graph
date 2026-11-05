@@ -52,15 +52,19 @@ test("g-614 0.2.1 follow snapshot yields real records and closes stream", async 
 test("g-614 old follow receives cancellation signal and propagates stream errors", async () => {
   const controller = new AbortController();
   let received: AbortSignal | undefined;
+  let closed = false;
   const remote = { async *follow(_r: unknown, signal: AbortSignal) {
     received = signal;
-    await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
-    yield { type: "snapshot", records: [] };
+    try {
+      await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+      yield { type: "snapshot", records: [] };
+    } finally { closed = true; }
   } };
   const pending = readHistory(remote, "p", "c", "continuable", controller.signal);
   controller.abort();
   await assert.rejects(pending, /aborted/);
   assert.equal(received, controller.signal);
+  assert.equal(closed, true);
   await assert.rejects(readHistory({ async *follow() { throw new Error("stream failed"); } }, "p", "c", null), /stream failed/);
 });
 
