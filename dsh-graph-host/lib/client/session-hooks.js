@@ -4,10 +4,10 @@
     // 发指令走 session.prompt（continuable 子代理自动路由 api.subagents.prompt，仅文本），
     // 最近记录走 connection.api.subagents.history。
 
-    const boundSetup = new Map(); // childId -> Promise（地址配置只做一次）
+    const boundSetup = new Map(); // parent+child identity -> Promise（地址配置只做一次）
     // g-351：值为**具体**模式 'one-shot' | 'continuable'；宿主给「未判定」（0.1.7 'unknown'）时为 null
     //（展示层据此省略会话模式，不把未判定冒充成「一次性」）。
-    const boundModes = new Map(); // childId -> 'one-shot' | 'continuable' | null
+    const boundModes = new Map(); // parent+child identity -> 'one-shot' | 'continuable' | null
 
     // ===== g-323：一次性「向某个会话投递一条 queue 消息」的**共享**能力探测入口 =====
     // 与 g-321 的渲染期保留生命周期（useSessionBinding / canRetain）是两件事：本函数服务
@@ -299,7 +299,8 @@
     // 目录未收录时跳过地址配置（指令走 session.prompt 默认路由，错误会明示）。
     // 实时窗口（session.open()）由 openBoundSessionStream 按 g-224 实时显示开关门控，不在此处打开。
     function setupBoundSession(parentId, childId, session) {
-      if (boundSetup.has(childId)) return boundSetup.get(childId);
+      const identity = bindIdentity(parentId, childId);
+      if (boundSetup.has(identity)) return boundSetup.get(identity);
       const p = (async () => {
         if (parentId) {
           try {
@@ -309,7 +310,7 @@
             if (entry) {
               // g-351：展示层只认具体模式；宿主的「未判定」（0.1.7 'unknown'）记 null，
               //        由 live-panel 省略该字段，绝不臆断显示成「一次性」。
-              boundModes.set(childId, catalogEntryMode(entry));
+              boundModes.set(identity, catalogEntryMode(entry));
               // g-217：0.1.2-alpha.2 权威签名 configureSubagent(address, parentAvailable?)——
               // 按指南单参调用（address 含 parentSessionId/childSessionId/mode），parentAvailable 缺省 undefined
               session.configureSubagent?.(
@@ -321,7 +322,7 @@
           }
         }
       })();
-      boundSetup.set(childId, p);
+      boundSetup.set(identity, p);
       return p;
     }
 
@@ -368,14 +369,19 @@
       const binding = useSessionBinding(childId, { parentId: parentId ?? null, childId: childId ?? null });
       const session = binding.session;
       const eventSource = binding.eventSource;
-      const [mode, setMode] = React.useState(boundModes.get(childId) ?? null);
+      const identity = bindIdentity(parentId, childId);
+      const modeToken = React.useMemo(() => ({}), [identity]);
+      const [modeState, setModeState] = React.useState(() => ({ token: modeToken, mode: boundModes.get(identity) ?? null }));
+      // A token changes on every identity transition, including A → B → A before B settles.
+      // Render immediately with unknown; effect cleanup runs only after render.
+      const mode = modeState.token === modeToken ? modeState.mode : null;
       // g-224：实时显示开关——关闭时跳过 session.open()（不激活输出流窗口），重开时恢复
       const liveEnabled = useLiveDisplayEnabled();
       React.useEffect(() => {
         if (!session) return;
         let alive = true;
         setupBoundSession(parentId, childId, session).then(() => {
-          if (alive) setMode(boundModes.get(childId) ?? null);
+          if (alive) setModeState({ token: modeToken, mode: boundModes.get(identity) ?? null });
         });
         // g-224：输出流窗口打开受开关门控（内部再判断 getLiveDisplay()，切换即触发重评估）
         openBoundSessionStream(childId, session);

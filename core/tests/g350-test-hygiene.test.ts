@@ -4,7 +4,7 @@
  * g-350（v0.19.7 lane）测试卫生补缺 —— 本文件只放**本目标新增**的三类覆盖：
  *
  *  ① `session-hooks.js` 的 `boundModes` 写入路径（g-351 att-002 复核 R1）：
- *     把 `boundModes.set(childId, catalogEntryMode(entry))` 变异成 `catalogAddressMode(entry)`
+ *     把 `boundModes.set(identity, catalogEntryMode(entry))` 变异成 `catalogAddressMode(entry)`
  *     时**全套 1302/0 存活**（执行者变异脚本对 boundModes 零覆盖）。后果：0.1.7 的
  *     `mode:'unknown'` 会在 `live-panel.js:502` 被渲染成「一次性」。这里补「unknown 模式下
  *     展示层不产出具体模式」的断言，并在**真实源模块**（vm 沙箱）上跑，外加 live-panel 渲染门
@@ -67,7 +67,7 @@ async function boundModeFor(entry: Record<string, unknown>) {
   await flushAsync();
   await flushAsync();
   const result = {
-    bound: box.parts.boundModes.get(CHILD),
+    bound: box.parts.boundModes.get(`${PARENT}\u0000${CHILD}`),
     displayed: harness.value()?.mode,
     hasSession: Boolean(harness.value()?.session),
     addresses,
@@ -90,7 +90,7 @@ test("g-350/g-351 R1：unknown/缺失/非法模式 ⇒ boundModes 记 null，展
   for (const { name, entry } of cases) {
     const got = await boundModeFor(entry);
     assert.equal(got.hasSession, true, `${name}：夹具前置——真实消费路径必须已接入会话（否则断言空转）`);
-    // 变异对照：把 `boundModes.set(childId, catalogEntryMode(entry))` 写成 `catalogAddressMode(entry)`
+    // 变异对照：把 `boundModes.set(identity, catalogEntryMode(entry))` 写成 `catalogAddressMode(entry)`
     // 时这里会得到 "unknown"（真值）；live-panel 的 `mode ? … : "一次性"` 分支随之产出**具体**模式 ⇒ 必红。
     assert.equal(
       got.bound,
