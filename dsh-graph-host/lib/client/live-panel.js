@@ -67,57 +67,75 @@
       );
     }
 
-    // 最近会话记录：api.subagents.history（无父会话时退化 api.sessions.history）
+    // Read the host's public session history contract. Never replace a subagent
+    // address with an ordinary session address when the parent is unavailable.
+    async function readRecentRecords(remoteSession, parentId, childId, mode, signal) {
+      if (!parentId || !childId) return { unavailable: "identity" };
+      if (!remoteSession) return { unavailable: "capability" };
+      const address = { kind: "subagent", parentSessionId: parentId, childSessionId: childId,
+        mode: mode === "one-shot" || mode === "continuable" ? mode : "unknown" };
+      if (typeof remoteSession.events === "function") {
+        const result = await remoteSession.events({ address, maxMessages: 30 }, signal);
+        if (!result?.ok) return { error: String(result?.error?.message ?? result?.error?.code ?? "history request rejected") };
+        if (!Array.isArray(result.value?.records)) return { error: "invalid history response" };
+        return { entries: result.value.records };
+      }
+      // 0.2.1: follow's opening snapshot is the message-aligned history window;
+      // page requires its cursor. Close the stream immediately after the snapshot.
+      if (typeof remoteSession.follow === "function") {
+        for await (const frame of remoteSession.follow({ address, maxMessages: 30 }, signal)) {
+          if (frame?.type !== "snapshot") return { error: "invalid history snapshot" };
+          if (!Array.isArray(frame.records)) return { error: "invalid history snapshot" };
+          return { entries: frame.records };
+        }
+        return { error: "history stream ended before snapshot" };
+      }
+      return { unavailable: "capability" };
+    }
+
+    function recentRecordText(entry) {
+      const ev = entry?.event ?? {};
+      const d = ev.data ?? {};
+      if (ev.type === "user/message" || ev.type === "assistant/message") {
+        const content = ev.type === "assistant/message" ? (d.message?.content ?? d.content) : d.content;
+        const parts = (Array.isArray(content) ? content : [])
+          .map((b) => b.type === "text" ? b.text
+            : b.type === "reasoning" ? "💭" + String(b.text ?? "").slice(0, 120)
+            : "[" + (b.type ?? "?") + "]")
+          .join("");
+        return (ev.type === "user/message" ? "🧑 " : "🤖 ") + (parts.trim().slice(0, 400) || dgT("live.emptyMessage"));
+      }
+      if (ev.type === "tool/call" || ev.type === "assistant/tool-call") return "🔧 " + (d.name ?? "tool");
+      return dgT("live.unknownEvent") + " " + (ev.type ?? "");
+    }
+
+    // Recent records use the host's session namespace, not connection.api.
     function RecentRecords(props) {
       const [state, setState] = React.useState({ loading: true });
       React.useEffect(() => {
         let alive = true;
+        const controller = new AbortController();
+        setState({ loading: true });
         const loadHistory = async () => {
           try {
-            if (connectionRt?.api?.subagents?.history && props.parentId) {
-              const r = await connectionRt.api.subagents.history({
-                parentSessionId: props.parentId, childSessionId: props.childId,
-                mode: props.mode ?? "continuable", maxMessages: 30,
-              });
-              if (!alive) return;
-              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
-            }
-            if (connectionRt?.api?.sessions?.history && props.childId) {
-              const r = await connectionRt.api.sessions.history({ sessionId: props.childId, maxMessages: 30 });
-              if (!alive) return;
-              if (r?.result?.ok) { setState({ loading: false, entries: r.result.value.events }); return; }
-            }
-            if (!alive) return;
-            setState({ loading: false, entries: [] });
+            const remoteSession = appCtx?.get?.("remote.session") ?? null;
+            const result = await readRecentRecords(remoteSession, props.parentId, props.childId, props.mode, controller.signal);
+            if (alive) setState({ loading: false, ...result });
           } catch (e) {
             if (alive) setState({ loading: false, error: String(e?.message ?? e) });
           }
         };
         loadHistory();
-        return () => { alive = false; };
-      }, [props.parentId, props.childId]);
-
-      const entryText = (entry) => {
-        const ev = entry?.event ?? {};
-        const d = ev.data ?? {};
-        if (ev.type === "user/message" || ev.type === "assistant/message") {
-          const parts = (Array.isArray(d.content) ? d.content : [])
-            .map((b) => b.type === "text" ? b.text
-              : b.type === "reasoning" ? "💭" + String(b.text ?? "").slice(0, 120)
-              : "[" + (b.type ?? "?") + "]")
-            .join("");
-          return (ev.type === "user/message" ? "🧑 " : "🤖 ") + (parts.trim().slice(0, 400) || dgT("live.emptyMessage"));
-        }
-        if (ev.type === "assistant/tool-call") return "🔧 " + (d.name ?? "tool");
-        return dgT("live.unknownEvent") + " " + (ev.type ?? "");
-      };
+        return () => { alive = false; controller.abort(); };
+      }, [props.parentId, props.childId, props.mode]);
 
       let body;
       if (state.loading) body = dgT("live.reading");
       else if (state.error) body = dgT("live.readFailed") + state.error;
+      else if (state.unavailable) body = dgT(state.unavailable === "identity" ? "live.historyIdentityUnavailable" : "live.historyUnavailable");
       else if (!state.entries.length) body = dgT("live.noRecords");
       else body = state.entries.slice(-12).map((e, i) =>
-        h("div", { key: i, style: S.recordItem }, entryText(e)));
+        h("div", { key: i, style: S.recordItem }, recentRecordText(e)));
       return h("div", { style: { marginTop: 4, fontSize: 12 } }, body);
     }
 
