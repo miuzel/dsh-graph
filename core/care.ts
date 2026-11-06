@@ -2166,10 +2166,108 @@ export function careStatusProjection(args: {
 }
 
 /**
+ * g-618：纪律 + 检查清单的**公共层资产**（`prompts/care-discipline.{zh,en}.md`）。
+ *
+ * 只有「首次全量 / 后续精简」的**投递方式**变，纪律内容本身一字不变：全量版把这份资产（经
+ * `{{careGates}}` 回填）逐字注入唤醒正文，与 g-618 之前的内联字面量逐字等价（由
+ * `g618-care-wake-compact.test.ts` 的关闭态逐字对照守卫）。
+ *
+ * 三值定义 `CARE_OUTCOME_CONTRACT_*` **不在此资产内**：它同时是 `graph_care_outcome` 工具描述的
+ * 单一真源，搬走会造成两处真源；本资产只承载**仅唤醒正文使用**的「检查清单 + 纪律」。
+ */
+export const CARE_DISCIPLINE_ASSET = "care-discipline";
+
+/** 精简版里必须**留在正文**的兜底纪律（负责人裁定：不得只给资产链接）。 */
+export const CARE_COMPACT_DISCIPLINE_ZH = [
+  "- 计时到期**不是**卡死证据：正常长耗时构建/测试/网络等待不得仅因超时被中断；",
+  "- 证据不足 ⇒ unknown，继续观察或直接询问子代理，不要伪称已发现逻辑死循环。",
+] as const;
+
+/** {@link CARE_COMPACT_DISCIPLINE_ZH} 的英文对称版本（en 不得含 CJK）。 */
+export const CARE_COMPACT_DISCIPLINE_EN = [
+  "- Reaching the timer is NOT evidence of a stall: a long build/test/network wait must not be interrupted merely for taking time;",
+  "- Insufficient evidence means unknown: keep observing or ask the child, and never claim a proven infinite loop.",
+] as const;
+
+/** 全量版纪律块的退化正文（资产不可读且调用方未提供回退时使用；绝不因此中断巡检）。 */
+const CARE_DISCIPLINE_FALLBACK_ZH = [
+  "检查清单（逐条对照可访问的近期消息、工具调用/结果、进度与阻塞证据）：",
+  "- 计时到期不是卡死证据；正常长耗时构建/测试/网络等待、有实质进展的任务不得仅因超时被中断。",
+  "- 证据不足 ⇒ 继续观察或直接询问子代理，不要伪称已发现逻辑死循环。",
+  "- 干预须遵守宿主真实能力与既有人工 gate：" + CARE_PRESERVED_GATES.join(" / ") + "；",
+  "- 有明确僵局证据才请求暂停并确认停稳；无法安全解决 / 范围或判据冲突 ⇒ 停止执行并报告人类裁决；",
+].join("\n");
+
+const CARE_DISCIPLINE_FALLBACK_EN = [
+  "Checklist (verify against the accessible recent messages, tool calls/results, and progress/blocking evidence):",
+  "- Reaching the timer is not evidence of a stall; long builds/tests/network waits with real progress must not be interrupted merely for taking time.",
+  "- If evidence is insufficient, keep observing or ask the child; never claim a proven infinite loop.",
+  "- Interventions must respect real host capabilities and existing human gates: " + CARE_PRESERVED_GATES.join(" / ") + ";",
+  "- Request a pause only with clear stall evidence; if it cannot be resolved safely or scope/criteria conflict, stop and report to the human;",
+].join("\n");
+
+/** 资产只允许引用**两个**由代码提供的机读清单占位符（停滞信号、人工 gate）；
+ *  其余双花括号原样保留 —— 不引入可被随意改写正文的通用插值/override 通道。 */
+function fillCareGates(text: string): string {
+  return text
+    .split("{{careGates}}").join(CARE_PRESERVED_GATES.join(" / "))
+    .split("{{careStallSignals}}").join(CARE_STALL_SIGNALS.join(" / "));
+}
+
+/**
+ * g-618：取回纪律块正文（**fail-open**）。
+ *
+ * 资产缺失/不可读（或读取后不含兜底纪律）⇒ 用调用方给出的内联回退正文，返回 `degraded: true`，
+ * 由宿主把降级事实写进 `care.inspection` 事件 —— **绝不**抛错中断巡检（g-346 的教训：
+ * `readCorePromptAsset` 缺文件即 throw，曾直接终止进行中的轮次）。
+ *
+ * 产物层（dist）的字节级新鲜度另由 `dist-freshness-g312` 守卫，本函数不兼任。
+ */
+export function resolveCareDisciplineText(input: {
+  lang?: "zh" | "en";
+  /** 资产读取器（宿主注入 `readCorePromptAsset`；本模块保持纯函数、不直接碰文件系统）。 */
+  load: (lang: "zh" | "en") => string;
+  /** 调用方提供的 inline 回退正文（资产不可用时逐字使用）。 */
+  fallback?: string | null;
+}): { text: string; source: "asset" | "fallback"; degraded: boolean } {
+  const lang = normalizeCareLang(input.lang);
+  const fallback = (input.fallback && input.fallback.trim()) ? input.fallback : builtinCareDiscipline(lang);
+  try {
+    const text = fillCareGates(String(input.load(lang)));
+    const anchors = careDisciplineAnchors(lang);
+    // 空军：资产被裁成空壳（缺兜底纪律）时同样视为不可用，绝不静默丢纪律。
+    if (anchors.every((a) => text.includes(a))) return { text, source: "asset", degraded: false };
+  } catch { /* fail-open：落到 inline 回退 */ }
+  return { text: fallback, source: "fallback", degraded: true };
+}
+
+function builtinCareDiscipline(lang: "zh" | "en"): string {
+  return lang === "zh" ? CARE_DISCIPLINE_FALLBACK_ZH : CARE_DISCIPLINE_FALLBACK_EN;
+}
+
+function normalizeCareLang(lang: string | null | undefined): "zh" | "en" {
+  return lang === "en" ? "en" : "zh";
+}
+
+/**
+ * 纪律资产必须包含的兜底记号（缺失 = 资产被裁成空壳 ⇒ 全量版退回 inline 回退）。
+ * 与 {@link CARE_COMPACT_DISCIPLINE_ZH}/{@link CARE_COMPACT_DISCIPLINE_EN} 同源，不另立第二套措辞。
+ */
+function careDisciplineAnchors(lang: "zh" | "en"): string[] {
+  return lang === "zh"
+    ? ["不得仅因超时被中断", "不要伪称已发现逻辑死循环", "rework=human"]
+    : ["must not be interrupted merely for taking time", "never claim a proven infinite loop", "rework=human"];
+}
+
+/**
  * 关照唤醒正文（**有界**；只含机读标识与检查清单，不含会话正文/隐藏思维）。
  *
  * 纪律逐条落在正文里：到期不是卡死证据；证据不足不得伪称死循环；三类干预遵守真实能力与人工 gate；
  * 必须用专用窄工具回传**本次** inspectionId + 任务绑定 + progress/no-progress/unknown + 证据。
+ *
+ * g-618「首次全量、后续精简」：`compact` 只影响**纪律/检查清单的投递方式**，机读必需项
+ * （inspection id、每个 target 的 goal/attempt/child、`outcome=…`、回传要求）**永远 inline**；
+ * 三值定义 `CARE_OUTCOME_CONTRACT_*` 两态都逐条保留（它是 `graph_care_outcome` 的单一真源）。
  */
 export function formatCareWakeMessage(input: {
   inspectionId: string;
@@ -2185,8 +2283,20 @@ export function formatCareWakeMessage(input: {
   }>;
   maxStagnantRounds: number;
   lang?: "zh" | "en";
+  /** g-618：`compact` = 同一主管会话的**后续**唤醒（精简版）；缺省 `full` = 首次全量。 */
+  mode?: "full" | "compact";
+  /** 全量版的纪律块正文（宿主经 {@link resolveCareDisciplineText} 取得；缺省用内置回退）。 */
+  discipline?: string | null;
+  /** 纪律资产路径（仅精简版展示；缺省 `care-discipline.<lang>.md`）。 */
+  disciplineRef?: string | null;
 }): string {
-  const zh = input.lang !== "en";
+  const lang = normalizeCareLang(input.lang);
+  const zh = lang === "zh";
+  const compact = input.mode === "compact";
+  const ref = input.disciplineRef || `${CARE_DISCIPLINE_ASSET}.${lang}.md`;
+  // 只把「非空」判定交给 trim()，正文**原样保留首行缩进**（逐字等价旧行为的前提）。
+  const givenDiscipline = typeof input.discipline === "string" && input.discipline.trim() ? input.discipline : null;
+  const discipline = compact ? "" : (givenDiscipline ?? builtinCareDiscipline(lang));
   const id = String(input.inspectionId).slice(0, 80);
   const targets = input.targets; // g-506 返工：不得只显示前 8 个而让第 9+ 个任务无法回传
   const lines: string[] = [];
@@ -2201,15 +2311,13 @@ export function formatCareWakeMessage(input: {
         `  · goal=${t.goal} attempt=${t.attempt} child=${t.child} 已持续约 ${elapsed} 分钟；距上次关照 ${since}；连续无进展 ${t.stagnantRounds}/${t.maxStagnantRounds}${t.humanLocked ? "（已待人）" : ""}`,
       );
     }
-    lines.push("请基于**可访问的近期消息、工具调用/结果、进度与阻塞证据**逐条核对是否僵局：");
-    lines.push(`  · ${CARE_STALL_SIGNALS.join(" / ")}`);
-    lines.push("纪律：");
-    lines.push("- 正常长耗时构建/测试/网络等待、有实质进展的任务不得仅因超时被中断；");
-    lines.push("- 证据不足 ⇒ 继续观察或直接询问子代理，不要伪称已发现逻辑死循环；");
-    lines.push("- 干预须遵守宿主真实能力与既有人工 gate：" + CARE_PRESERVED_GATES.join(" / ") + "；");
-    lines.push("- 本插件**不会**自动中断/放弃/重启子代理；宿主干预 seam 若未验证，只作提醒，由主管按授权流程处理。");
-    lines.push("- 有明确僵局证据才请求暂停并确认停稳；放弃重开须先确认旧 child 不运行并按既有准入与返工授权开新 attempt；");
-    lines.push("- 无法安全解决 / 范围或判据冲突 ⇒ 停止相关执行并报告人类裁决，禁止无限自动重试。");
+    if (compact) {
+      lines.push(`纪律（完整检查清单 + 纪律正文已在本主管会话首次关照中给出，勿重复展开；需要时按需查阅资产：prompts/${ref}）：`);
+      for (const line of CARE_COMPACT_DISCIPLINE_ZH) lines.push(line);
+    } else {
+      lines.push("请基于**可访问的近期消息、工具调用/结果、进度与阻塞证据**逐条核对是否僵局：");
+      for (const line of discipline.split(/\r?\n/)) if (line.trim()) lines.push(line.replace(/\s+$/, ""));
+    }
     lines.push("结论分类（按定义判断，不得凭 elapsed/预期静默推断）：");
     for (const clause of CARE_OUTCOME_CONTRACT_ZH) lines.push(`  · ${clause}`);
     lines.push(
@@ -2226,15 +2334,13 @@ export function formatCareWakeMessage(input: {
         `  · goal=${t.goal} attempt=${t.attempt} child=${t.child} running for about ${elapsed} min; last care ${since}; no-progress ${t.stagnantRounds}/${t.maxStagnantRounds}${t.humanLocked ? " (awaiting human)" : ""}`,
       );
     }
-    lines.push("Check for a stall using the accessible recent messages, tool calls/results, and progress/blocking evidence:");
-    lines.push(`  · ${CARE_STALL_SIGNALS.join(" / ")}`);
-    lines.push("Discipline:");
-    lines.push("- Long builds/tests/network waits with real progress must not be interrupted merely for taking time;");
-    lines.push("- If evidence is insufficient, keep observing or ask the child; never claim a proven infinite loop;");
-    lines.push("- Interventions must respect real host capabilities and existing human gates: " + CARE_PRESERVED_GATES.join(" / ") + ";");
-    lines.push("- This plugin NEVER auto-interrupts/abandons/restarts a child; unverified host intervention seams are advisory only and must go through authorized human gates.");
-    lines.push("- Request a pause only with clear stall evidence, and confirm the child has stopped; abandoning/restarting requires the existing admission and rework authorization;");
-    lines.push("- If it cannot be resolved safely or scope/criteria conflict, stop the execution and report to the human; never retry infinitely.");
+    if (compact) {
+      lines.push(`Discipline (the full checklist and discipline text were sent in this supervisor session's first care round; do not re-expand; consult the asset on demand: prompts/${ref}):`);
+      for (const line of CARE_COMPACT_DISCIPLINE_EN) lines.push(line);
+    } else {
+      lines.push("Check for a stall using the accessible recent messages, tool calls/results, and progress/blocking evidence:");
+      for (const line of discipline.split(/\r?\n/)) if (line.trim()) lines.push(line.replace(/\s+$/, ""));
+    }
     lines.push("Outcome definitions (judge by these definitions; never infer from elapsed time or expected silence):");
     for (const clause of CARE_OUTCOME_CONTRACT_EN) lines.push(`  · ${clause}`);
     lines.push(

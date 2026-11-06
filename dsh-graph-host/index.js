@@ -22,6 +22,9 @@ import { createRequire } from "node:module";
 import { parse as parseYaml } from "yaml";
 import {
   createGoal,
+  // g-618：纪律资产读取（公共层 `prompts/care-discipline.*.md`）。host 经 ops 取同一实现，
+  // 缺资产时由 core 的 `resolveCareDisciplineText` **fail-open**，绝不中断巡检（g-346 教训）。
+  readCorePromptAsset,
   normalizeGoalType,
   setCriteria,
   updateCriteria,
@@ -255,6 +258,9 @@ import {
   isCareReminderStillValid,
   careStatusProjection,
   formatCareWakeMessage,
+  // g-618：纪律资产解析（fail-open）与「首次全量、后续精简」的常量。
+  CARE_DISCIPLINE_ASSET,
+  resolveCareDisciplineText,
   makeCareAuditEntry,
   formatCareAudit,
 } from "./core/ops.js";
@@ -299,6 +305,21 @@ export { boardPayload, versionGoals, backlogGoals, compareVersions } from "./cor
 // 导出的是**同一函数引用**（非副本），故经此入口的裁决与 `graph_help` 运行时逐字同源；
 // 生产代码不消费这两个导出，注册面与行为均不变。
 export { helpTopicText as _helpTopicText, isGraphEngineeringSectionTitle as _isGraphEngineeringSectionTitle };
+
+/**
+ * g-618：「本主管会话已收到过完整纪律」的持久标记归一（只认精确身份，绝不猜）。
+ *
+ * 记的是**发放首份全量正文时的主管会话 id**；缺失/形态不对一律 `null`（= 未知 = 按首次处理）。
+ * 在 `syncIdentity` 里只比 `session === entry.supervisorId`，因此换会话 / 重启（新会话 id）
+ * 都自然回落为首次 —— 不是「全局只看一次」，而是**每个主管会话的第一份**是全量。
+ */
+export function normalizeDisciplineSeen(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const session = typeof raw.session === "string" && raw.session ? raw.session : null;
+  if (!session) return null;
+  const at = Number(raw.at);
+  return { session, at: Number.isFinite(at) ? at : null };
+}
 
 // g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
 // JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
@@ -421,7 +442,7 @@ export function resolveDesignDiagramRequest(rawUrl) {
 // 「提示词模板」页签把**随包发布**的 `prompts/*.md` 逐个只读展示给用户 —— 展示的内容与引擎
 // 实际投递给 Agent 的资产是**同一份产物**（`dist/prompts/`），不复制、不改写、不新增第二份文案。
 // 安全口径（与 g-462 图路由同一形状：单一路径入口、**无任何写路径**）：
-//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-496 起 54 个 = 27 个资产
+//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-618 起 56 个 = 28 个资产
 //      × zh/en）可被读取，其余一律拒绝；清单**不在此处硬编码**（注册表是唯一真源）；
 //   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
 //      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
@@ -452,6 +473,9 @@ const HELP_ASSET_REGISTRY = Object.freeze([
   { name: "attempt-report-skeleton.zh.md", ownership: "public", category: "reporting", relativePath: "prompts/attempt-report-skeleton.zh.md" },
   { name: "automation-guidance.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.en.md" },
   { name: "automation-guidance.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.zh.md" },
+  // g-618：关照唤醒正文外置的「纪律 + 检查清单」（公共层；三值定义不在此处）。
+  { name: "care-discipline.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/care-discipline.en.md" },
+  { name: "care-discipline.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/care-discipline.zh.md" },
   { name: "collect-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.en.md" },
   { name: "collect-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.zh.md" },
   { name: "discipline.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/discipline.en.md" },
@@ -1978,6 +2002,11 @@ export function createCareRuntime(options = {}) {
     lastOutcome: null,
     seq: 0,
     lastReason: "disabled_by_config",
+    /**
+     * g-618：「本主管会话已收到过完整纪律」的持久标记（随 care.* 事件快照落盘，重启可恢复）。
+     * 粒度 = **主管会话**（keyed by supervisorId）：换主管会话 / 宿主重启（新会话 id）均视为首次。
+     */
+    disciplineSeen: null,
   });
 
   /** g-506 返工 B5：把一组 care 状态压成事件里的快照（只在 care.* 事件 details.care_state）。 */
@@ -2002,6 +2031,10 @@ export function createCareRuntime(options = {}) {
       transportFailures: entry.transportFailures ?? 0,
       lastOutcome: entry.lastOutcome ?? null,
       seq: entry.seq ?? 0,
+      // g-618（加法式字段，不升 version）：旧快照无此键 ⇒ null ⇒ 重启后按「首次」处理。
+      // 必须支持 `opts` 覆盖：首发的那一份要在**同一份**快照里就把「本会话已看过纪律」落盘
+      // （投递前entry 上还是旧值；漏读 opts 会让标记永远停在旧值 ⇒ 重启后误判为首次，纪律白省）。
+      disciplineSeen: (opts.disciplineSeen ?? entry.disciplineSeen) ?? null,
     };
   };
 
@@ -2329,6 +2362,7 @@ export function createCareRuntime(options = {}) {
       if (ins.messageId) entry.messageIndex.set(ins.messageId, ins.id);
     }
     entry.supervisorId = typeof state.supervisor === "string" && state.supervisor ? state.supervisor : null;
+    entry.disciplineSeen = normalizeDisciplineSeen(state.disciplineSeen);
     entry.transportFailures = Math.max(0, Math.floor(numberOr(state.transportFailures, 0)));
     entry.lastOutcome = state.lastOutcome && typeof state.lastOutcome === "object" ? state.lastOutcome : null;
     entry.seq = Math.max(0, Math.floor(numberOr(state.seq, 0)));
@@ -3442,6 +3476,13 @@ export function createCareRuntime(options = {}) {
     }
   };
 
+  /**
+   * g-618：「首次全量、后续精简」的生效开关。**默认开启**（未配置/null = true）；
+   * 只有显式 `supervisor.care_wake_compact: false` 才逐字回退旧行为（每份都内联完整纪律）。
+   * 取值面只认真布尔（写侧 schema 已拒 "false"/0 等隐式形态）⇒ 不做字符串猜测。
+   */
+  const compactWakeEnabledOf = (cfg) => cfg?.supervisor?.care_wake_compact !== false;
+
   const warningsOf = (cfg, global) => {
     const warnings = [];
     if (cfg?.supervisor?.care_malformed === true) warnings.push("project_care_malformed");
@@ -3765,6 +3806,18 @@ export function createCareRuntime(options = {}) {
           recheckSeconds: nowCfg.projection.recheck_seconds,
           targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, bindingVersion: t.bindingVersion })),
         });
+        // g-618「首次全量、后续精简」：**默认开启**；`supervisor.care_wake_compact: false` 时逐字旧行为。
+        // 首份 = 本**主管会话**还没收到过完整纪律（标记随 care_state 快照持久化，换会话/重启 ⇒ 首次）。
+        // 纪律资产缺失/不可读 ⇒ fail-open 回退 inline 全文（degraded=true 记入事件），绝不中断巡检。
+        const wakeLang = langOf();
+        const compactEnabled = compactWakeEnabledOf(nowCfg.cfg);
+        const earlierFull = entry.disciplineSeen && entry.disciplineSeen.session === entry.supervisorId;
+        const compact = compactEnabled && !!earlierFull;
+        const discipline = resolveCareDisciplineText({
+          lang: wakeLang,
+          load: (lang) => readCorePromptAsset(CARE_DISCIPLINE_ASSET, lang),
+        });
+        const wakeProvenance = { compact, full: !compact, source: compact ? "asset_ref" : discipline.source, degraded: discipline.degraded };
         const text = formatCareWakeMessage({
           inspectionId: inspection.id,
           targets: due.map((t) => ({
@@ -3778,7 +3831,9 @@ export function createCareRuntime(options = {}) {
             humanLocked: t.humanLocked,
           })),
           maxStagnantRounds: nowCfg.projection.max_stagnant_rounds,
-          lang: langOf(),
+          lang: wakeLang,
+          mode: compact ? "compact" : "full",
+          discipline: discipline.text,
         });
         const message = createCareUserMessage({
           text,
@@ -3789,6 +3844,11 @@ export function createCareRuntime(options = {}) {
         const plannedGroup = { ...planned.group, revision: entry.group.revision + 1 };
         const plannedInspections = new Map(entry.inspections);
         plannedInspections.set(inspection.id, inspection);
+        // g-618：首份全量正文后才承认「本会话已看过纪律」——它必须与**真实发出**的正文一致，
+        // 因此随同一份 care_state 快照落盘（send 失败时按投递前状态回滚，标记一并回滚）。
+        const disciplineSeen = wakeProvenance.full || !wakeProvenance.compact
+          ? { session: entry.supervisorId, at }
+          : (entry.disciplineSeen ?? null);
         // 事件先行：快照（含 pending 巡检与已推进的未答预算）先落盘，再 send。
         // 崩溃在 send 前：恢复端把 queued 视为已发，绝不重复发送（宁可漏一次，不双发）。
         try {
@@ -3807,12 +3867,18 @@ export function createCareRuntime(options = {}) {
             max_stagnant_rounds: nowCfg.projection.max_stagnant_rounds,
             wake_kind: "care_inspection",
             message_id: message.id,
-          }, careStateSnapshot(entry, { group: plannedGroup, tasks: planned.tasks, inspections: [...plannedInspections.values()] }));
+            // g-618：本份唤醒的投递形态与纪律来源（机读、可核验）；关闭开关时三字段恒定
+            // full/config_off 且正文逐字等价于旧行为。
+            wake_form: wakeProvenance.compact ? "compact" : "full",
+            wake_discipline_source: wakeProvenance.source,
+            wake_discipline_degraded: wakeProvenance.degraded,
+          }, careStateSnapshot(entry, { group: plannedGroup, tasks: planned.tasks, inspections: [...plannedInspections.values()], disciplineSeen }));
         } catch { return "append_failed"; }
         entry.group = plannedGroup;
         entry.tasks = new Map(planned.tasks.map((t) => [taskKey(t), t]));
         entry.inspections.set(inspection.id, inspection);
         entry.messageIndex.set(message.id, inspection.id);
+        entry.disciplineSeen = disciplineSeen;
         sentInspection = inspection;
         let sent;
         try {
@@ -3878,6 +3944,9 @@ export function createCareRuntime(options = {}) {
       }
       entry.supervisorId = sup.sid;
       entry.supervisorAgent = sup.agent;
+      // g-618：换主管会话（含宿主重启后的新会话）⇒ 该会话的新模型上下文没见过纪律 ⇒ 视为首次。
+      // 旧标记不会「顺着」新会话继续生效（那会把纪律永久省掉）。
+      if (entry.disciplineSeen && entry.disciplineSeen.session !== sup.sid) entry.disciplineSeen = null;
       return true;
     }
     if (sup.agent !== entry.supervisorAgent) {
@@ -9534,6 +9603,14 @@ export function apply(ctx, config) {
               default: null,
               minimum: 30,
               maximum: 86400,
+            },
+            // g-618：关照唤醒正文「首次全量、后续精简」开关（默认开启 = 未配置/null）。
+            // 只控制**文案投递方式**；关闭 = 逐字回退「每份都内联完整纪律」的旧行为。
+            "supervisor.care_wake_compact": {
+              type: "boolean",
+              scope: "workspace",
+              default: true,
+              values: [true, false, null],
             },
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],

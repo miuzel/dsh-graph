@@ -90,6 +90,8 @@ const KEY_ANCHORS: Record<string, string> = {
   "supervisor.care": 'set(["supervisor", "care"], e.target.value === "inherit" ? null : e.target.value)',
   "supervisor.care_threshold_seconds": 'set(["supervisor", "care_threshold_seconds"], e.target.value === "" ? null : Number(e.target.value))',
   "supervisor.care_recheck_seconds": 'set(["supervisor", "care_recheck_seconds"], e.target.value === "" ? null : Number(e.target.value))',
+  // g-618：关照唤醒正文「首次全量、后续精简」开关的唯一写入点（同属「高级设置」页签）。
+  "supervisor.care_wake_compact": 'set(["supervisor", "care_wake_compact"], e.target.checked)',
   "local.refresh_interval": "onChange: (e) => handleIntervalChange(e.target.value)",
   "local.live_display": "setLiveDisplay(e.target.checked)",
   // g-488：`defaults.review.reviewer` / `defaults.review.prompt` / `defaults.pk.lanes` /

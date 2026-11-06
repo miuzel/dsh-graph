@@ -343,6 +343,11 @@ export {
   isCareReminderStillValid,
   careStatusProjection,
   formatCareWakeMessage,
+  // g-618：「首次全量、后续精简」——纪律资产解析（fail-open）与精简版兜底纪律。
+  CARE_DISCIPLINE_ASSET,
+  CARE_COMPACT_DISCIPLINE_ZH,
+  CARE_COMPACT_DISCIPLINE_EN,
+  resolveCareDisciplineText,
   makeCareAuditEntry,
   formatCareAudit,
   careResolutionOf,
@@ -2036,6 +2041,11 @@ export interface ProjectConfig {
     /** g-506 **仅读侧元信息**：时间参数原始值存在但非法（按继承处理并显示告警）。 */
     care_threshold_seconds_malformed?: boolean;
     care_recheck_seconds_malformed?: boolean;
+    /**
+     * g-618：项目级「首次全量、后续精简」开关。`null` = 未配置 = **开启**（默认）；
+     * `false` = 逐字回退「每份都内联完整纪律」的旧行为。它只管文案投递方式，不是纪律内容 override。
+     */
+    care_wake_compact?: boolean | null;
     /** g-506：关照的**项目半边**只读投影（host 会以真实全局值重新投影后下发 UI/REST）。 */
     care_effective?: CareEffectiveProjection;
   };
@@ -2367,7 +2377,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     return {
       executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
-      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false, care: null, care_malformed: false, care_threshold_seconds: null, care_recheck_seconds: null, care_threshold_seconds_malformed: false, care_recheck_seconds_malformed: false },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false, care: null, care_malformed: false, care_threshold_seconds: null, care_recheck_seconds: null, care_threshold_seconds_malformed: false, care_recheck_seconds_malformed: false, care_wake_compact: null },
       prompt_overrides: { subagent: { state: "default", value: null } },
       // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
       modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
@@ -2538,6 +2548,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     | "care" | "care_raw" | "care_malformed"
     | "care_threshold_seconds" | "care_threshold_seconds_malformed"
     | "care_recheck_seconds" | "care_recheck_seconds_malformed"
+    | "care_wake_compact"
     | "care_effective"
   > => {
     const sv = isPlainObject(parsedDoc) && isPlainObject((parsedDoc as any).supervisor)
@@ -2551,6 +2562,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     const modeRaw = pickRaw("care");
     const thresholdRaw = pickRaw("care_threshold_seconds");
     const recheckRaw = pickRaw("care_recheck_seconds");
+    const wakeCompactRaw = pickRaw("care_wake_compact");
     const threshold = normalizeCareSeconds(thresholdRaw.present ? thresholdRaw.value : null);
     const recheck = normalizeCareSeconds(recheckRaw.present ? recheckRaw.value : null);
     const modeMalformed = documentMalformed
@@ -2575,6 +2587,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       care_threshold_seconds_malformed: thresholdRaw.present && threshold === null,
       care_recheck_seconds: recheck,
       care_recheck_seconds_malformed: recheckRaw.present && recheck === null,
+      care_wake_compact: wakeCompactRaw.present && !documentMalformed && wakeCompactRaw.value === false ? false : null,
       care_effective: careEffectiveProjection(projectHalf, { enabled: null, thresholdSeconds: null, recheckSeconds: null }),
     };
   };

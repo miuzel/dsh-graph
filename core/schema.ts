@@ -446,6 +446,10 @@ export const projectConfigPatchSchema: ObjectSchema = {
         // g-506：关照时间参数（秒）；范围与类型在 validateConfigPatch 内二次校验（[30, 86400]）。
         care_threshold_seconds: { type: ["integer", "number"], minimum: 30, maximum: 86400, nullable: true },
         care_recheck_seconds: { type: ["integer", "number"], minimum: 30, maximum: 86400, nullable: true },
+        // g-618：关照唤醒正文「首次全量、后续精简」开关。未配置/null = **开启**（默认，目标价值所在）；
+        // false = 逐字回退「每份都内联完整纪律」的旧行为。只允许真布尔或 null（拒绝 "true"/1 等隐式形态）。
+        // 它只控制**文案投递方式**，不是纪律内容的 override 通道 —— 纪律正文在公共层资产里逐字受守卫。
+        care_wake_compact: { type: "boolean", nullable: true },
       },
       additionalProperties: false,
     },

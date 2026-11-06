@@ -270,6 +270,25 @@ dsh-graph 为 Agent 提供了完善的工具链（共 53 个 `graph_*` 工具）
 
 ---
 
+### 关照唤醒正文：首次全量、后续精简（`supervisor.care_wake_compact`）
+
+长任务关照的每次唤醒都会带上「检查清单 + 纪律 + 三值结论定义 + 回传要求」。项目级开关
+`supervisor.care_wake_compact` 控制**纪律与检查清单的投递方式**（默认 `null` = **开启**）：
+
+- **开启（默认）**：同一主管会话的**第一份**唤醒内联完整检查清单与纪律（正文与旧行为逐字一致）；
+  **第二份及以后**只保留兜底纪律（「计时到期不是卡死证据」「证据不足 ⇒ unknown」）+ 指向
+  `prompts/care-discipline.{zh,en}.md` 的资产路径，用来节省多目标巡检时的重复注入。
+- **关闭（`false`）**：每份唤醒都内联完整纪律 —— 逐字回退到旧行为，可一键退回。
+
+不变的部分（两态都一样）：`inspection=<id>`、每个目标的 goal/attempt/child、
+`outcome=progress|no-progress|unknown`、三值定义、evidence 与「必须用 `graph_care_outcome` 回传」的
+要求**永远内联**（回传校验是 fail-closed 的）；计数/锁/升级规则一律不变。纪律资产缺失或不可读时
+**fail-open 回退内联全文**（`care.inspection` 事件里以 `wake_discipline_degraded=true` 如实标注），
+绝不因少一个 `.md` 中断巡检。「已发过全量纪律」按**主管会话**判定并持久化到关照状态快照——
+换主管会话或宿主重启后的新会话都重新按首次处理。界面入口：设置 → **高级** → 子代理长任务关照。
+
+---
+
 ### 数据存储说明
 
 插件数据保存在当前工作区下的 `.dsh-graph/` 目录：
