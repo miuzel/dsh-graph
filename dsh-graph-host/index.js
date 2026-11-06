@@ -262,6 +262,10 @@ import {
   legacyPausedCooldownRemainingMs,
   CARE_NO_RESPONSE_COOLDOWN_MS,
   CARE_RUN_HISTORY_LIMIT,
+  careCoalescedWakeAt,
+  careCoalesceBatch,
+  expireStaleInspectionTargets,
+  CARE_COALESCE_WINDOW_MS,
 } from "./core/care.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
@@ -3116,31 +3120,45 @@ export function createCareRuntime(options = {}) {
     return updated;
   };
 
-  /** B15 补充：已投递巡检的目标结束/换绑 ⇒ 自动 expire，不阻塞其他仍活任务；
-   *  不撤回已发消息，过期后的真实结果仍按 inspection_not_open 拒绝。 */
+  /**
+   * B15 补充 + g-616：已投递巡检的**某个**目标结束/换绑 ⇒ 只作废**那一个** target，
+   * 不阻塞同批其他仍活任务；不撤回已发消息，作废后的真实结果按 `target_expired` 拒绝。
+   *
+   * g-616（判据 3）：合并唤醒会把多个目标放进同一条巡检，因此**绝不能**再「任一目标陈旧 ⇒
+   * 整条 expired」——那会让一个目标结束连带作废整批，其余目标的关照就丢了。
+   * 全部 target 都作废时，纯函数 `expireStaleInspectionTargets` 才把整条转 `expired`。
+   */
   const expireStaleInspections = (entry, sampled) => {
     const live = new Map(sampled.map((t) => [taskKey(t), Number(t.bindingVersion) || 0]));
     const next = new Map(entry.inspections);
     const expired = [];
+    const at = now();
     for (const ins of entry.inspections.values()) {
-      if (ins.status === "resolved" || ins.status === "failed" || ins.status === "expired") continue;
-      const stale = ins.targets.some((t) => live.get(`${t.child}\u0000${t.attempt}`) !== (Number(t.bindingVersion) || 0));
-      if (!stale) continue;
-      const nextIns = { ...ins, status: "expired", lastError: "stale_target" };
-      next.set(ins.id, nextIns);
-      expired.push(nextIns);
+      const result = expireStaleInspectionTargets(ins, live, at);
+      if (!result.changed) continue;
+      next.set(ins.id, result.inspection);
+      expired.push({ inspection: result.inspection, targets: result.expiredTargets });
     }
     if (expired.length === 0) return false;
     const snapshot = careStateSnapshot(entry, { inspections: [...next.values()] });
     try {
       appendCareEvent(entry, "care.inspection.expired", {
-        inspections: expired.map((i) => i.id),
+        // 整条巡检被作废的 id（全部 target 都已陈旧时才会出现）
+        inspections: expired.filter((e) => e.inspection.status === "expired").map((e) => e.inspection.id),
+        // g-616 可观测性（判据 6）：逐 target 作废明细，说明「本次作废了哪些目标」
+        expired_targets: expired.flatMap((e) => e.targets.map((t) => ({
+          inspection: e.inspection.id,
+          goal: t.goal,
+          attempt: t.attempt,
+          child: t.child,
+          binding_version: t.bindingVersion,
+        }))),
         reason: "stale_target",
       }, snapshot);
     } catch { /* 事件失败仍要在内存解阻，避免整组被过时巡检卡死到过期 */ }
     entry.inspections = next;
-    for (const ins of expired) {
-      if (ins.messageId) entry.messageIndex.delete(ins.messageId);
+    for (const e of expired) {
+      if (e.inspection.status === "expired" && e.inspection.messageId) entry.messageIndex.delete(e.inspection.messageId);
     }
     return true;
   };
@@ -3489,6 +3507,30 @@ export function createCareRuntime(options = {}) {
     return { cfg, global, resolution, projection, agent, caps, sampled, decision, warnings: warningsOf(cfg, global) };
   };
 
+  /**
+   * g-616 方案 A（负责人裁定 2026-11-06）：**单条定时唤醒**。
+   *
+   * 只要有在途子代理，本 board 就只维持**一条**定时器，按全组**最早**到期触发
+   * （`careCoalescedWakeAt`）；「合并」发生在**触发之后选批**这一步：`dueTargetsOf`
+   * 用 `careCoalesceBatch` 把已到期 + 宽限（`CARE_COALESCE_WINDOW_MS`）内即将到期的
+   * 邻居一次投进同一条巡检（现场：g-028 09:21:38 与 g-029 09:22:33 的 55 秒相邻到期，
+   * 合并后在 09:21:38 一次关照，g-029 提前 55 秒被关照）。
+   *
+   * 这里只决定**何时**触发；`deliver === true`（真的到期）⇒ 0ms，否则按最早到期排程
+   * （再被 `configRecheckMs` 封顶为配置重读上界，重扫不投递）。
+   *
+   * 不改变任何关照**语义**（阈值/复查间隔/300s 冷却/上限/人工锁/暂停冻结/inspection_open）。
+   */
+  const coalescedWakeDelay = (entry, decision) => {
+    const dueAts = [];
+    for (const s of decision?.tasks ?? []) {
+      if (s.escalated) continue;             // 已升人工：不参与合并，也不提前唤醒
+      if (typeof s.dueAt === "number" && Number.isFinite(s.dueAt)) dueAts.push(s.dueAt);
+    }
+    const at = careCoalescedWakeAt(dueAts, now());
+    return at === null ? null : Math.max(0, at - now());
+  };
+
   const scheduleEntry = (entry) => {
     if (!started || disposed || !entry) return;
     clearTimer(entry);
@@ -3497,8 +3539,9 @@ export function createCareRuntime(options = {}) {
     let delay = configRecheckMs;
     const decision = computed?.decision ?? null;
     if (decision?.deliver) delay = 0;
-    else if (decision?.nextDueAt !== null && decision?.nextDueAt !== undefined) {
-      delay = Math.max(0, decision.nextDueAt - now());
+    else {
+      const coalesced = coalescedWakeDelay(entry, decision);
+      if (coalesced !== null) delay = coalesced;
     }
     if (decision?.phase === "waiting_supervisor" || decision?.reason === "delivering") delay = Math.min(delay, busyRecheckMs);
     if (decision?.deliver && entry.retryNotBefore !== null) {
@@ -3530,9 +3573,17 @@ export function createCareRuntime(options = {}) {
 
   const dueTargetsOf = (entry, decision) => {
     const due = [];
+    // g-616 方案 A：一次唤醒投递**一整批**——已到期 + 宽限内即将到期的邻居一并纳入，
+    // 而不是只投最早那一个、55 秒后再为邻居投第二次（现场 01:21:38 / 01:22:33）。
+    const batch = careCoalesceBatch(
+      (decision?.tasks ?? []).filter((s) => !s.escalated),
+      now(),
+      CARE_COALESCE_WINDOW_MS,
+    );
+    const inBatch = new Set(batch.map((b) => `${b.child}\u0000${b.attempt}`));
     for (const s of decision?.tasks ?? []) {
       if (s.escalated) continue;
-      if (s.dueInMs === null || s.dueInMs > 0) continue;
+      if (!inBatch.has(`${s.child}\u0000${s.attempt}`)) continue;
       const st = entry.tasks.get(`${s.child}\u0000${s.attempt}`);
       if (!st) continue;
       due.push({
@@ -3544,6 +3595,9 @@ export function createCareRuntime(options = {}) {
         lastCareAt: st.lastCareAt,
         stagnantRounds: st.stagnantRounds,
         humanLocked: st.humanLocked === true,
+        // g-616 可观测性（判据 6）：该目标在本次唤醒时是否**已到期**（false = 因宽限提前并入）。
+        coalesced: (s.dueInMs ?? 0) > 0,
+        dueAt: s.dueAt,
       });
     }
     return due;
@@ -3716,6 +3770,13 @@ export function createCareRuntime(options = {}) {
             inspection: inspection.id,
             supervisor: entry.supervisorId,
             targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, binding_version: t.bindingVersion })),
+            // g-616 判据 6：合并发生时留下可核验记录——本批共几个目标、其中几个是
+            // 「宽限内提前并入」（尚未到期）、并入窗口长度。
+            coalesce: {
+              batch_size: due.length,
+              merged_ahead: due.filter((t) => t.coalesced === true).map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child })),
+              window_ms: CARE_COALESCE_WINDOW_MS,
+            },
             revision: plannedGroup.revision,
             max_stagnant_rounds: nowCfg.projection.max_stagnant_rounds,
             wake_kind: "care_inspection",
