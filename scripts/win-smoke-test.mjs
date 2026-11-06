@@ -1340,6 +1340,10 @@ export const DSH_TOOL_PLUGIN_REGISTRY = Object.freeze([
   ["@deepseek-ai/dsh-tool-bash-persistent", null, "持久终端，不在角色白名单"],
   ["@deepseek-ai/dsh-tool-pwsh-persistent", null, "持久终端，不在角色白名单"],
   ["@deepseek-ai/dsh-tool-call-timeout-policy", null, "策略件，不注册模型面向工具"],
+  // g-617：DSH 0.2.2 起工具批次由**工具执行器**提供者承载（`ctx.tools.setExecutor()`，每作用域恰一个）。
+  // 二者不注册模型面向工具，是互斥的执行策略选择：native 为默认（`dsh-base` 组合里 ptc 默认 `disabled`）。
+  ["@deepseek-ai/dsh-tool-executor-native", null, "工具执行器（原生直执行），不注册模型面向工具；与 ptc 互斥"],
+  ["@deepseek-ai/dsh-tool-executor-ptc", null, "工具执行器（PTC 模式），不注册模型面向工具；组合里默认 disabled"],
   ["@deepseek-ai/dsh-tool-cordis", null, "角色白名单不裁剪"],
   ["@deepseek-ai/dsh-tool-goal", null, "角色白名单不裁剪"],
   ["@deepseek-ai/dsh-tool-jobs", null, "角色白名单不裁剪"],
