@@ -4,3 +4,4 @@
 【操作纪律】所有代码改动、测试执行与 `git` 提交都必须发生在该 worktree 内：先 `cd <绝对路径>` 再操作，或对每条命令显式使用 `git -C <绝对路径>`（读写文件也要用 worktree 内的绝对路径，不要依赖 cwd）。**禁止在主工作树产生任何代码改动**（含未提交改动）。看板数据 .dsh-graph/ 仍由 graph_* 工具写主工作树，这是唯一允许落在主树的写入，不得以此为理由在主工作树改代码。
 【唯一例外】仅当 supervisor 在本次派发的 attempt brief 中明确写出 `worktree=false` 与理由时，才允许豁免独立 worktree；文档/长期记忆等小修改由 supervisor 自己处理，子代理不得擅自套用例外。即便 worktree=false，main 分支仍绝对只读，禁止直接修改 main。
 【worktree 命名约定】attempt 工作树统一遵循 .worktrees/g-<goal-number>-att-<NN> 规范，分支使用相同后缀（如 `g-<goal-number>-att-<NN>`），消除歧义与分支冲突。
+【隔离语义（如实，不得夸大）】**worktree 是工作位置隔离，不是权限隔离**：同属工作区根的其他树（兄弟 worktree、主树）在本沙箱里**仍可写**，只有越出沙箱根才会被拒绝（0.2.1-rc.5 用宿主同款 bwrap 实测：沙箱根 P、cwd=P/A 时写 A 与兄弟 B 均成功，P 外 EROFS 且无文件生成）。因此「切到某个 worktree」**不会**收窄你的写入权限，防止误改主树靠的是纪律与提交边界，不是沙箱。

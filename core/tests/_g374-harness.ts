@@ -7,7 +7,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import { init, createGoal, setCriteria, findGoalFile } from "../ops.ts";
+import { init, createGoal, setCriteria, findGoalFile, loadGoal, saveGoal } from "../ops.ts";
+import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
 import { ownerConnectionStub, OWNER_HEADER } from "./_http-auth-harness.ts";
 
@@ -31,7 +32,31 @@ export function createHarness() {
  */
 export type HarnessDispatchApi = "legacy" | "activation" | "both" | "none";
 
-export function createHarnessWith(opts: { dispatchApi?: HarnessDispatchApi; dispatchError?: unknown }) {
+/**
+ * g-613：复用空闲专家子代理所需的**宿主面桩**（全部可选；缺省 = 与 g-374 以来逐字一致的行为）。
+ *
+ * 为什么复用同一桩：复用路径同样要过「准入 → attempt 落盘 → 绑定 → 投递 → 归因 → 结果截获」，
+ * 各写一份桩会让「谁被绑定/谁收到提示词/哪个 end 被丢弃」出现口径漂移。
+ *   · `childRegistry`：`agents.get` / `agents.isOwnedBy` 的可控返回值（id → { status, ownedBy }）。
+ *     未列出的 child 视为 `gone`（不存在于 live registry）。
+ *   · `sendMessage`：`subagents.sendMessage` 的行为（accepted / reject / hang）。
+ */
+export interface ReuseChildStub {
+  status?: "running" | "idle" | "unknown";
+  /** 允许向其发消息的父 Agent id；缺省 = 任意（测试不关心归属时）。 */
+  ownedBy?: string[];
+}
+
+export interface ReuseHarnessOptions {
+  childRegistry?: Record<string, ReuseChildStub | undefined>;
+  sendMessage?: (parent: any, targetId: string, content: any[]) => Promise<string>;
+}
+
+export function createHarnessWith(opts: {
+  dispatchApi?: HarnessDispatchApi;
+  dispatchError?: unknown;
+  reuse?: ReuseHarnessOptions;
+}) {
   const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "legacy";
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-h-"));
   const root = join(ws, ".dsh-graph");
@@ -64,9 +89,32 @@ export function createHarnessWith(opts: { dispatchApi?: HarnessDispatchApi; disp
       return record("startActivation", spec, {});
     };
   }
+  const sentMessages: Array<{ parentId: string; targetId: string; content: any[] }> = [];
+  const childRegistry = opts.reuse?.childRegistry ?? null;
+  if (childRegistry) {
+    service.sendMessage = async (parent: any, targetId: string, content: any[]) => {
+      sentMessages.push({ parentId: String(parent?.id ?? ""), targetId: String(targetId), content });
+      if (opts.reuse?.sendMessage) return opts.reuse.sendMessage(parent, targetId, content);
+      return `msg-${sentMessages.length}`;
+    };
+  }
   const ctx: any = {
     get: (name: string) => {
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      if (name === "agents" && childRegistry) {
+        return {
+          get: (id: string) => {
+            const row = childRegistry[String(id)];
+            return row ? { id, status: row.status ?? "idle" } : undefined;
+          },
+          isOwnedBy: (id: string, _agent: any) => {
+            const row = childRegistry[String(id)];
+            if (!row) return false;
+            if (!row.ownedBy) return true;
+            return row.ownedBy.includes(String(_agent?.id ?? ""));
+          },
+        };
+      }
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
       if (name === "webServer") return webServer;
       if (name === "connection") return ownerConnectionStub(); // g-507：测试自有 owner 凭证夹具（经唯一门禁入口）
@@ -100,7 +148,11 @@ export function createHarnessWith(opts: { dispatchApi?: HarnessDispatchApi; disp
   };
   /** 子代理派发的 label 列表（用于「谁被派发了」的精确断言）。 */
   const labels = () => capturedRequests.map((r) => r?.label ?? "");
-  return { ws, root, toolsByName, routes, call, emit, labels, capturedRequests, capturedVia, execContext, handlers };
+  return {
+    ws, root, toolsByName, routes, call, emit, labels, capturedRequests, capturedVia, execContext, handlers,
+    /** g-613：复用路径投递到既有子代理的消息（parent/target/正文）。 */
+    sentMessages,
+  };
 }
 
 export function prepare(h: ReturnType<typeof createHarness>, opts: { title?: string; description?: string } = {}) {
@@ -133,4 +185,29 @@ export function restCall(route: any, body: any, method = "POST") {
     end(text: string) { this.payload = JSON.parse(text); },
   };
   return route.handler(req, res).then(() => res);
+}
+
+/** g-613：直接构造一条「目标正在执行/已交付」的事实（不经过工具，避免把被测派发路径绕回来）。 */
+export function seedGoalState(root: string, goal: string, attempt: string, childId: string, opts: { status?: string; result?: string } = {}) {
+  const file = join(root, "versions", "v1.0", "goals", goal, "goal.md");
+  const att = join(root, "versions", "v1.0", "goals", goal, "attempts", attempt, "attempt.md");
+  const goalDoc = loadGoal(file);
+  if (opts.status) goalDoc.meta.status = opts.status;
+  saveGoal(file, goalDoc);
+  const attDoc = loadGoal(att);
+  attDoc.meta.child_id = childId;
+  attDoc.meta.binding_version = (Number(attDoc.meta.binding_version) || 0) + 1;
+  if (opts.result) attDoc.meta.result = opts.result;
+  saveGoal(att, attDoc);
+  return { file, att };
+}
+
+/** g-613：读 attempt.md 的 meta（测试断言归属/绑定版本真源）。 */
+export function attemptMeta(root: string, goal: string, attempt: string): Record<string, any> {
+  return loadGoal(join(root, "versions", "v1.0", "goals", goal, "attempts", attempt, "attempt.md")).meta as Record<string, any>;
+}
+
+/** g-613：读整个事件流（断言 attempt.bound / attempt.reused / attempt.reuse_failed 等）。 */
+export function readAllEvents(root: string) {
+  return readEvents(root);
 }

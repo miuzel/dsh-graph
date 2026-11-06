@@ -86,6 +86,23 @@ dsh plugin --profile <name> add dsh-graph
 | 换会话 | `graph_handoff` · `graph_claim_supervisor` |
 | 帮助 | `graph_help` |
 
+### 复用专家子代理（`graph_start_attempt(child_id=...)`）
+
+把任务交给**已存在的专家子代理**时，用 `graph_start_attempt(goal, child_id=<专家 id>)` 派发，
+不要对它直接 `send_message` 私聊派活——前者会把目标推进 `in_progress`、落到 attempt 归属、
+纳入关照调度并留 `attempt.bound` / `attempt.reused` 事件。
+
+- **只接受空闲**子代理：运行中一律拒绝（可读错误、零副作用），因为向运行中的子代理投递会被宿主当作
+  steer 合入当前步；
+- **跨目标独占**：同一 child 不得同时绑定多个未交付目标的活跃 attempt；归属与关照键含
+  项目+目标+attempt+child+绑定版本+代际，`A/att-001` 与 `B/att-001` 不串账；
+- **投递不确定即 fail-closed**：只有宿主确证受理才回 `delivery=accepted / started=true`，
+  否则回 `child_error` 并记 `attempt.reuse_failed`；
+- 旧轮迟到的 `subagent/end` 不污染新目标；复用后关照按新绑定重新计时；
+- **复用不切换工作目录、不改变工具权限**（继承创建时的父会话），也不创建 worktree
+  （`worktree=false`、`worktree_reason=reused_child`）。**worktree 是工作位置隔离，不是权限隔离**
+  ——同属工作区根的兄弟树仍可写，只有越出沙箱根才被拒绝。
+
 ## 看板（浏览器客户端）
 
 浏览器二维泳道看板：横向为生命周期阶段列（描述 / 收集 / 执行 / 确认 / 交付 / 阻塞），每个版本一条泳道，另有 Backlog 与独立目标区；支持拖拽排期、判据 / 上下文卡片抽屉、实时状态显示、阻塞折叠等。以下为虚构演示数据（nebula-notes）截图：
