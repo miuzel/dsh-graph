@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { init, createGoal, setCriteria, goalDetail, CRITERIA_VERIFIED_MARK } from "../ops.ts";
 import { apply } from "../../dist/index.js";
 import { loadServicePlugin } from "./_http-auth-harness.ts";
-import { loadHostStack } from "./_host-stack.ts";
+import { initServiceInstances, loadHostStack } from "./_host-stack.ts";
 
 const INIT = Symbol.for("cordis.init");
 
@@ -95,6 +95,9 @@ export async function loadHostPackages() {
     persist: await load("dsh-session-persistence-jsonl"),
     loop: await load("dsh-agent-loop"),
     sub: await load("dsh-subagent"),
+    // g-617：0.2.2 起 ToolRuntime 需要一个**已装载的工具执行器**才能跑 tool 批次；
+    // 不装载则每轮 turn 立即以 TOOL_EXECUTOR_UNAVAILABLE 结束（「The selected tool executor is unavailable」）。
+    toolExecutorNative: await load("dsh-tool-executor-native"),
   };
 }
 
@@ -150,8 +153,11 @@ export async function makeRealHost(opts: {
   new P.projection.default(ctx);
   new P.systemPrompt.SystemPrompt(ctx, {});
   new P.tools.ToolRuntime(ctx, {});
+  // g-617：装载真实原生工具执行器（与宿主组合里的 `native-tool-executor` 同一实现，仅进程内直构）。
+  (P.toolExecutorNative as any).apply(ctx);
   new P.fs.LocalFileSystem(ctx, P.fs.LocalFileSystem.Config({}));
   new P.wd.WorkingDirectoryService(ctx, P.wd.WorkingDirectoryService.Config({ defaultDirectory: ws }));
+  const wd = ctx.get("workingDirectory");
   const reg = new P.agent.AgentRegistry(ctx);
   const llm = new P.llm.LlmRuntime(ctx);
   const adapter: any = new P.llm.LlmAdapter();
@@ -174,6 +180,11 @@ export async function makeRealHost(opts: {
   llm.registerAdapter(["fake"], adapter);
   const subagents = new P.sub.SubagentRuntime(ctx, P.sub.SubagentRuntime.Config({ maxDepth: 3, maxActiveSubagents: 8 }));
   const loop = new P.loop.AgentLoop(ctx, { agents: [], maxParallelToolCalls: 4 });
+  // g-617：驱动直构服务的 `[Service.init]`（视为依次 `ctx.plugin()`）。
+  // 顺序 = 依赖顺序：WorkingDirectoryService 注册 workingDirectory 投影（子代理启动时 ensure() 要读）
+  // → AgentRegistry 注册 turnBoundary 投影 → AgentLoop 注册其投影并 setFactory
+  // → SubagentRuntime 注册 catalog/timing/identity 三个投影。
+  await initServiceInstances([wd, reg, llm, loop, subagents]);
   const prepareGate = opts.holdPrepare ? Promise.withResolvers<void>() : null;
   subagents.registerProvider({
     name: "spawn",

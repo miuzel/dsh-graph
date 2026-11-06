@@ -344,11 +344,13 @@ test("g-507 B0：真实宿主栈来自已解析目录（版本固定，无作者
   assert.equal(typeof stack.WebServer, "function");
   assert.equal(typeof connectionApi.apply, "function", "必须是宿主公开 apply（不是测试自建的 BrowserAuth）");
   assert.match(resolveHostStack().dir, /node_modules\/@deepseek-ai$/);
-  // 版本锚点：宿主栈三件套的固定版本（升级宿主时必须同步改 _host-stack.ts 的 HOST_STACK_PINS）
+  // 版本锚点：宿主栈三件套的固定版本（升级宿主时必须同步改 _host-stack.ts 的 HOST_STACK_PINS）。
+  // g-617：随本机 DSH 0.2.2-rc.1（cordis 4.1.0）同步升级；兼容判定已按能力探测（hostStackCompatible），
+  // 本断言只钉住「基准版本」本身，避免宿主升级后锚点静默漂移。
   assert.deepEqual(HOST_STACK_PINS, {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-connection": "0.2.2-rc.1",
   });
 });
 

@@ -709,6 +709,8 @@ test("g506 投影/正文：到零只表示巡检到期；唤醒正文有界且�
 // ───────────────────────────── 3. 真实宿主全栈 ─────────────────────────────
 
 /** 真实宿主包解析（与既有 g505 套件同口径；不联网安装）。 */
+import { initServiceInstances } from "./_host-stack.ts";
+
 async function resolveHostScope(): Promise<string> {
   const env = process.env.G505_HOST_STACK_DIR || process.env.G507_HOST_STACK_DIR;
   if (env) return env;
@@ -743,6 +745,8 @@ async function loadHostStack() {
     Context: cordis.Context, llm, AgentRegistry: agent.AgentRegistry, SessionStore: session.SessionStore,
     SessionProjections: projection.default, SystemPrompt: systemPrompt.SystemPrompt, ToolRuntime: tools.ToolRuntime,
     AgentLoop: loop.AgentLoop,
+    // g-617：0.2.2 起 tool 批次需要已装载的执行器（与宿主组合里的 native-tool-executor 同一实现）。
+    NativeToolExecutor: (await load("dsh-tool-executor-native")).NativeToolExecutor,
   };
 }
 
@@ -784,17 +788,20 @@ function makeFakeAdapter(LlmAdapter: any) {
 }
 
 async function makeRealHost() {
-  const { Context, llm: llmMod, AgentRegistry, SessionStore, SessionProjections, SystemPrompt, ToolRuntime, AgentLoop } = await loadHostStack();
+  const { Context, llm: llmMod, AgentRegistry, SessionStore, SessionProjections, SystemPrompt, ToolRuntime, AgentLoop, NativeToolExecutor } = await loadHostStack();
   const hostCtx = new Context();
   new SessionStore(hostCtx);
   new SessionProjections(hostCtx);
   new SystemPrompt(hostCtx, {});
   new ToolRuntime(hostCtx, {});
+  hostCtx.tools.setExecutor(new NativeToolExecutor(hostCtx));
   const reg = new AgentRegistry(hostCtx);
   const llmRuntime = new llmMod.LlmRuntime(hostCtx);
   const adapter = makeFakeAdapter(llmMod.LlmAdapter);
   llmRuntime.registerAdapter(["observed"], adapter);
   new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
+  // g-617：驱动直构服务的 `[Service.init]`（cordis 只在 ctx.plugin() 装载时自动调用）。
+  await initServiceInstances([reg, hostCtx.get("agentLoop")]);
   return { hostCtx, llm: llmMod, llmRuntime, reg, adapter };
 }
 

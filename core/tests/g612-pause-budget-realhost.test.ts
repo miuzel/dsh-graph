@@ -16,6 +16,7 @@ import {
 } from "../ops.ts";
 import { appendEvent } from "../events.ts";
 import { invalidateBoardCache } from "../cache.ts";
+import { initServiceInstances } from "./_host-stack.ts";
 
 const TMP_BASE = realpathSync((() => { const p = join(process.cwd(), "tmp"); mkdirSync(p, { recursive: true }); return p; })());
 const OWNED: string[] = [];
@@ -50,6 +51,8 @@ async function loadHostStack() {
     SystemPrompt: (await load("dsh-system-prompt")).SystemPrompt,
     ToolRuntime: (await load("dsh-tools")).ToolRuntime,
     AgentLoop: (await load("dsh-agent-loop")).AgentLoop,
+    // g-617：0.2.2 起 tool 批次需要已装载的执行器（与宿主组合里的 native-tool-executor 同一实现）。
+    NativeToolExecutor: (await load("dsh-tool-executor-native")).NativeToolExecutor,
   };
 }
 function makeFakeAdapter(LlmAdapter: any) {
@@ -72,14 +75,17 @@ function makeFakeAdapter(LlmAdapter: any) {
   return new Adapter(LlmAdapter);
 }
 async function makeRealHost() {
-  const { Context, llm, AgentRegistry, SessionStore, SessionProjections, SystemPrompt, ToolRuntime, AgentLoop } = await loadHostStack();
+  const { Context, llm, AgentRegistry, SessionStore, SessionProjections, SystemPrompt, ToolRuntime, AgentLoop, NativeToolExecutor } = await loadHostStack();
   const hostCtx = new Context();
   new SessionStore(hostCtx); new SessionProjections(hostCtx); new SystemPrompt(hostCtx, {}); new ToolRuntime(hostCtx, {});
+  hostCtx.tools.setExecutor(new NativeToolExecutor(hostCtx));
   const reg = new AgentRegistry(hostCtx);
   const llmRuntime = new llm.LlmRuntime(hostCtx);
   const adapter = makeFakeAdapter(llm.LlmAdapter);
   llmRuntime.registerAdapter(["observed"], adapter);
   new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
+  // g-617：驱动直构服务的 `[Service.init]`（cordis 只在 ctx.plugin() 装载时自动调用）。
+  await initServiceInstances([reg, hostCtx.get("agentLoop")]);
   return { hostCtx, llm, llmRuntime, reg, adapter };
 }
 function fakeClock(start = 1_000_000) { let t = start; return { now: () => t, advance: (ms: number) => { t += ms; }, set: (v: number) => { t = v; } }; }

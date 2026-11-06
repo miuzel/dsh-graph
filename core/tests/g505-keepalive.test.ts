@@ -137,6 +137,8 @@ function fakeClock(start = 1_000_000) {
 }
 
 /** 真实宿主包解析（不写死作者机器路径、不联网安装）。 */
+import { initServiceInstances } from "./_host-stack.ts";
+
 async function resolveHostScope(): Promise<string> {
   const env = process.env.G505_HOST_STACK_DIR || process.env.G507_HOST_STACK_DIR;
   if (env) return env;
@@ -169,6 +171,7 @@ async function loadHostStack() {
   const systemPrompt = await load("dsh-system-prompt");
   const tools = await load("dsh-tools");
   const loop = await load("dsh-agent-loop");
+  const toolExecutorNative = await load("dsh-tool-executor-native");
   return {
     Context: cordis.Context,
     llm,
@@ -178,6 +181,8 @@ async function loadHostStack() {
     SystemPrompt: systemPrompt.SystemPrompt,
     ToolRuntime: tools.ToolRuntime,
     AgentLoop: loop.AgentLoop,
+    // g-617：0.2.2 起 tool 批次需要已装载的执行器（与宿主组合里的 native-tool-executor 同一实现）。
+    NativeToolExecutor: toolExecutorNative.NativeToolExecutor,
   };
 }
 
@@ -236,18 +241,21 @@ function makeFakeAdapter(LlmAdapter: any, opts: { defaults?: boolean } = {}) {
 /** 真实公开宿主全栈（无持久化、无网络、无真实 provider）。 */
 async function makeRealHost(opts: { adapterDefaults?: boolean } = {}) {
   const {
-    Context, llm: llmMod, AgentRegistry, SessionStore, SessionProjections, SystemPrompt, ToolRuntime, AgentLoop,
+    Context, llm: llmMod, AgentRegistry, SessionStore, SessionProjections, SystemPrompt, ToolRuntime, AgentLoop, NativeToolExecutor,
   } = await loadHostStack();
   const hostCtx = new Context();
   new SessionStore(hostCtx);
   new SessionProjections(hostCtx);
   new SystemPrompt(hostCtx, {});
   new ToolRuntime(hostCtx, {});
+  hostCtx.tools.setExecutor(new NativeToolExecutor(hostCtx));
   const reg = new AgentRegistry(hostCtx);
   const llm = new llmMod.LlmRuntime(hostCtx);
   const adapter = makeFakeAdapter(llmMod.LlmAdapter, { defaults: opts.adapterDefaults !== false });
   llm.registerAdapter(["observed"], adapter);
   const loop = new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
+  // g-617：驱动直构服务的 `[Service.init]`（cordis 只在 ctx.plugin() 装载时自动调用）。
+  await initServiceInstances([reg, loop]);
   const observed: any[] = [];
   hostCtx.on("llm/stream", (options: any, next: any) => { observed.push(options); return next(); });
   const sendTurn = async (agent: any, text: string) => {
