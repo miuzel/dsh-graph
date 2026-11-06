@@ -211,8 +211,13 @@ test("g-616 语义不变：最早到期/冷却/上限/人工锁/暂停/巡检在
   assert.deepEqual((open.deferredTasks ?? []).slice().sort(), ["c1", "c2"]);
 });
 
-// ── 5. 逐 target 作废：合并批里一个目标结束不得作废其余 ─────────────────────
-test("g-616 逐 target 作废：同批一个目标结束，其余目标仍可回传结论", () => {
+// ── 5. 既有巡检过期语义不变：任一 target 陈旧 ⇒ 整条 expired（g-616 返工 att-002）──
+//
+// 上一轮把这里改成「逐 target 作废」，使同批仍活 target 继续可回写，直接判红既有
+// `g506 B15 补充` 与 `g506 bootstrap HMR` 两例（`core/tests/g506-care.test.ts:488` /
+// `core/tests/g506-care-bootstrap.test.ts:824`）。返工口径：**合并唤醒不改巡检过期语义**，
+// 故本组用例反过来钉住原语义，防止再次被"顺手优化"掉。
+test("g-616 既有语义不变：任一 target 陈旧 ⇒ 整条巡检 expired，同批其余结论按 inspection_not_open 拒绝", () => {
   const ins = createCareInspection({
     id: "insp-1", root: "/r", supervisor: "sup", now: NOW, revision: 1, recheckSeconds: 300,
     targets: [
@@ -220,44 +225,46 @@ test("g-616 逐 target 作废：同批一个目标结束，其余目标仍可回
       { goal: "g-029", attempt: "att-001", child: "c029", bindingVersion: 1 },
     ],
   });
-  // c028 结束（不在 live 表里）；c029 仍活
+  // c028 结束（不在 live 表里）；c029 仍活 ⇒ 原语义：整条作废
   const live = new Map([["c029\u0000att-001", 1]]);
   const r = expireStaleInspectionTargets(ins, live, NOW + 1_000);
   assert.equal(r.changed, true);
-  assert.equal(r.inspection.status !== "expired", true, "整条巡检不得因一个 target 结束而作废");
-  assert.equal(careInspectionOpen(r.inspection, NOW + 1_000), true, "其余目标仍开放");
+  assert.equal(r.inspection.status, "expired", "任一 target 陈旧 ⇒ 整条 expired（原语义）");
+  assert.equal(r.inspection.lastError, "stale_target");
+  assert.equal(careInspectionOpen(r.inspection, NOW + 1_000), false, "过期后整条不再开放");
 
-  // 已作废的 target 拒绝回传；仍活的目标正常受理
-  const rejected = validateCareOutcome({
+  // 同批仍活目标（c029）的晚到结论一律拒绝 —— 这正是 g506 B15 钉住的行为
+  const rejectedLive = validateCareOutcome({
+    inspection: r.inspection, now: NOW + 2_000, root: "/r", supervisor: "sup",
+    goal: "g-029", attempt: "att-001", child: "c029", bindingVersion: 1,
+    outcome: "progress", evidenceDigest: "d2",
+  });
+  assert.deepEqual(rejectedLive.ok === false && rejectedLive.code, "inspection_not_open");
+
+  // 已陈旧目标同样被拒（过期巡检整体不可回写）
+  const rejectedStale = validateCareOutcome({
     inspection: r.inspection, now: NOW + 2_000, root: "/r", supervisor: "sup",
     goal: "g-028", attempt: "att-001", child: "c028", bindingVersion: 1,
     outcome: "progress", evidenceDigest: "d1",
   });
-  assert.deepEqual(rejected.ok === false && rejected.code, "target_expired");
+  assert.equal(rejectedStale.ok, false);
 
-  const accepted = validateCareOutcome({
-    inspection: r.inspection, now: NOW + 2_000, root: "/r", supervisor: "sup",
+  // 无陈旧 target ⇒ 不改动（活批照常可回写）。合并不需要靠改这条语义才能不漏关照。
+  const keep = expireStaleInspectionTargets(ins, new Map([["c028\u0000att-001", 1], ["c029\u0000att-001", 1]]), NOW + 1_000);
+  assert.equal(keep.changed, false);
+  assert.equal(careInspectionOpen(keep.inspection, NOW + 1_000), true);
+
+  // 负向对照：若退回「逐 target 作废」，c029 的结论会被受理 ⇒ 与既有 g506 断言相反，本用例判红
+  const perTarget = { ...ins, status: "delivered" as const };
+  const wronglyAccepted = validateCareOutcome({
+    inspection: perTarget, now: NOW + 2_000, root: "/r", supervisor: "sup",
     goal: "g-029", attempt: "att-001", child: "c029", bindingVersion: 1,
     outcome: "progress", evidenceDigest: "d2",
   });
-  assert.equal(accepted.ok, true, "同批仍活目标的结论必须被受理（判据 3）");
-
-  // 全部 target 都作废 ⇒ 整条巡检才转 expired
-  const all = expireStaleInspectionTargets(ins, new Map(), NOW + 1_000);
-  assert.equal(all.inspection.status, "expired");
-  assert.equal(careInspectionOpen(all.inspection, NOW + 1_000), false);
-
-  // 负向对照：旧「任一 target 陈旧 ⇒ 整条 expired」会让 c029 的结论被拒（漏关照形态）
-  const legacyBatchExpired = { ...ins, status: "expired" as const };
-  const lost = validateCareOutcome({
-    inspection: legacyBatchExpired, now: NOW + 2_000, root: "/r", supervisor: "sup",
-    goal: "g-029", attempt: "att-001", child: "c029", bindingVersion: 1,
-    outcome: "progress", evidenceDigest: "d2",
-  });
-  assert.deepEqual(lost.ok === false && lost.code, "inspection_not_open", "旧形态漏关照可被区分");
+  assert.equal(wronglyAccepted.ok, true, "（对照面）未过期时活批结论应受理");
 });
 
-test("g-616 逐 target 作废与结论回填协同：已 resolved 的目标不被再作废", () => {
+test("g-616 既有语义不变：整条 expired 后不再重复作废，已回填结论的目标也不二次计账", () => {
   const ins0 = createCareInspection({
     id: "insp-2", root: "/r", supervisor: "sup", now: NOW, revision: 1, recheckSeconds: 300,
     targets: [
@@ -268,9 +275,14 @@ test("g-616 逐 target 作废与结论回填协同：已 resolved 的目标不�
   const ins1 = applyCareInspectionOutcome(ins0, {
     goal: "g-1", attempt: "att-001", child: "c1", kind: "progress", evidenceDigest: "d1", now: NOW + 10,
   });
-  // c1 之后结束：已回填结论的目标不应被标作废（结论已计账）
+  // c1 结束 ⇒ 整条 expired（原语义）；已回填结论的 target 保持原样，不二次改写
   const r = expireStaleInspectionTargets(ins1, new Map([["c2\u0000att-001", 1]]), NOW + 20);
-  assert.equal(r.expiredTargets.length, 0, "已 resolved 的 target 不参与作废");
-  assert.equal(r.changed, false);
-  assert.equal(careInspectionOpen(r.inspection, NOW + 20), true);
+  assert.equal(r.inspection.status, "expired");
+  assert.deepEqual(r.expiredTargets.map((t) => t.child), ["c1"]);
+  assert.equal(r.inspection.targets[0].outcome, "progress", "已回填结论不被改写");
+
+  // 已 expired 的巡检再扫一次 ⇒ 幂等，不重复记作废
+  const again = expireStaleInspectionTargets(r.inspection, new Map([["c2\u0000att-001", 1]]), NOW + 30);
+  assert.equal(again.changed, false, "已 expired 的巡检不重复作废");
+  assert.equal(again.expiredTargets.length, 0);
 });

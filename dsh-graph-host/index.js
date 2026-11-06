@@ -3121,12 +3121,14 @@ export function createCareRuntime(options = {}) {
   };
 
   /**
-   * B15 补充 + g-616：已投递巡检的**某个**目标结束/换绑 ⇒ 只作废**那一个** target，
-   * 不阻塞同批其他仍活任务；不撤回已发消息，作废后的真实结果按 `target_expired` 拒绝。
+   * B15 补充：已投递巡检的目标结束/换绑 ⇒ 自动 expire，不阻塞其他仍活任务；
+   * 不撤回已发消息，过期后的真实结果仍按 `inspection_not_open` 拒绝。
    *
-   * g-616（判据 3）：合并唤醒会把多个目标放进同一条巡检，因此**绝不能**再「任一目标陈旧 ⇒
-   * 整条 expired」——那会让一个目标结束连带作废整批，其余目标的关照就丢了。
-   * 全部 target 都作废时，纯函数 `expireStaleInspectionTargets` 才把整条转 `expired`。
+   * g-616（返工 att-002）：**过期粒度不变** —— 任一 target 陈旧即整条 `expired`。
+   * 上一轮曾改为「逐 target 作废」，判红了既有 `g506 B15 补充` / `g506 bootstrap HMR`；
+   * 且**不需要**：本函数只作用于**已投递**的巡检，同批存活目标在过期后照常参与下一轮
+   * 调度（`g506 B15 补充` 第二段即断言「仍活任务可在过时巡检过期后继续巡检」）。
+   * 合并唤醒因此**不触碰**这条语义，纯函数化只为让判定可单测。
    */
   const expireStaleInspections = (entry, sampled) => {
     const live = new Map(sampled.map((t) => [taskKey(t), Number(t.bindingVersion) || 0]));
@@ -3143,9 +3145,8 @@ export function createCareRuntime(options = {}) {
     const snapshot = careStateSnapshot(entry, { inspections: [...next.values()] });
     try {
       appendCareEvent(entry, "care.inspection.expired", {
-        // 整条巡检被作废的 id（全部 target 都已陈旧时才会出现）
         inspections: expired.filter((e) => e.inspection.status === "expired").map((e) => e.inspection.id),
-        // g-616 可观测性（判据 6）：逐 target 作废明细，说明「本次作废了哪些目标」
+        // 判据 6 可观测性：点明本次触发陈旧的是哪些 target（便于事后核验过期来源）
         expired_targets: expired.flatMap((e) => e.targets.map((t) => ({
           inspection: e.inspection.id,
           goal: t.goal,
@@ -3511,13 +3512,15 @@ export function createCareRuntime(options = {}) {
    * g-616 方案 A（负责人裁定 2026-11-06）：**单条定时唤醒**。
    *
    * 只要有在途子代理，本 board 就只维持**一条**定时器，按全组**最早**到期触发
-   * （`careCoalescedWakeAt`）；「合并」发生在**触发之后选批**这一步：`dueTargetsOf`
-   * 用 `careCoalesceBatch` 把已到期 + 宽限（`CARE_COALESCE_WINDOW_MS`）内即将到期的
-   * 邻居一次投进同一条巡检（现场：g-028 09:21:38 与 g-029 09:22:33 的 55 秒相邻到期，
-   * 合并后在 09:21:38 一次关照，g-029 提前 55 秒被关照）。
+   * （`careCoalescedWakeAt`，等价于改造前的 `decision.nextDueAt`）；「合并」发生在
+   * **触发之后选批**这一步：`dueTargetsOf` 用 `careCoalesceBatch` 把「已到期 + 宽限
+   * `CARE_COALESCE_WINDOW_MS` 内刚过期的邻居」一次投进同一条巡检（现场：g-028 01:21:38
+   * 与 g-029 01:22:33 的 55 秒相邻到期，合并后在 01:21:38 一次关照，g-029 顺延 55 秒）。
    *
    * 这里只决定**何时**触发；`deliver === true`（真的到期）⇒ 0ms，否则按最早到期排程
-   * （再被 `configRecheckMs` 封顶为配置重读上界，重扫不投递）。
+   * （再被 `configRecheckMs` 封顶为配置重读上界，重扫不投递）。**绝不提前唤醒**：
+   * 上一轮把窗口加在唤醒时刻上（`最早 + 窗口`），连带推迟了 300s 冷却后的唤醒，
+   * `g506 bootstrap HMR` 因此回归 —— 合并只收「已到期」的任务，不改变唤醒时机。
    *
    * 不改变任何关照**语义**（阈值/复查间隔/300s 冷却/上限/人工锁/暂停冻结/inspection_open）。
    */
@@ -3539,9 +3542,9 @@ export function createCareRuntime(options = {}) {
     let delay = configRecheckMs;
     const decision = computed?.decision ?? null;
     if (decision?.deliver) delay = 0;
-    else {
-      const coalesced = coalescedWakeDelay(entry, decision);
-      if (coalesced !== null) delay = coalesced;
+    else if (decision?.nextDueAt !== null && decision?.nextDueAt !== undefined) {
+      // 与改造前逐字等价；`coalescedWakeDelay` 只是同一 `Math.min` 口径的具名封装。
+      delay = coalescedWakeDelay(entry, decision) ?? Math.max(0, decision.nextDueAt - now());
     }
     if (decision?.phase === "waiting_supervisor" || decision?.reason === "delivering") delay = Math.min(delay, busyRecheckMs);
     if (decision?.deliver && entry.retryNotBefore !== null) {
@@ -3573,14 +3576,15 @@ export function createCareRuntime(options = {}) {
 
   const dueTargetsOf = (entry, decision) => {
     const due = [];
-    // g-616 方案 A：一次唤醒投递**一整批**——已到期 + 宽限内即将到期的邻居一并纳入，
+    // g-616 方案 A：一次唤醒投递**一整批**——已到期（含宽限内刚过期的邻居）一次纳入，
     // 而不是只投最早那一个、55 秒后再为邻居投第二次（现场 01:21:38 / 01:22:33）。
-    const batch = careCoalesceBatch(
-      (decision?.tasks ?? []).filter((s) => !s.escalated),
-      now(),
-      CARE_COALESCE_WINDOW_MS,
+    const inBatch = new Set(
+      careCoalesceBatch(
+        (decision?.tasks ?? []).filter((s) => !s.escalated),
+        now(),
+        CARE_COALESCE_WINDOW_MS,
+      ).map((b) => `${b.child}\u0000${b.attempt}`),
     );
-    const inBatch = new Set(batch.map((b) => `${b.child}\u0000${b.attempt}`));
     for (const s of decision?.tasks ?? []) {
       if (s.escalated) continue;
       if (!inBatch.has(`${s.child}\u0000${s.attempt}`)) continue;
@@ -3595,7 +3599,8 @@ export function createCareRuntime(options = {}) {
         lastCareAt: st.lastCareAt,
         stagnantRounds: st.stagnantRounds,
         humanLocked: st.humanLocked === true,
-        // g-616 可观测性（判据 6）：该目标在本次唤醒时是否**已到期**（false = 因宽限提前并入）。
+        // g-616 可观测性（判据 6）：该目标在本次唤醒时是否**尚未到期**（true = 宽限内刚过期并入）。
+        // 恒为 false 时本批就是「同一时刻一起到期」——合并也覆盖这种情形，不是漏合并。
         coalesced: (s.dueInMs ?? 0) > 0,
         dueAt: s.dueAt,
       });
@@ -3771,7 +3776,7 @@ export function createCareRuntime(options = {}) {
             supervisor: entry.supervisorId,
             targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, binding_version: t.bindingVersion })),
             // g-616 判据 6：合并发生时留下可核验记录——本批共几个目标、其中几个是
-            // 「宽限内提前并入」（尚未到期）、并入窗口长度。
+            // 「宽限内到期并入」（唤醒时刻尚未到期）、并入窗口长度。
             coalesce: {
               batch_size: due.length,
               merged_ahead: due.filter((t) => t.coalesced === true).map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child })),

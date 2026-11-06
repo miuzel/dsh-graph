@@ -92,13 +92,18 @@ export const CARE_NO_RESPONSE_COOLDOWN_MS = 300_000;
  * g-616 方案 A：**合并唤醒宽限**（ms）。负责人裁定 2026-11-06 ——「单条定时唤醒」。
  *
  * 语义：本组仍有在途子代理时只维持**一条**定时器，按全组最早到期触发；触发时把
- * 「已到期，或将在本宽限内到期」的任务**一次**投进同一条巡检，而不是先投一个、
- * 55 秒后再为邻居投第二次（现场：g-028 01:21:38 与 g-029 01:22:33，间隔 55 秒）。
+ * 「**已到期**，且到期时刻落在最近本宽限内」的任务**一次**投进同一条巡检，而不是先投
+ * 一个、55 秒后再为邻居投第二次（现场：g-028 01:21:38 与 g-029 01:22:33，间隔 55 秒）。
  *
- * 取值依据：负责人明确接受「先到期任务多等约 55 秒被一并关照」，因此宽限至少要覆盖
- * 这类相邻到期。取 **60 秒**（一整个分钟刻度，≥ 现场的 55 秒），且远小于默认阈值/复查
- * 间隔 300 秒 ⇒ 对未到期任务的实际影响只有 ≤ 1/5 个周期。**不做**无限凑合：超过宽限
- * 仍未到期的任务不会被拉进来（绝不因为「等下一个人」而无限饿死先到期者，判据 3）。
+ * **只向过去算**（`dueAt <= now + window`，`now` 为唤醒时刻）：窗口内不会再有第二次唤醒，
+ * 故这些任务本就无法被更早关照 ⇒ 合并**零延迟成本、零提前**。负责人裁定接受的「先到期
+ * 任务可能被顺延至邻居也到期」即由此实现，**不需要**也不允许把宽限加在唤醒时刻上
+ * （`最早 + window` 会整体推迟 300s 冷却类唤醒，`g506 bootstrap HMR` 实测判红）。
+ *
+ * 取值依据：最低出于**调度抖动**——一次扫描/投递可能跨越秒级，窗口内到期而未被及时
+ * 捕获的任务不得因此各自再触发一次唤醒。取 **60 秒**（一整个分钟刻度，覆盖现场 55 秒
+ * 相邻到期），且远小于默认阈值/复查间隔 300 秒 ⇒ 最多把相邻到期收成一批。**不做**无限
+ * 凑合：超过宽限仍未到期的任务不会被拉进来（绝不因为「等下一个人」而饿死先到期者，判据 3）。
  *
  * 这是本目标的**唯一**聚合口径常量：不读项目配置、不随调度抖动变化、不隐式依赖
  * 扫描周期（判据 2 要求「显式常量且有文档说明」）。
@@ -1000,20 +1005,22 @@ export function careTaskDueAt(task: CareTaskState, timing: {
 }
 
 /**
- * g-616 方案 A（**单条定时唤醒**）：本组的定时器到期时刻。
+ * g-616 方案 A（**单条定时唤醒**）：本组的定时器触发时刻 = 全组**最早**有效到期。
  *
- * 负责人裁定（2026-11-06）：只要有在途子代理，就只维持**一条**按全组最早到期计算的定时器；
- * 到期后一次性投递**全部已到期**任务，先到期的任务接受多等「邻居也到期」的延迟。
+ * 负责人裁定（2026-11-06）：只要有在途子代理，本 board 就只维持**一条**定时器，
+ * 按全组最早到期触发；触发后由 {@link careCoalesceBatch} 决定这一次**收哪些**任务。
  *
- * 本函数给出这条定时器的**下一次触发时刻**：
- * - 有任务已到期（`at <= now`）⇒ 返回过去时刻 = 此刻投递（调用方随即按
- *   {@link careCoalesceBatch} 把宽限内的邻居一并纳入）；
- * - 否则返回全组**最早**到期，定时器精确按它唤醒（不引入第二条定时器）。
+ * 与改造前 `scheduleEntry` 里 `Math.max(0, decision.nextDueAt - now())` 完全等价
+ * （`nextDueAt` 本就是 `Math.min` 全组最早），故判据 4 的 `Math.min` 语义不变。
  *
- * **不丢关照（判据 3）**：仍取最早 ⇒ 没有任何任务会被无限期延后到某个更晚的邻居之后。
+ * **为什么合并只用「已到期」而不提前唤醒**（返工教训，att-002）：若定时器按
+ * `最早 + 窗口` 提前触发，300s 冷却与 `careCooledDown`（等待主管回复）等**非到期类**
+ * 唤醒会整体推迟一个窗口 —— `g506 bootstrap HMR` 因此在 301s 冷却后必须再等满 60s
+ * 才醒来，既有断言判红。合并因此只做「到期即连同已到期的邻居一次投递」，
+ * 不改变任何**何时可以唤醒**的语义，只把**同一次**唤醒里该投递的任务收成一批。
  *
  * @param dueAts 全组**仍在途、未升人工**任务的下一次到期时刻（升限任务不参与）。
- * @param now 当前时刻（ms epoch）。
+ * @param now 当前时刻（ms epoch；保留以标注调用契约，判定不依赖它）。
  * @returns 定时器触发时刻（全组最早）；`null` = 没有可计时的任务。
  */
 export function careCoalescedWakeAt(dueAts: readonly number[], now: number): number | null {
@@ -1026,18 +1033,22 @@ export function careCoalescedWakeAt(dueAts: readonly number[], now: number): num
 }
 
 /**
- * g-616 方案 A：**本次唤醒该纳入哪些到期目标**（单一批量口径，宿主与 UI 共用）。
+ * g-616 方案 A：**本次唤醒该投递哪些任务**（单一批量口径，宿主与测试共用）。
  *
- * 在触发时刻 `now` 把「已到期（`dueAt <= now`）」与「将在宽限
- * {@link CARE_COALESCE_WINDOW_MS} 内到期（`dueAt <= now + window`）」的任务**分成同一批**，
- * 一次投递。这就是「合并唤醒」：邻居 55 秒后的到期被并进这一批，不再单独打断主管一次。
+ * 判据 `dueAt <= now + window` —— 宽限**只向前**（`now` 之前早已到期的当然也入选）。
  *
+ * 两个必需条件（否则「绝不漏关照」被破坏）：
+ * 1. `dueAt <= now + window`：到期 + 在宽限内刚过期的邻居收成一批。窗口内不会有
+ *    第二次唤醒，故它们本就无法被更早关照 —— 合并**零延迟成本**、零提前。
  * 边界（判据 2/3/4）：
- * - 宽限是**显式常量**，不依赖调度抖动、不读配置、不随时间漂移；
- * - 批内只含**仍在途且未升人工**的任务（升限/人工锁/暂停任务由既有语义排除，不被拉进来）；
- * - 只是**提前**把邻居并入，`dueAt` 本身不被改写 ⇒ 阈值/复查间隔/300s 冷却/上限/人工锁
- *   语义完全不变（判据 4）；
+ * - 宽限是**显式常量** {@link CARE_COALESCE_WINDOW_MS}，不读配置、不依赖调度抖动；
+ * - 批内只含**仍在途且未升人工**的任务（升限/人工锁/暂停任务由既有语义排除）；
+ * - `dueAt` 本身不被改写 ⇒ 阈值/复查间隔/300s 冷却/上限/人工锁语义完全不变（判据 4）；
  * - 每个入选任务都会在批内被**逐个评估并计账**，绝不跳过（判据 3）。
+ *
+ * @param schedules 全组**未升人工**任务的到期表（`dueAt = null` 者跳过）。
+ * @param now 唤醒时刻。
+ * @param windowMs 合并宽限（默认 {@link CARE_COALESCE_WINDOW_MS}；0 ⇒ 只收「此刻已到期且已过冷却」）。
  */
 export function careCoalesceBatch(
   schedules: ReadonlyArray<{ child: string; attempt: string; goal: string; dueAt: number | null }>,
@@ -1048,7 +1059,7 @@ export function careCoalesceBatch(
   const batch: Array<{ child: string; attempt: string; goal: string; dueAt: number }> = [];
   for (const s of schedules) {
     if (typeof s.dueAt !== "number" || !Number.isFinite(s.dueAt)) continue;
-    if (s.dueAt > horizon) continue; // 宽限之外 ⇒ 留给下一次唤醒（不无限凑合）
+    if (s.dueAt > horizon) continue; // 宽限之外 ⇒ 留给下一次唤醒
     batch.push({ child: s.child, attempt: s.attempt, goal: s.goal, dueAt: s.dueAt });
   }
   return batch;
@@ -1683,8 +1694,11 @@ export interface CareInspectionTarget {
   /** 取代它的稳定事件标识（消息 id；预算编辑写 "goal_budget"）——不含任何消息正文。 */
   supersededBy?: string | null;
   /**
-   * g-616：该 target 已因**自身结束/换绑**被作废（只作废这一个，不牵连同批其他 target）。
-   * 作废的 target 不再参与「巡检是否仍开放」的判定，晚到结论按 `target_expired` 拒绝。
+   * 该 target 陈旧（任务结束/换绑）被作废的时刻与原因。
+   *
+   * g-616 返工（att-002）：这**不是**「逐 target 作废」的开关 —— 陈旧仍整条 `expired`
+   * （原语义，`inspection_not_open` 拒绝）。字段只为在 `care.inspection.expired` 事件里
+   * 点明「哪些 target 触发了过期」（判据 6 可观测性）。
    */
   expiredReason?: "stale_target" | null;
   expiredAt?: number | null;
@@ -1756,22 +1770,27 @@ export function createCareInspection(input: {
   };
 }
 
-/** 巡检是否仍可回写（未过期、未失败、未整体解决、至少一个 target 未解决且未作废）。 */
+/** 巡检是否仍可回写（未过期、未失败、未整体解决、至少一个 target 未解决）。 */
 export function careInspectionOpen(inspection: CareInspection | null | undefined, now: number): boolean {
   if (!inspection) return false;
   if (inspection.status === "failed" || inspection.status === "expired") return false;
   if (now > inspection.expiresAt) return false;
-  return inspection.targets.some((t) => t.outcome === null && t.expiredReason == null);
+  return inspection.targets.some((t) => t.outcome === null);
 }
 
 /**
- * g-616：**逐 target** 作废（而不是把整条巡检标 expired）。
+ * **整条巡检**作废（B15 补充既有语义，g-616 保持**原样不变**）。
  *
- * 合并唤醒把多个目标塞进同一条巡检后，若沿用「任一 target 陈旧 ⇒ 整条巡检 expired」，
- * 一个目标结束就会作废整批的其余目标，这些目标的关照就丢了（判据 3）。
- * 故这里只作废**自己已陈旧**的 target；全部 target 都作废时整条巡检才转为 `expired`。
+ * 任一 target 已陈旧（任务结束/换绑）⇒ 整条巡检转 `expired`，`lastError = "stale_target"`；
+ * 此后 `careInspectionOpen` 为 false ⇒ 同批其他 target 的晚到结论一律按 `inspection_not_open`
+ * 拒绝（`g506 B15 补充` 与 `g506 bootstrap HMR` 钉住的正是这条语义）。
  *
- * 纯函数：不修改入参；无陈旧 target 时返回原对象（调用方可据 `===` 判无事发生）。
+ * g-616 返工（att-002）：上一轮把它改成「逐 target 作废」，使同批仍活 target 继续可回写，
+ * 直接破坏上述语义（2 例既有测试回归）⇒ 已回退。合并唤醒**不需要**改动巡检过期语义：
+ * 批内活着目标的关照由 `expireStaleInspections` 的事件口径保证（见宿主注释），
+ * 不需要让陈旧批继续接受回写。
+ *
+ * 纯函数：不修改入参；无陈旧 target 时返回原对象（调用方可据 `changed` 判无事发生）。
  */
 export function expireStaleInspectionTargets(
   inspection: CareInspection,
@@ -1781,21 +1800,16 @@ export function expireStaleInspectionTargets(
   if (inspection.status === "resolved" || inspection.status === "failed" || inspection.status === "expired") {
     return { inspection, expiredTargets: [], changed: false };
   }
-  const expiredTargets: CareInspectionTarget[] = [];
-  const targets = inspection.targets.map((t) => {
-    if (t.outcome !== null || t.expiredReason != null) return t;
-    const alive = live.get(`${t.child}\u0000${t.attempt}`) === (Number(t.bindingVersion) || 0);
-    if (alive) return t;
-    const dead: CareInspectionTarget = { ...t, expiredReason: "stale_target", expiredAt: now };
-    expiredTargets.push(dead);
-    return dead;
-  });
-  if (expiredTargets.length === 0) return { inspection, expiredTargets: [], changed: false };
-  const anyLeft = targets.some((t) => t.outcome === null && t.expiredReason == null);
-  const next: CareInspection = anyLeft
-    ? { ...inspection, targets }
-    : { ...inspection, targets, status: "expired", lastError: inspection.lastError ?? "stale_target" };
-  return { inspection: next, expiredTargets, changed: true };
+  const stale = inspection.targets.filter(
+    (t) => live.get(`${t.child}\u0000${t.attempt}`) !== (Number(t.bindingVersion) || 0),
+  );
+  if (stale.length === 0) return { inspection, expiredTargets: [], changed: false };
+  const expiredTargets = stale.map((t) => ({ ...t, expiredReason: "stale_target" as const, expiredAt: now }));
+  return {
+    inspection: { ...inspection, status: "expired", lastError: inspection.lastError ?? "stale_target" },
+    expiredTargets,
+    changed: true,
+  };
 }
 
 /** 把巡检状态推进为「按时间自然过期」（纯函数；只作用于未整体解决的记录）。 */
@@ -1812,7 +1826,6 @@ export type CareOutcomeRejection =
   | "inspection_not_open"
   | "expired"
   | "target_not_in_inspection"
-  | "target_expired"
   | "stale_binding"
   | "already_resolved"
   | "invalid_outcome";
@@ -1850,8 +1863,6 @@ export function validateCareOutcome(input: {
     (t) => t.goal === input.goal && t.attempt === input.attempt && t.child === input.child,
   );
   if (!target) return { ok: false, code: "target_not_in_inspection" };
-  // g-616：该 target 自身已作废（任务结束/换绑）⇒ 只拒绝它，同批其他 target 不受影响。
-  if (target.expiredReason != null) return { ok: false, code: "target_expired" };
   if (target.bindingVersion !== input.bindingVersion) return { ok: false, code: "stale_binding" };
   if (!input.outcome) return { ok: false, code: "invalid_outcome" };
   // g-612：目标已被**之后**的主管→child 消息 / goal 预算编辑取代（显式事件标记，非毫秒比较）。
