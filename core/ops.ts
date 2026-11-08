@@ -343,6 +343,11 @@ export {
   isCareReminderStillValid,
   careStatusProjection,
   formatCareWakeMessage,
+  // g-618：「首次全量、后续精简」——纪律资产解析（fail-open）与精简版兜底纪律。
+  CARE_DISCIPLINE_ASSET,
+  CARE_COMPACT_DISCIPLINE_ZH,
+  CARE_COMPACT_DISCIPLINE_EN,
+  resolveCareDisciplineText,
   makeCareAuditEntry,
   formatCareAudit,
   careResolutionOf,
@@ -1251,6 +1256,151 @@ export function expandRoleToolList(list: readonly string[], cap?: ToolCapability
 /** 派发前能力自检失败事件名（宿主记事件 + 把诊断写进返回文案 / child_error）。 */
 export const DISPATCH_CAPABILITY_MISSING_EVENT = "dispatch.capability_missing";
 
+// ---- g-613：复用空闲专家子代理承接新目标 ----
+//
+// 复用（dispatch 时传 `child_id`）把**同一个** child 依次绑定到多个目标的 attempt 上，因此必须
+// 在事件流里留下可审计的「谁被复用到哪」与「复用投递成功/失败」两类事实：
+//   · `attempt.reused`：写在**旧绑定**目标的事件流里（details.reused_by = `<新目标>/<新 attempt>`），
+//     与看板既有的「被复用」投影同源（ops 的 `reusedBy` 只认这个事件名与这个字段形状）；
+//   · `attempt.reuse_failed`：写在**新目标**的事件流里（投递不确定/失败时 fail-closed 的如实记录）。
+// 两者都**不新建 attempt 之外的任何状态机**：归属真源仍是 attempt.md 的 child_id/binding_version。
+export const ATTEMPT_REUSED_EVENT = "attempt.reused";
+export const ATTEMPT_REUSE_FAILED_EVENT = "attempt.reuse_failed";
+
+/** 一处「目标/attempt → child」的绑定（只读投影；sources 说明它从哪条证据读出来的）。 */
+export interface ExecutionBinding {
+  goal: string;
+  goalFile: string;
+  attempt: string;
+  childId: string;
+  /** attempt 的 result（`pending` 表示未终结）。 */
+  result: string;
+  /** 该 attempt 是否仍被视作活跃（与 `assertNoActiveExecutionChild` 的本地判定同口径）。 */
+  active: boolean;
+  bindingVersion: number;
+  /** 证据来源：`attempt` = attempt.md 的 child_id；`superseded` = attempt.superseded 事件。 */
+  sources: string[];
+}
+
+/**
+ * g-613：只读扫描整块看板，找出**绑定到指定 child** 的全部目标/attempt。
+ *
+ * 跨目标独占的判定必须按**项目（= 这块看板）**而不是按单个目标：同一个 child 若已绑定在
+ * 目标 A 的活跃 attempt 上，就不能再绑定到目标 B。因此这里枚举 versions/standalone/backlog
+ * 下所有 goal.md 的 attempts，**不猜测、不写盘**（纯读；供宿主在派发前做准入与冲突报告）。
+ */
+export function findActiveExecutionBindings(root: string, childId: string): ExecutionBinding[] {
+  const want = String(childId ?? "").trim();
+  if (!want) return [];
+  const out: ExecutionBinding[] = [];
+  const seen = new Set<string>();
+  const consider = (goalFile: string, goalId: string, attemptId: string, sources: string[], meta: Record<string, any>) => {
+    const key = `${goalFile}\u0000${attemptId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const result = String(meta.result ?? "pending");
+    // 与派发门禁的本地判定同口径（attemptIsActive）：只看 attempt.md，不触碰宿主 registry。
+    const active = attemptIsActive(meta);
+    out.push({
+      goal: goalId,
+      goalFile,
+      attempt: attemptId,
+      childId: want,
+      result,
+      active,
+      bindingVersion: Number(meta.binding_version) || 0,
+      sources,
+    });
+  };
+  // 只读枚举既有看板布局（versions/standalone/backlog），不另立扫描口径。
+  for (const goalFile of listGoalFiles(root)) {
+    if (basename(goalFile) !== "goal.md") continue; // backlog 扁平 .md 没有 attempts/ 目录
+    let goalId = "";
+    try { goalId = String(loadGoal(goalFile).meta.id ?? ""); } catch { continue; }
+    if (!goalId) continue;
+    const attDir = join(dirname(goalFile), "attempts");
+    if (!existsSync(attDir)) continue;
+    for (const a of readdirSync(attDir).filter((d) => /^att-/.test(d)).sort()) {
+      const f = join(attDir, a, "attempt.md");
+      if (!existsSync(f)) continue;
+      let meta: Record<string, any>;
+      try { meta = loadGoal(f).meta as Record<string, any>; } catch { continue; }
+      if (String(meta.child_id ?? "").trim() === want) consider(goalFile, goalId, a, ["attempt"], meta);
+    }
+  }
+  // 已取代（superseded）的 attempt 若仍带同一 child_id 也是「另一个目标正持有它」的证据。
+  try {
+    for (const e of readEvents(root)) {
+      if (e.event !== "attempt.superseded") continue;
+      const c = String((e.details as any)?.child_id ?? (e.details as any)?.replacement_child_id ?? "").trim();
+      if (c !== want || !e.goal) continue;
+      const attemptId = String((e.details as any)?.attempt ?? "");
+      let goalFile = "";
+      try { goalFile = findGoalFile(root, e.goal); } catch { continue; }
+      if (basename(goalFile) !== "goal.md" || !attemptId) continue;
+      const f = join(dirname(goalFile), "attempts", attemptId, "attempt.md");
+      let meta: Record<string, any> = { result: "superseded" };
+      try { if (existsSync(f)) meta = loadGoal(f).meta as Record<string, any>; } catch { /* 投影可缺 */ }
+      consider(goalFile, String(e.goal), attemptId, ["superseded"], { ...meta, result: "superseded" });
+    }
+  } catch { /* 事件流不可读 ⇒ 只用 attempt.md 证据，不猜 */ }
+  return out;
+}
+
+/**
+ * g-613：复用投递**失败/不确定**时的如实记录（事件先行，再由宿主回传 child_error）。
+ *
+ * `code` 是闭集，避免自由文案被当成契约：
+ *   · `delivery_rejected`：宿主明确拒绝投递（异常）；
+ *   · `delivery_timeout`：投递在限定时间内没有结论（**不确定**，按未投递处理）；
+ *   · `input_closed`：child 已提交结构化结果/正在关闭，不再接收输入。
+ */
+export const ATTEMPT_REUSE_FAILURE_CODES = ["delivery_rejected", "delivery_timeout", "input_closed"] as const;
+export type AttemptReuseFailureCode = (typeof ATTEMPT_REUSE_FAILURE_CODES)[number];
+
+export function appendAttemptReuseFailed(
+  root: string,
+  input: {
+    goal: string;
+    attempt: string;
+    childId: string;
+    bindingVersion: number | null;
+    code: AttemptReuseFailureCode;
+    detail?: string | null;
+    actor: string;
+  },
+): GraphEvent {
+  return appendEvent(root, {
+    actor: input.actor,
+    event: ATTEMPT_REUSE_FAILED_EVENT,
+    goal: input.goal,
+    details: {
+      attempt: input.attempt,
+      child_id: input.childId,
+      binding_version: input.bindingVersion ?? null,
+      code: input.code,
+      detail: input.detail ? String(input.detail).slice(0, 400) : null,
+    },
+  });
+}
+
+/** g-613：把「旧绑定被复用」写进**旧目标**的事件流（看板据此把旧绑定标注为「被复用→新目标」）。 */
+export function appendAttemptReused(
+  root: string,
+  input: { goal: string; attempt: string; childId: string; reusedBy: string; actor: string },
+): GraphEvent {
+  return appendEvent(root, {
+    actor: input.actor,
+    event: ATTEMPT_REUSED_EVENT,
+    goal: input.goal,
+    details: {
+      attempt: input.attempt,
+      child_id: input.childId,
+      reused_by: input.reusedBy,
+    },
+  });
+}
+
 /** 缺必需能力诊断：`ok=false` ⇒ **不得派发**（调用方负责记事件与回传文案）。 */
 export interface DispatchCapabilityDiagnosis {
   ok: boolean;
@@ -1891,6 +2041,11 @@ export interface ProjectConfig {
     /** g-506 **仅读侧元信息**：时间参数原始值存在但非法（按继承处理并显示告警）。 */
     care_threshold_seconds_malformed?: boolean;
     care_recheck_seconds_malformed?: boolean;
+    /**
+     * g-618：项目级「首次全量、后续精简」开关。`null` = 未配置 = **开启**（默认）；
+     * `false` = 逐字回退「每份都内联完整纪律」的旧行为。它只管文案投递方式，不是纪律内容 override。
+     */
+    care_wake_compact?: boolean | null;
     /** g-506：关照的**项目半边**只读投影（host 会以真实全局值重新投影后下发 UI/REST）。 */
     care_effective?: CareEffectiveProjection;
   };
@@ -2222,7 +2377,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     return {
       executor: { provider: null, model: null, mode: null },
       defaults: { review: { reviewer: null, prompt: null }, pk: { lanes: null, sandbox: null } },
-      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false, care: null, care_malformed: false, care_threshold_seconds: null, care_recheck_seconds: null, care_threshold_seconds_malformed: false, care_recheck_seconds_malformed: false },
+      supervisor: { automation: Object.fromEntries(AUTOMATION_KEYS.map((k) => [k, null])), agent_teams: null, keep_alive: null, keep_alive_ttl: null, keep_alive_ttl_malformed: false, care: null, care_malformed: false, care_threshold_seconds: null, care_recheck_seconds: null, care_threshold_seconds_malformed: false, care_recheck_seconds_malformed: false, care_wake_compact: null },
       prompt_overrides: { subagent: { state: "default", value: null } },
       // g-480：文件缺省 ⇒ 五个模块全部 null（未配置 = 全开），无旧键可迁移。
       modules: Object.fromEntries(HARNESS_MODULE_IDS.map((k) => [k, null])) as Record<HarnessModuleId, boolean | null>,
@@ -2393,6 +2548,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     | "care" | "care_raw" | "care_malformed"
     | "care_threshold_seconds" | "care_threshold_seconds_malformed"
     | "care_recheck_seconds" | "care_recheck_seconds_malformed"
+    | "care_wake_compact"
     | "care_effective"
   > => {
     const sv = isPlainObject(parsedDoc) && isPlainObject((parsedDoc as any).supervisor)
@@ -2406,6 +2562,7 @@ export function readProjectConfig(root: string): ProjectConfig {
     const modeRaw = pickRaw("care");
     const thresholdRaw = pickRaw("care_threshold_seconds");
     const recheckRaw = pickRaw("care_recheck_seconds");
+    const wakeCompactRaw = pickRaw("care_wake_compact");
     const threshold = normalizeCareSeconds(thresholdRaw.present ? thresholdRaw.value : null);
     const recheck = normalizeCareSeconds(recheckRaw.present ? recheckRaw.value : null);
     const modeMalformed = documentMalformed
@@ -2430,6 +2587,7 @@ export function readProjectConfig(root: string): ProjectConfig {
       care_threshold_seconds_malformed: thresholdRaw.present && threshold === null,
       care_recheck_seconds: recheck,
       care_recheck_seconds_malformed: recheckRaw.present && recheck === null,
+      care_wake_compact: wakeCompactRaw.present && !documentMalformed && wakeCompactRaw.value === false ? false : null,
       care_effective: careEffectiveProjection(projectHalf, { enabled: null, thresholdSeconds: null, recheckSeconds: null }),
     };
   };
@@ -9629,7 +9787,14 @@ export function bindAttemptChild(
   bindAttemptChildLocked(root, goalId, attemptId, childId, actor, parentSessionId, provider, model, modelRoute, mode, modeSource, undefined);
 }
 
-function bindAttemptChildLocked(
+/**
+ * g-613：`bindAttemptChild` 的**调用方持锁**变体（不自行获取 `execution-<goal>` 锁）。
+ *
+ * 复用派发把「准入 → 迁移 → attempt 落盘 → 绑定」放在同一个同步临界区里（`withLocalLock` 不可重入，
+ * 同进程嵌套获取会被判定死锁）⇒ 该路径必须用本函数。语义与 `bindAttemptChild` 完全一致：
+ * 同一套 CAS/事件先行/字段写入，只是不再自己加锁。
+ */
+export function bindAttemptChildLocked(
   root: string,
   goalId: string,
   attemptId: string,
@@ -11941,19 +12106,35 @@ function attemptIsActive(meta: Record<string, any>): boolean {
 }
 
 /** 判断是否有进行中的执行子代理；旧记录回退 status_line 启发式检测。 */
-function _hasActiveAttempts_postpone(dir: string): boolean {
+/**
+ * g-613：目标目录下的 attempt 是否有**真正在跑**的子代理（暂缓/归档等管理动作的唯一口径）。
+ *
+ * 与 `assertNoActiveExecutionChild(scope="management")` 同一契约：首次启动未结算、或 live registry
+ * 报 running/unknown ⇒ 算进行中；idle/gone 不算（idle 只代表「已登记未终结」）。
+ * 复用空闲专家子代理的场景下，旧启发式（status_line 文本）会把 idle child 误判为进行中。
+ */
+function hasRunningAttemptChild(dir: string, liveCheck?: ExecutionLiveCheck): boolean {
   const attDir = join(dir, "attempts");
   if (!existsSync(attDir)) return false;
   for (const d of readdirSync(attDir)) {
     if (!d.startsWith("att-")) continue;
     const attFile = join(attDir, d, "attempt.md");
     if (!existsSync(attFile)) continue;
-    try {
-      const att = loadGoal(attFile);
-      if (attemptIsActive(att.meta)) return true;
-    } catch {
-      /* 坏文件跳过 */
-    }
+    let meta: Record<string, any>;
+    try { meta = loadGoal(attFile).meta as Record<string, any>; } catch { continue; }
+    if (typeof meta.result === "string" && meta.result !== "pending") continue;
+    if (meta.detached === true) continue;
+    if (meta.dispatch_in_flight === true) return true;
+    const childId = meta.child_id ? String(meta.child_id) : "";
+    const live = childId && liveCheck
+      ? (() => { try { return liveCheck(childId); } catch { return "unknown" as const; } })()
+      : null;
+    // 明确 running/unknown ⇒ 进行中（live registry 权威）。
+    if (live === "running" || live === "unknown") return true;
+    // 明确 idle ⇒ 就是「已登记未运行」：**不再**用 status_line 文本推翻 registry（复用空闲专家的核心场景）。
+    if (live === "idle") continue;
+    // 没有 registry 证据（gone 或未注入 liveCheck）⇒ 回退既有启发式，保持旧语义不放松。
+    if (attemptIsActive(meta)) return true;
   }
   return false;
 }
@@ -11979,7 +12160,10 @@ export function postponeGoal(
 
   // g-610：搬走之前核公开 registry（先于既有元数据门禁的补充，不替代它）。
   assertNoActiveExecutionChild(root, id, { liveCheck: opts.liveCheck, action: "暂缓目标", scope: "management" });
-  if (srcDir && _hasActiveAttempts_postpone(srcDir)) {
+  // g-613：暂缓只看「首次启动未结算」与**运行中**的 child（与上面 gateway 的 management 口径同一契约）。
+  // 旧实现用 `_hasActiveAttempts_postpone`（status_line 启发式，且完全不看 live registry），复用一个
+  // **空闲**专家子代理会因此被误判为「进行中的执行子代理」⇒ 目标永远无法暂缓/归档。
+  if (srcDir && hasRunningAttemptChild(srcDir, opts.liveCheck)) {
     const reason = "存在进行中的执行子代理";
     appendEvent(root, {
       actor: opts.actor,

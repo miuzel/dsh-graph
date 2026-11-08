@@ -22,6 +22,9 @@ import { createRequire } from "node:module";
 import { parse as parseYaml } from "yaml";
 import {
   createGoal,
+  // g-618：纪律资产读取（公共层 `prompts/care-discipline.*.md`）。host 经 ops 取同一实现，
+  // 缺资产时由 core 的 `resolveCareDisciplineText` **fail-open**，绝不中断巡检（g-346 教训）。
+  readCorePromptAsset,
   normalizeGoalType,
   setCriteria,
   updateCriteria,
@@ -168,6 +171,11 @@ import {
   resolveShellTool,
   diagnoseDispatchCapability,
   appendDispatchCapabilityMissing,
+  // g-613：复用已有子代理承接新目标（跨目标独占的只读扫描 + 复用/投递事件 + 持锁绑定变体）。
+  bindAttemptChildLocked,
+  findActiveExecutionBindings,
+  appendAttemptReused,
+  appendAttemptReuseFailed,
   formatPmPrompt,
   // g-436：独立评审接线（formatReviewPrompt 的**唯一生产调用点**在本文件的 dispatchReview；
   // 此前它是 core 侧零调用点的孤立实现。接线由 g-436 完成，相应前置守卫见
@@ -250,6 +258,9 @@ import {
   isCareReminderStillValid,
   careStatusProjection,
   formatCareWakeMessage,
+  // g-618：纪律资产解析（fail-open）与「首次全量、后续精简」的常量。
+  CARE_DISCIPLINE_ASSET,
+  resolveCareDisciplineText,
   makeCareAuditEntry,
   formatCareAudit,
 } from "./core/ops.js";
@@ -262,6 +273,10 @@ import {
   legacyPausedCooldownRemainingMs,
   CARE_NO_RESPONSE_COOLDOWN_MS,
   CARE_RUN_HISTORY_LIMIT,
+  careCoalescedWakeAt,
+  careCoalesceBatch,
+  expireStaleInspectionTargets,
+  CARE_COALESCE_WINDOW_MS,
 } from "./core/care.js";
 import { resolveRoot, resolveCanonicalRoot, _clearCanonicalRootCache } from "./core/root.js";
 import { readEvents, appendEvent } from "./core/events.js";
@@ -290,6 +305,21 @@ export { boardPayload, versionGoals, backlogGoals, compareVersions } from "./cor
 // 导出的是**同一函数引用**（非副本），故经此入口的裁决与 `graph_help` 运行时逐字同源；
 // 生产代码不消费这两个导出，注册面与行为均不变。
 export { helpTopicText as _helpTopicText, isGraphEngineeringSectionTitle as _isGraphEngineeringSectionTitle };
+
+/**
+ * g-618：「本主管会话已收到过完整纪律」的持久标记归一（只认精确身份，绝不猜）。
+ *
+ * 记的是**发放首份全量正文时的主管会话 id**；缺失/形态不对一律 `null`（= 未知 = 按首次处理）。
+ * 在 `syncIdentity` 里只比 `session === entry.supervisorId`，因此换会话 / 重启（新会话 id）
+ * 都自然回落为首次 —— 不是「全局只看一次」，而是**每个主管会话的第一份**是全量。
+ */
+export function normalizeDisciplineSeen(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const session = typeof raw.session === "string" && raw.session ? raw.session : null;
+  if (!session) return null;
+  const at = Number(raw.at);
+  return { session, at: Number.isFinite(at) ? at : null };
+}
 
 // g-183 返工 v4：流式上限（防无 header/伪造 Content-Length/chunked 的超大请求先进内存被拒）。
 // JSON/base64 envelope 上限需容纳 50MB 二进制 base64 编码开销（~4/3）+ JSON 键，但拒绝更大。
@@ -412,7 +442,7 @@ export function resolveDesignDiagramRequest(rawUrl) {
 // 「提示词模板」页签把**随包发布**的 `prompts/*.md` 逐个只读展示给用户 —— 展示的内容与引擎
 // 实际投递给 Agent 的资产是**同一份产物**（`dist/prompts/`），不复制、不改写、不新增第二份文案。
 // 安全口径（与 g-462 图路由同一形状：单一路径入口、**无任何写路径**）：
-//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-496 起 54 个 = 27 个资产
+//   ① 白名单是**唯一**入口：只有 `HELP_ASSET_REGISTRY` 登记的文件名（g-618 起 56 个 = 28 个资产
 //      × zh/en）可被读取，其余一律拒绝；清单**不在此处硬编码**（注册表是唯一真源）；
 //   ② 未知名 → 404；目录穿越（`../`、绝对路径）、反斜杠、URL 编码变体（`%2e%2e`、`%00`）、
 //      非 `.md` 后缀 → 400。判定只看 **URL 归一化后的 pathname 尾段**，不做字符串拼接后再就读
@@ -443,6 +473,9 @@ const HELP_ASSET_REGISTRY = Object.freeze([
   { name: "attempt-report-skeleton.zh.md", ownership: "public", category: "reporting", relativePath: "prompts/attempt-report-skeleton.zh.md" },
   { name: "automation-guidance.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.en.md" },
   { name: "automation-guidance.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/automation-guidance.zh.md" },
+  // g-618：关照唤醒正文外置的「纪律 + 检查清单」（公共层；三值定义不在此处）。
+  { name: "care-discipline.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/care-discipline.en.md" },
+  { name: "care-discipline.zh.md", ownership: "public", category: "supervisor", relativePath: "prompts/care-discipline.zh.md" },
   { name: "collect-task.en.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.en.md" },
   { name: "collect-task.zh.md", ownership: "public", category: "subagents", relativePath: "prompts/collect-task.zh.md" },
   { name: "discipline.en.md", ownership: "public", category: "supervisor", relativePath: "prompts/discipline.en.md" },
@@ -1820,6 +1853,11 @@ export const CARE_CONFIG_RECHECK_MS = 30_000;
 export const CARE_BUSY_RECHECK_MS = 5_000;
 export const CARE_MAINTENANCE_RETRY_MS = 10_000;
 export const CARE_RETRY_MS = 30_000;
+/**
+ * g-613：复用投递的确认等待上限（ms）。超时即按「**不确定 = 未投递**」fail-closed 处理：
+ * 宿主 `sendMessage` 正常在毫秒级返回 inbox id，长时间无回执意味着无法证明消息被受理。
+ */
+export const REUSE_DELIVERY_TIMEOUT_MS = 15_000;
 /** 有界自举发现：检查间隔（只读 registry/project.yaml，无模型请求、无投递）。 */
 export const CARE_ARM_DISCOVERY_INTERVAL_MS = 30_000;
 /** 有界自举发现：最多尝试次数（≈ 10 分钟窗口；之后由 claim 事件与 agent 事件继续兜底）。 */
@@ -1964,6 +2002,11 @@ export function createCareRuntime(options = {}) {
     lastOutcome: null,
     seq: 0,
     lastReason: "disabled_by_config",
+    /**
+     * g-618：「本主管会话已收到过完整纪律」的持久标记（随 care.* 事件快照落盘，重启可恢复）。
+     * 粒度 = **主管会话**（keyed by supervisorId）：换主管会话 / 宿主重启（新会话 id）均视为首次。
+     */
+    disciplineSeen: null,
   });
 
   /** g-506 返工 B5：把一组 care 状态压成事件里的快照（只在 care.* 事件 details.care_state）。 */
@@ -1988,6 +2031,10 @@ export function createCareRuntime(options = {}) {
       transportFailures: entry.transportFailures ?? 0,
       lastOutcome: entry.lastOutcome ?? null,
       seq: entry.seq ?? 0,
+      // g-618（加法式字段，不升 version）：旧快照无此键 ⇒ null ⇒ 重启后按「首次」处理。
+      // 必须支持 `opts` 覆盖：首发的那一份要在**同一份**快照里就把「本会话已看过纪律」落盘
+      // （投递前entry 上还是旧值；漏读 opts 会让标记永远停在旧值 ⇒ 重启后误判为首次，纪律白省）。
+      disciplineSeen: (opts.disciplineSeen ?? entry.disciplineSeen) ?? null,
     };
   };
 
@@ -2315,6 +2362,7 @@ export function createCareRuntime(options = {}) {
       if (ins.messageId) entry.messageIndex.set(ins.messageId, ins.id);
     }
     entry.supervisorId = typeof state.supervisor === "string" && state.supervisor ? state.supervisor : null;
+    entry.disciplineSeen = normalizeDisciplineSeen(state.disciplineSeen);
     entry.transportFailures = Math.max(0, Math.floor(numberOr(state.transportFailures, 0)));
     entry.lastOutcome = state.lastOutcome && typeof state.lastOutcome === "object" ? state.lastOutcome : null;
     entry.seq = Math.max(0, Math.floor(numberOr(state.seq, 0)));
@@ -2525,19 +2573,30 @@ export function createCareRuntime(options = {}) {
     try { payload = typeof readBoardPayload === "function" ? readBoardPayload(entry.root) : null; } catch { payload = null; }
     const goals = enumerateBoardGoals(payload);
     if (!goals) return null;
+    // g-613：跨目标复用时**同一 child 可能同时挂在多个目标上**（旧目标尚未交付、新目标已接手）。
+    // 只按「第一个命中」会让投递/唤醒把关照记到旧目标上（A/att-001 与 B/att-001 同键时尤其危险）。
+    // ⇒ 选择规则唯一且可解释：取**绑定时间最新**的一条（attempt_started_at 更晚者胜；同刻按 id 倒序），
+    //    绝不同时返回两条、绝不猜测。
+    let best = null;
+    let bestAt = -Infinity;
     for (const g of goals) {
       const b = g?.attempt_binding;
       if (!b || String(b.child_id ?? "") !== String(childId)) continue;
       if (String(g?.status) !== "in_progress") continue;
       if (String(b.parent_session_id ?? "") !== String(entry.supervisorId ?? "")) continue;
-      return {
-        goal: String(g?.id ?? ""),
+      const at = Date.parse(String(g?.attempt_started_at ?? "")) || 0;
+      const idKey = String(g?.id ?? "");
+      const better = best === null || at > bestAt || (at === bestAt && idKey > String(best.goal));
+      if (!better) continue;
+      bestAt = at;
+      best = {
+        goal: idKey,
         attempt: String(b.attempt ?? ""),
         bindingVersion: Number(b.binding_version) || 0,
         budgetSeconds: normalizeCareSeconds(g?.budget_seconds),
       };
     }
-    return null;
+    return best;
   };
 
   /**
@@ -3116,31 +3175,46 @@ export function createCareRuntime(options = {}) {
     return updated;
   };
 
-  /** B15 补充：已投递巡检的目标结束/换绑 ⇒ 自动 expire，不阻塞其他仍活任务；
-   *  不撤回已发消息，过期后的真实结果仍按 inspection_not_open 拒绝。 */
+  /**
+   * B15 补充：已投递巡检的目标结束/换绑 ⇒ 自动 expire，不阻塞其他仍活任务；
+   * 不撤回已发消息，过期后的真实结果仍按 `inspection_not_open` 拒绝。
+   *
+   * g-616（返工 att-002）：**过期粒度不变** —— 任一 target 陈旧即整条 `expired`。
+   * 上一轮曾改为「逐 target 作废」，判红了既有 `g506 B15 补充` / `g506 bootstrap HMR`；
+   * 且**不需要**：本函数只作用于**已投递**的巡检，同批存活目标在过期后照常参与下一轮
+   * 调度（`g506 B15 补充` 第二段即断言「仍活任务可在过时巡检过期后继续巡检」）。
+   * 合并唤醒因此**不触碰**这条语义，纯函数化只为让判定可单测。
+   */
   const expireStaleInspections = (entry, sampled) => {
     const live = new Map(sampled.map((t) => [taskKey(t), Number(t.bindingVersion) || 0]));
     const next = new Map(entry.inspections);
     const expired = [];
+    const at = now();
     for (const ins of entry.inspections.values()) {
-      if (ins.status === "resolved" || ins.status === "failed" || ins.status === "expired") continue;
-      const stale = ins.targets.some((t) => live.get(`${t.child}\u0000${t.attempt}`) !== (Number(t.bindingVersion) || 0));
-      if (!stale) continue;
-      const nextIns = { ...ins, status: "expired", lastError: "stale_target" };
-      next.set(ins.id, nextIns);
-      expired.push(nextIns);
+      const result = expireStaleInspectionTargets(ins, live, at);
+      if (!result.changed) continue;
+      next.set(ins.id, result.inspection);
+      expired.push({ inspection: result.inspection, targets: result.expiredTargets });
     }
     if (expired.length === 0) return false;
     const snapshot = careStateSnapshot(entry, { inspections: [...next.values()] });
     try {
       appendCareEvent(entry, "care.inspection.expired", {
-        inspections: expired.map((i) => i.id),
+        inspections: expired.filter((e) => e.inspection.status === "expired").map((e) => e.inspection.id),
+        // 判据 6 可观测性：点明本次触发陈旧的是哪些 target（便于事后核验过期来源）
+        expired_targets: expired.flatMap((e) => e.targets.map((t) => ({
+          inspection: e.inspection.id,
+          goal: t.goal,
+          attempt: t.attempt,
+          child: t.child,
+          binding_version: t.bindingVersion,
+        }))),
         reason: "stale_target",
       }, snapshot);
     } catch { /* 事件失败仍要在内存解阻，避免整组被过时巡检卡死到过期 */ }
     entry.inspections = next;
-    for (const ins of expired) {
-      if (ins.messageId) entry.messageIndex.delete(ins.messageId);
+    for (const e of expired) {
+      if (e.inspection.status === "expired" && e.inspection.messageId) entry.messageIndex.delete(e.inspection.messageId);
     }
     return true;
   };
@@ -3402,6 +3476,13 @@ export function createCareRuntime(options = {}) {
     }
   };
 
+  /**
+   * g-618：「首次全量、后续精简」的生效开关。**默认开启**（未配置/null = true）；
+   * 只有显式 `supervisor.care_wake_compact: false` 才逐字回退旧行为（每份都内联完整纪律）。
+   * 取值面只认真布尔（写侧 schema 已拒 "false"/0 等隐式形态）⇒ 不做字符串猜测。
+   */
+  const compactWakeEnabledOf = (cfg) => cfg?.supervisor?.care_wake_compact !== false;
+
   const warningsOf = (cfg, global) => {
     const warnings = [];
     if (cfg?.supervisor?.care_malformed === true) warnings.push("project_care_malformed");
@@ -3489,6 +3570,32 @@ export function createCareRuntime(options = {}) {
     return { cfg, global, resolution, projection, agent, caps, sampled, decision, warnings: warningsOf(cfg, global) };
   };
 
+  /**
+   * g-616 方案 A（负责人裁定 2026-11-06）：**单条定时唤醒**。
+   *
+   * 只要有在途子代理，本 board 就只维持**一条**定时器，按全组**最早**到期触发
+   * （`careCoalescedWakeAt`，等价于改造前的 `decision.nextDueAt`）；「合并」发生在
+   * **触发之后选批**这一步：`dueTargetsOf` 用 `careCoalesceBatch` 把「已到期 + 宽限
+   * `CARE_COALESCE_WINDOW_MS` 内刚过期的邻居」一次投进同一条巡检（现场：g-028 01:21:38
+   * 与 g-029 01:22:33 的 55 秒相邻到期，合并后在 01:21:38 一次关照，g-029 顺延 55 秒）。
+   *
+   * 这里只决定**何时**触发；`deliver === true`（真的到期）⇒ 0ms，否则按最早到期排程
+   * （再被 `configRecheckMs` 封顶为配置重读上界，重扫不投递）。**绝不提前唤醒**：
+   * 上一轮把窗口加在唤醒时刻上（`最早 + 窗口`），连带推迟了 300s 冷却后的唤醒，
+   * `g506 bootstrap HMR` 因此回归 —— 合并只收「已到期」的任务，不改变唤醒时机。
+   *
+   * 不改变任何关照**语义**（阈值/复查间隔/300s 冷却/上限/人工锁/暂停冻结/inspection_open）。
+   */
+  const coalescedWakeDelay = (entry, decision) => {
+    const dueAts = [];
+    for (const s of decision?.tasks ?? []) {
+      if (s.escalated) continue;             // 已升人工：不参与合并，也不提前唤醒
+      if (typeof s.dueAt === "number" && Number.isFinite(s.dueAt)) dueAts.push(s.dueAt);
+    }
+    const at = careCoalescedWakeAt(dueAts, now());
+    return at === null ? null : Math.max(0, at - now());
+  };
+
   const scheduleEntry = (entry) => {
     if (!started || disposed || !entry) return;
     clearTimer(entry);
@@ -3498,7 +3605,8 @@ export function createCareRuntime(options = {}) {
     const decision = computed?.decision ?? null;
     if (decision?.deliver) delay = 0;
     else if (decision?.nextDueAt !== null && decision?.nextDueAt !== undefined) {
-      delay = Math.max(0, decision.nextDueAt - now());
+      // 与改造前逐字等价；`coalescedWakeDelay` 只是同一 `Math.min` 口径的具名封装。
+      delay = coalescedWakeDelay(entry, decision) ?? Math.max(0, decision.nextDueAt - now());
     }
     if (decision?.phase === "waiting_supervisor" || decision?.reason === "delivering") delay = Math.min(delay, busyRecheckMs);
     if (decision?.deliver && entry.retryNotBefore !== null) {
@@ -3530,9 +3638,18 @@ export function createCareRuntime(options = {}) {
 
   const dueTargetsOf = (entry, decision) => {
     const due = [];
+    // g-616 方案 A：一次唤醒投递**一整批**——已到期（含宽限内刚过期的邻居）一次纳入，
+    // 而不是只投最早那一个、55 秒后再为邻居投第二次（现场 01:21:38 / 01:22:33）。
+    const inBatch = new Set(
+      careCoalesceBatch(
+        (decision?.tasks ?? []).filter((s) => !s.escalated),
+        now(),
+        CARE_COALESCE_WINDOW_MS,
+      ).map((b) => `${b.child}\u0000${b.attempt}`),
+    );
     for (const s of decision?.tasks ?? []) {
       if (s.escalated) continue;
-      if (s.dueInMs === null || s.dueInMs > 0) continue;
+      if (!inBatch.has(`${s.child}\u0000${s.attempt}`)) continue;
       const st = entry.tasks.get(`${s.child}\u0000${s.attempt}`);
       if (!st) continue;
       due.push({
@@ -3544,6 +3661,10 @@ export function createCareRuntime(options = {}) {
         lastCareAt: st.lastCareAt,
         stagnantRounds: st.stagnantRounds,
         humanLocked: st.humanLocked === true,
+        // g-616 可观测性（判据 6）：该目标在本次唤醒时是否**尚未到期**（true = 宽限内刚过期并入）。
+        // 恒为 false 时本批就是「同一时刻一起到期」——合并也覆盖这种情形，不是漏合并。
+        coalesced: (s.dueInMs ?? 0) > 0,
+        dueAt: s.dueAt,
       });
     }
     return due;
@@ -3685,6 +3806,18 @@ export function createCareRuntime(options = {}) {
           recheckSeconds: nowCfg.projection.recheck_seconds,
           targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, bindingVersion: t.bindingVersion })),
         });
+        // g-618「首次全量、后续精简」：**默认开启**；`supervisor.care_wake_compact: false` 时逐字旧行为。
+        // 首份 = 本**主管会话**还没收到过完整纪律（标记随 care_state 快照持久化，换会话/重启 ⇒ 首次）。
+        // 纪律资产缺失/不可读 ⇒ fail-open 回退 inline 全文（degraded=true 记入事件），绝不中断巡检。
+        const wakeLang = langOf();
+        const compactEnabled = compactWakeEnabledOf(nowCfg.cfg);
+        const earlierFull = entry.disciplineSeen && entry.disciplineSeen.session === entry.supervisorId;
+        const compact = compactEnabled && !!earlierFull;
+        const discipline = resolveCareDisciplineText({
+          lang: wakeLang,
+          load: (lang) => readCorePromptAsset(CARE_DISCIPLINE_ASSET, lang),
+        });
+        const wakeProvenance = { compact, full: !compact, source: compact ? "asset_ref" : discipline.source, degraded: discipline.degraded };
         const text = formatCareWakeMessage({
           inspectionId: inspection.id,
           targets: due.map((t) => ({
@@ -3698,7 +3831,9 @@ export function createCareRuntime(options = {}) {
             humanLocked: t.humanLocked,
           })),
           maxStagnantRounds: nowCfg.projection.max_stagnant_rounds,
-          lang: langOf(),
+          lang: wakeLang,
+          mode: compact ? "compact" : "full",
+          discipline: discipline.text,
         });
         const message = createCareUserMessage({
           text,
@@ -3709,6 +3844,11 @@ export function createCareRuntime(options = {}) {
         const plannedGroup = { ...planned.group, revision: entry.group.revision + 1 };
         const plannedInspections = new Map(entry.inspections);
         plannedInspections.set(inspection.id, inspection);
+        // g-618：首份全量正文后才承认「本会话已看过纪律」——它必须与**真实发出**的正文一致，
+        // 因此随同一份 care_state 快照落盘（send 失败时按投递前状态回滚，标记一并回滚）。
+        const disciplineSeen = wakeProvenance.full || !wakeProvenance.compact
+          ? { session: entry.supervisorId, at }
+          : (entry.disciplineSeen ?? null);
         // 事件先行：快照（含 pending 巡检与已推进的未答预算）先落盘，再 send。
         // 崩溃在 send 前：恢复端把 queued 视为已发，绝不重复发送（宁可漏一次，不双发）。
         try {
@@ -3716,16 +3856,29 @@ export function createCareRuntime(options = {}) {
             inspection: inspection.id,
             supervisor: entry.supervisorId,
             targets: due.map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child, binding_version: t.bindingVersion })),
+            // g-616 判据 6：合并发生时留下可核验记录——本批共几个目标、其中几个是
+            // 「宽限内到期并入」（唤醒时刻尚未到期）、并入窗口长度。
+            coalesce: {
+              batch_size: due.length,
+              merged_ahead: due.filter((t) => t.coalesced === true).map((t) => ({ goal: t.goal, attempt: t.attempt, child: t.child })),
+              window_ms: CARE_COALESCE_WINDOW_MS,
+            },
             revision: plannedGroup.revision,
             max_stagnant_rounds: nowCfg.projection.max_stagnant_rounds,
             wake_kind: "care_inspection",
             message_id: message.id,
-          }, careStateSnapshot(entry, { group: plannedGroup, tasks: planned.tasks, inspections: [...plannedInspections.values()] }));
+            // g-618：本份唤醒的投递形态与纪律来源（机读、可核验）；关闭开关时三字段恒定
+            // full/config_off 且正文逐字等价于旧行为。
+            wake_form: wakeProvenance.compact ? "compact" : "full",
+            wake_discipline_source: wakeProvenance.source,
+            wake_discipline_degraded: wakeProvenance.degraded,
+          }, careStateSnapshot(entry, { group: plannedGroup, tasks: planned.tasks, inspections: [...plannedInspections.values()], disciplineSeen }));
         } catch { return "append_failed"; }
         entry.group = plannedGroup;
         entry.tasks = new Map(planned.tasks.map((t) => [taskKey(t), t]));
         entry.inspections.set(inspection.id, inspection);
         entry.messageIndex.set(message.id, inspection.id);
+        entry.disciplineSeen = disciplineSeen;
         sentInspection = inspection;
         let sent;
         try {
@@ -3791,6 +3944,9 @@ export function createCareRuntime(options = {}) {
       }
       entry.supervisorId = sup.sid;
       entry.supervisorAgent = sup.agent;
+      // g-618：换主管会话（含宿主重启后的新会话）⇒ 该会话的新模型上下文没见过纪律 ⇒ 视为首次。
+      // 旧标记不会「顺着」新会话继续生效（那会把纪律永久省掉）。
+      if (entry.disciplineSeen && entry.disciplineSeen.session !== sup.sid) entry.disciplineSeen = null;
       return true;
     }
     if (sup.agent !== entry.supervisorAgent) {
@@ -4325,7 +4481,9 @@ export function createCareRuntime(options = {}) {
         const childId = String(agent?.session?.id ?? agent?.id ?? "");
         const binding = bindingForChild(childEntry, childId);
         if (binding && binding.goal && binding.attempt) {
-          const key = `${childId}\u0000${binding.attempt}`;
+          // g-613：care 任务键是 `goal\0attempt`（跨目标复用时同一 child 的不足够区分目标），
+          // 旧写法 `child\0attempt` 在 A/att-001 与 B/att-001 并存时必然串账 ⇒ 改按绑定返回的 goal 取键。
+          const key = `${binding.goal}\u0000${binding.attempt}`;
           const task = childEntry.tasks.get(key);
           if (task && task.bindingVersion === binding.bindingVersion) {
             childEntry.tasks.set(key, applySupervisorMessageToTask(childEntry, task, {
@@ -4565,6 +4723,82 @@ export function createCareRuntime(options = {}) {
     return { ok: true, changed };
   };
 
+  /**
+   * g-613：同一 child 被**复用**到新目标后的关照对账（复用与换 attempt 同一语义，不做例外）。
+   *
+   * 为什么必须显式做一次：care 的任务键是 `goal\0attempt`（不含绑定代际），而跨目标复用最常出现的 attempt id
+   * 恰好都是 `att-001` ⇒ 旧目标 A/att-001 与 新目标 B/att-001 **同键**。若不清旧：
+   *   · 旧任务的计时/锁/未答计数会被当成本任务的既有状态（沿用旧 attempt 的计时与 inactive 状态）；
+   *   · 已投递的旧代际巡检在新绑定下 `bindingVersion` 已换代 ⇒ 结论必然 stale（不会误作用），
+   *     但会把新任务「假装还在等一份已经不存在的结论」，因此这里直接按目标 retire 掉。
+   * 新绑定从**此刻**重新计时（不继承旧自身状态）；旧目标的 dormant/人工锁条目随目标一起清除。
+   */
+  const notifyReusedBinding = (rootArg, input = {}) => {
+    const root = boardRootKey(rootArg);
+    if (!root) return { ok: false, code: "workspace_unresolved" };
+    const entry = entries.get(root);
+    if (!entry) return { ok: true, changed: false, reason: "no_entry" };
+    const child = String(input.child ?? "");
+    const attempt = String(input.attempt ?? "");
+    const goal = String(input.goal ?? "");
+    if (!child || !attempt || !goal) return { ok: false, code: "bad_target" };
+    const at = now();
+    const drop = new Set(); // `${goal}\0${attempt}`
+    drop.add(`${goal}\u0000${attempt}`);
+    const prior = input.prior ?? null;
+    // 旧绑定：同一 child 的**全部**其它任务（含 A/att-001）都属旧代际，一并 retire。
+    for (const t of entry.tasks.values()) {
+      if (t.child !== child) continue;
+      if (t.attempt === attempt && t.goal === goal) continue;
+      drop.add(`${t.goal}\u0000${t.attempt}`);
+    }
+    if (prior?.goal && prior?.attempt) drop.add(`${prior.goal}\u0000${prior.attempt}`);
+    let removedTasks = 0;
+    for (const key of [...entry.tasks.keys()]) {
+      const t = entry.tasks.get(key);
+      if (!t) continue;
+      if (drop.has(`${t.goal}\u0000${t.attempt}`) && !(t.goal === goal && t.attempt === attempt && input.accepted === true)) {
+        // 不写 dormant：旧代际的锁/计数绝不复活到新绑定上。
+        entry.tasks.delete(key);
+        removedTasks += 1;
+      }
+    }
+    for (const [key, d] of [...entry.dormant]) {
+      if (!d || d.child !== child) continue;
+      if (d.goal === goal && d.attempt === attempt) continue;
+      entry.dormant.delete(key);
+    }
+    // 旧代际巡检：按目标 retire（已投递的照样过期，未投递的直接作废）。
+    let removedInspections = 0;
+    for (const [id, ins] of [...entry.inspections]) {
+      if (ins.status === "resolved" || ins.status === "failed" || ins.status === "expired") continue;
+      const hitsNew = ins.targets.some((t) => t.child === child && t.goal === goal && t.attempt === attempt);
+      const hitsDropped = ins.targets.some((t) => drop.has(`${t.goal}\u0000${t.attempt}`));
+      if (!hitsNew && !hitsDropped) continue;
+      entry.inspections.set(id, { ...ins, status: "expired", lastError: "reused_child_new_binding" });
+      if (ins.messageId) entry.messageIndex.delete(ins.messageId);
+      removedInspections += 1;
+    }
+    // 新绑定的起点事实按本次复用"翻篇"：不继承任何旧轮观察值。
+    entry.pendingRunStarts.delete(child);
+    entry.pendingMessageBases.delete(child);
+    const hadLegacy = removedTasks > 0 || removedInspections > 0;
+    if (hadLegacy) {
+      try {
+        appendCareEvent(entry, "care.rebind", {
+          goal, attempt, child,
+          binding_version: Number(input.bindingVersion) || 0,
+          prior: prior ? { goal: prior.goal, attempt: prior.attempt } : null,
+          retired_tasks: removedTasks,
+          retired_inspections: removedInspections,
+          at,
+        }, careStateSnapshot(entry));
+      } catch { /* 事件失败不阻断调度 */ }
+    }
+    scheduleEntry(entry);
+    return { ok: true, changed: hadLegacy, retired_tasks: removedTasks, retired_inspections: removedInspections };
+  };
+
   return {
     start,
     dispose,
@@ -4573,6 +4807,10 @@ export function createCareRuntime(options = {}) {
     control,
     submitOutcome,
     notifyGoalBudgetChanged,
+    // g-613：复用空闲子代理后按新绑定重算关照（retire 旧代际任务/巡检，不继承旧计时与锁）。
+    notifyReusedBinding: (rootArg, input) => {
+      try { return notifyReusedBinding(rootArg, input); } catch (e) { return { ok: false, code: "error", detail: String(e?.message ?? e) }; }
+    },
     entryOfRoot,
     // g-506 返工：生产事件链（成功 claim / 真实主管事件）显式布防入口；幂等、只读校验、失败不抛。
     armForRoot,
@@ -4609,6 +4847,15 @@ const ATTEMPT_OPTIONAL_STRING_SCHEMA = {
   minLength: 1,
   nullable: true,
   description: "由 supervisor 直接提供的当前事实；传 null 或省略表示未提供；不要传空字符串，不能从 brief/handoff 推断。",
+};
+/** g-613：复用空闲专家子代理（宿主 durable child session id）；不传/null = 全新 spawn（既有行为）。 */
+const ATTEMPT_REUSE_CHILD_ID_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  nullable: true,
+  description: "可选：复用**已空闲**的专家子代理承接本目标（宿主 durable child session id，必须属于当前主管）。"
+    + "运行中/不在 registry/被其它未交付目标占用 ⇒ 显式拒绝且零副作用。"
+    + "复用不切换工作目录与工具权限（继承其创建时的父会话），也不创建 worktree。不传或 null = 全新派发子代理。",
 };
 const ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA = {
   type: "array",
@@ -6775,7 +7022,7 @@ export function apply(ctx, config) {
       const started = await startSubagentCompat(subagents, {
         provider, label: `${SUMMARIZER_LABEL_PREFIX}${goal}`, request, signal,
       });
-      indexSummarizerChild(started.childId, { root, goal, actor: opts.actor ?? "system:summarizer" });
+      indexSummarizerChild(started.childId, { kind: "summarizer", root, goal, actor: opts.actor ?? "system:summarizer" });
       return {
         childId: started.childId, error: null, digest,
         model_route: (eff.provider || eff.model) ? `${eff.provider ?? "继承"}/${eff.model ?? "继承"}` : null,
@@ -6809,6 +7056,9 @@ export function apply(ctx, config) {
    * g-374：`subagent/end` 回调——**必须在事件回调侧完成截获与写入**。
    * 实测（card-fe88f5ef §0）：事件在 spawn 后 1.5–4.3s 到达，父轮次先结束不会取消事件但会丢观测窗口
    * ⇒ 任何依赖父轮次存活的写入都会静默丢结果。本回调整体 try/catch：**绝不影响子代理结算**。
+   *
+   * g-613：在 attempt 归属分支上追加**防污染前置判定**（`isStaleOrUnconfirmedEnd`）——旧代际迟到
+   * 或复用投递未确认的 end 一律不写结果、不改目标状态。评审/summarizer 分支的相对顺序**未变**。
    */
   const captureAttemptResults = (info) => {
     try {
@@ -6819,7 +7069,9 @@ export function apply(ctx, config) {
       // fail-closed：空输出 / 异常终止 / 载荷缺失一律记 UNVERIFIED（**绝不记 PASS**）。
       const revEntry = childId ? reviewerIndex.get(childId) : null;
       if (revEntry) {
-        reviewerIndex.delete(childId);
+        // g-613：**不再**在这里删除该索引项——被复用的专家后续还会产生 subagent/end（第二轮结束时）。
+        // 若删掉，那次结束会被当成「未登记」，若此后又被复用做执行 attempt 就会被误当成执行者；
+        // 保留则它能一直正确归因到评审、只在再次被登记为 reviewer 或容量回收时淘汰。
         const revStop = typeof info?.stopReason === "string" && info.stopReason ? info.stopReason : null;
         const revBlocks = Array.isArray(info?.lastAssistantMessage) ? info.lastAssistantMessage : null;
         const revText = revBlocks
@@ -6859,6 +7111,8 @@ export function apply(ctx, config) {
         } catch { /* 忽略 */ }
         return;
       }
+      // g-613：复用后**旧代际**迟到的 end 不得写进当前目标（按代际观察值与投递确认状态判定）。
+      if (isStaleOrUnconfirmedEnd(info, entry)) return;
       if (info?.local === false) return; // 本项目只用 continuable 子代理（local 恒 true）
       // 特性探测：payload 既无 lastAssistantMessage 也无 stopReason ⇒ 宿主未提供该 event 的 g-374 载荷，
       // 静默降级（不写文件、不抛错）。有 stopReason 但缺文本 ⇒ 是「子代理无输出」占位（可区分）。
@@ -6911,8 +7165,340 @@ export function apply(ctx, config) {
     }
   };
 
+  // ============================================================================
+  // g-613：复用**空闲**专家子代理承接新目标（`graph_start_attempt(goal, child_id=...)`）
+  // ============================================================================
+  //
+  // 为什么必须在派发入口做、且由引擎记归属：主管直接对专家发 `send_message` 派活会脱离看板
+  // （目标无法进 in_progress、关照不纳管、成果不可审计）。复用路径把「同一 child → 另一目标/attempt」
+  // 这一事实写进 attempt.md（child_id + binding_version）与事件流，从而让**既有**投影（看板「被复用」、
+  // care 的 bindingVersion、请求归属表）都按同一真源工作 —— 不新造第二套状态机。
+  //
+  // 已实测的宿主边界（0.2.2-rc.1，见 g-613 结果日志）：
+  //   · `agents.get(child).status` ∈ {running, idle}，`agent/status` 在每轮起止各发一次；**idle 的
+  //     continuable child 仍常驻**（settlementState 在 inbox 有 pending 时 wait）⇒ idle 可直接复用；
+  //   · `sendMessage` 对 running 是 **steer**（合入当前步），对 idle 才是新轮；**发送时不能改 cwd/
+  //     模型/工具权限**（子会话 header.cwd 与工具限制沿用创建时继承的父值）；
+  //   · 子代理沙箱根继承父会话 header.cwd ⇒ 复用**不能**缩小写入权限；worktree 只是工作位置隔离；
+  //   · 另一父会话向该 child 发消息 ⇒ `UNAUTHORIZED ... belongs to another parent session`；
+  //   · `subagent/end` 的 `runId` 由宿主每次 residency **随机生成**，插件无法预测/延续蒸发值
+  //     ⇒ 代际只能记**不透明观察值**（零断言，仅用于「是否与当前代际同代」的比较）。
+  //
+  // 并发/竞态纪律：准入判定 → 状态迁移 → attempt 落盘 → 绑定 必须在**同一同步临界区**
+  // （`withLocalLock(root, "execution-"+goal)`，内部无 await）内完成 ⇒ 两个并发复用请求不可能
+  // 同时看到「空闲」；投递（唯一真实 await）放在绑定之后，失败即 fail-closed 如实上报。
+  /** 读取 child 的 live Agent（只读；registry 缺失/抛错 ⇒ null，由调用方按 fail-closed 处理）。 */
+  const liveChildAgent = (childId) => {
+    const agents = ctx.get?.("agents");
+    if (!agents || typeof agents.get !== "function") return { agents: null, agent: null, error: "agents 服务不可用" };
+    try {
+      return { agents, agent: agents.get(String(childId)) ?? null, error: null };
+    } catch (e) {
+      return { agents, agent: null, error: `agents.get 失败：${e?.message ?? e}` };
+    }
+  };
+  /** 调用者（主管）是否**真的**拥有该 child：只用宿主公开 `isOwnedBy`（不以 child_id 自报为准）。 */
+  const callerOwnsChild = (agents, callerAgent, childId) => {
+    if (!agents || typeof agents.isOwnedBy !== "function" || !callerAgent) return "unknown";
+    try {
+      return agents.isOwnedBy(String(childId), callerAgent) === true ? "yes" : "no";
+    } catch {
+      return "unknown";
+    }
+  };
+
+  /**
+   * 复用准入预检（**零副作用**：只在 tool 入口最早执行一次；真正的准入仍在 dispatch 的同步临界区内
+   * 用同一套判定重查）。返回 `null` = 通过；否则为可读拒绝原因（GraphError，直接抛给调用方）。
+   */
+  const inspectReuseChild = (root, childId, callerAgent, { goal, protectedAttempt }) => {
+    const code = String(childId ?? "").trim();
+    if (!code) return null;
+    // ① 形状：child 身份是 durable session id（UUID 等）；拒绝空白/控制字符/超长自报值。
+    if (code.length > 200 || /[\u0000-\u001f\u007f]/.test(code)) {
+      throw new GraphError(`child_id 非法：必须是宿主 durable child session id（不含空白/控制字符且 ≤200 字符）`);
+    }
+    if (!callerAgent) {
+      throw new GraphError("复用 child_id 需要真实调用 agent（无 ex.agent 上下文）——拒绝在无身份上下文里复用子代理");
+    }
+    // ② 存活：复用只针对 live registry 里**常驻**的子代理（冷态无法确认沙箱根/工具面/血缘）。
+    const live = liveChildAgent(code);
+    if (live.error) {
+      throw new GraphError(`无法确认 child ${code} 的状态（${live.error}）：复用 fail-closed，不建 attempt、不迁移状态`);
+    }
+    if (!live.agent) {
+      throw new GraphError(
+        `child ${code} 不在 live registry（已结束/冷态）：复用只支持**已空闲且常驻**的子代理；`
+        + `请在原会话继续或新建子代理（去掉 child_id 重新派发）`,
+      );
+    }
+    // ③ 归属：必须属于当前调用者（主管）——只用宿主公开 isOwnedBy，不看 child_id 自报。
+    const owned = callerOwnsChild(live.agents, callerAgent, code);
+    if (owned === "unknown") {
+      throw new GraphError(`无法确认 child ${code} 是否属于当前主管（agents.isOwnedBy 不可用或出错）：复用 fail-closed`);
+    }
+    if (owned !== "yes") {
+      throw new GraphError(`child ${code} 不属于当前主管会话（跨主管复用被拒绝）：不建 attempt、不迁移状态`);
+    }
+    // ④ 只要空闲：运行中一律拒绝 —— sendMessage 对 running 是 **steer**，会把新目标混进旧任务的当前步。
+    const status = (() => { try { return live.agent.status; } catch { return undefined; } })();
+    if (status === "running") {
+      throw new GraphError(
+        `child ${code} 正在运行：复用只接受**空闲**子代理。向运行中的子代理投递会被宿主当作 steer 合入当前步，`
+        + `新任务会与旧任务混杂 ⇒ 拒绝（不建 attempt、不迁移状态）。请等它空闲后重试`,
+      );
+    }
+    if (status !== "idle") {
+      throw new GraphError(`child ${code} 状态未知（status=${String(status)}）：复用 fail-closed，不建 attempt、不迁移状态`);
+    }
+    // ⑤ 跨目标独占：同一 child 不得同时绑定多个未交付目标的**活跃** attempt。
+    let bindings = [];
+    try {
+      bindings = findActiveExecutionBindings(root, code);
+    } catch (e) {
+      throw new GraphError(`无法读取看板绑定（${e?.message ?? e}）：复用 fail-closed，避免跨目标抢占`);
+    }
+    const busy = bindings.filter((b) => b.active && !(goal && b.goal === goal && b.attempt === protectedAttempt));
+    if (busy.length) {
+      const where = busy.map((b) => `${b.goal}/${b.attempt}(result=${b.result})`).join("、");
+      throw new GraphError(
+        `child ${code} 已被其它未交付目标的活跃 attempt 占用：${where}。`
+        + `同一子代理不得同时服务多个目标（归属/关照无法区分）⇒ 拒绝复用；请先完成或解绑旧 attempt`,
+      );
+    }
+    return null;
+  };
+
+  /**
+   * 取本块看板里该 child 的**唯一活跃绑定**（用于新目标复用时的「旧绑定 → 被复用」标注）。
+   * 只看 active 且与本次新目标不同的绑定；没有就是 null（例如该 child 是主管自己的普通子代理）。
+   */
+  const priorActiveBindingFor = (root, childId, goal, protectedAttempt) => {
+    try {
+      const rows = findActiveExecutionBindings(root, childId)
+        .filter((b) => !(b.goal === goal && b.attempt === protectedAttempt));
+      if (!rows.length) return null;
+      // 优先「仍然活跃」的绑定（跨目标抢占已由准入拒绝，这里通常为空）；否则取最近终结的那条
+      //（bindingVersion 代表该 attempt 的绑定次数，越大越接近本轮使用）。没有可指向的旧绑定 ⇒ null。
+      rows.sort((a, b) => (Number(b.active) - Number(a.active)) || (b.bindingVersion - a.bindingVersion));
+      return rows[0];
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * 子代理**代际**（residency epoch）观察值：`subagent/start` 的 `runId`（宿主每次随机、不透明）。
+   * 插件**不**依赖它证明「谁在跑」，只把它当作「是否与当前代际同代」的比较键（零假设、零写盘）。
+   */
+  const childEpochs = new Map(); // childId → { runId, observedAt }
+  const epochOf = (childId) => (childId ? childEpochs.get(String(childId))?.runId ?? null : null);
+  const recordEpoch = (childId, runId) => {
+    if (!childId) return;
+    childEpochs.set(String(childId), { runId: runId ?? null, observedAt: Date.now() });
+    while (childEpochs.size > 512) {
+      const oldest = childEpochs.keys().next().value;
+      if (oldest === undefined) break;
+      if (oldest === childId) break; // 不淘汰刚写入的一项
+      childEpochs.delete(oldest);
+    }
+  };
+
+  /**
+   * g-613 防污染判定：`subagent/end` 是否属于**当前代际**、且该代际的投递已被确认。
+   *
+   * 两条 fail-closed 规则（任一命中即**不写结果、不改目标状态**，纯 stderr 留痕）：
+   *  ① **旧代际迟到**：缓存里该 child 已被观察到更新的代际（复用后新一轮的 `runId`），
+   *     本次 end 的 runId 与之不同 ⇒ 它是复用前那一轮的迟到事件。`runId` 是宿主每次 residency
+   *     随机生成的不透明值，插件**不**用它证明「谁在跑」，只用来比较「是否同代」（零假设）。
+   *  ② **投递未确认**：复用投递尚在飞（delivering）或受理后尚未确认（awaited）时到达的 end，
+   *     无法证明它承载的是新任务 ⇒ 丢弃（绝不把旧任务的结束当新任务的成果）。
+   */
+  const isStaleOrUnconfirmedEnd = (info, entry) => {
+    const childId = typeof info?.id === "string" && info.id ? info.id : null;
+    const runId = typeof info?.runId === "string" && info.runId ? info.runId : null;
+    const stop = typeof info?.stopReason === "string" ? info.stopReason : "?";
+    const current = epochOf(childId);
+    if (runId && current && current !== runId) {
+      staleEndNotes.push({ childId, runId, current, stop, at: Date.now() });
+      if (staleEndNotes.length > 64) staleEndNotes.splice(0, staleEndNotes.length - 64);
+      process.stderr.write(
+        `[dsh-graph] subagent/end 属旧代际（child=${childId} run=${runId} 当前=${current} stop=${stop}）`
+        + ` —— 不写结果、不改目标状态（当前归属 ${entry.goal}/${entry.attempt}）\n`,
+      );
+      return true;
+    }
+    if (entry.awaited === true || entry.delivering === true) {
+      process.stderr.write(
+        `[dsh-graph] subagent/end child=${childId} 到达时复用投递尚未确认（awaited/delivering）——`
+        + `不写结果、不改目标状态（${entry.goal}/${entry.attempt}）\n`,
+      );
+      return true;
+    }
+    return false;
+  };
+
+  /** 被丢弃的迟到 end 的有界留痕（只用于诊断/测试断言，**不是**状态真源）。 */
+  const staleEndNotes = [];
+
+  /**
+   * g-613：复用收据（**同步**构造，运行于 dispatch 的 `execution-<goal>` 临界区内）。
+   *
+   * 此刻 attempt 已落盘（dispatch_in_flight=true），这里再按**同一套判定**重查一次空闲/归属/独占
+   * ——预检与临界区之间隔了建树/读上下文等步骤，child 可能已经开跑；不一致一律抛 GraphError，
+   * 由 dispatch 的既有失败收敛把该 attempt 结算为 child_error（**零残留**：不投递、不迁移）。
+   * 绑定成功后 closeFailure 失效，后续投递失败只改本 attempt 的记录与事件，绝不误伤别的目标。
+   */
+  const buildReuseIntake = (root, { goal, attempt, childId, actor, parentSessionId, callerAgent, prompt, promptHash, contextDigest, modelRoute, mode, modeSource, injectedCards, injectedHandoffs, brief, briefSource, baselineCommit }) => {
+    let closeFailure = true;
+    const fail = (message) => {
+      if (!closeFailure) return;
+      closeFailure = false;
+      // 先结算「首次启动未结算」窗口与 child_error 占位，再抛出（attempt 进入终态，门禁不会永久卡死）。
+      try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: message }); }
+      catch (e) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${e?.message ?? e}\n`); }
+      writeChildErrorResults(root, goal, attempt, actor, `子代理复用未通过：${message}`);
+      throw new GraphError(message);
+    };
+    inspectReuseChild(root, childId, callerAgent, { goal, protectedAttempt: attempt });
+    const prior = priorActiveBindingFor(root, childId, goal, attempt);
+    // 绑定使该 child 的归属翻到本目标（attempt.bound + binding_version 递增）。
+    try {
+      // 复用路径**已持有** execution-<goal> 锁（withLocalLock 不可重入）⇒ 必须用调用方持锁变体。
+      bindAttemptChildLocked(
+        root, goal, attempt, childId, actor,
+        parentSessionId ?? callerAgent?.session?.id ?? null,
+        null, null, modelRoute ?? null,
+        mode, modeSource,
+        { dispatchInFlight: true, parentSessionId: parentSessionId ?? callerAgent?.session?.id ?? null },
+      );
+    } catch (bindErr) {
+      closeFailure = false; // 绑定 CAS 冲突：attempt 已被取消/解绑，不再追加 child_error 覆盖真实状态
+      throw new GraphError(`attempt 绑定失败（复用 child ${childId}，未投递任何消息）：${bindErr?.message ?? bindErr}`);
+    }
+    closeFailure = false;
+    const bindingVersion = (() => {
+      try {
+        return Number(goalDetail(root, goal).attempts?.find((a) => a.id === attempt)?.binding_version) || 0;
+      } catch { return 0; }
+    })();
+    // 「旧绑定 → 被复用」标注写进**旧目标**的事件流（看板既有投影只认 attempt.reused + reused_by）。
+    if (prior) {
+      try {
+        appendAttemptReused(root, { goal: prior.goal, attempt: prior.attempt, childId, reusedBy: `${goal}/${attempt}`, actor });
+      } catch (e) {
+        process.stderr.write(`[dsh-graph] attempt.reused 事件写入失败（已忽略，看板仍按绑定兜底）：${e?.message ?? e}\n`);
+      }
+    }
+    return {
+      root, goal, attempt, childId, bindingVersion, prior, actor, callerAgent, prompt, promptHash, contextDigest,
+      modelRoute, mode, modeSource, injectedCards, injectedHandoffs, brief, briefSource, baselineCommit,
+      closeFailure: () => closeFailure,
+    };
+  };
+
+  /**
+   * g-613：投递复用提示词并结算（`force=false` 时任何不确定都 fail-closed）。
+   *
+   * 三条硬纪律：
+   *  ① 只有宿主**受理**（返回 message id / {messageId}）才算已派发；超时按**不确定 = 未投递**处理；
+   *  ② 投递失败的收尾**不调用 interrupt**：这个 child 可能本来就在替别的目标干活（主管自建子代理），
+   *     中断它会误杀无关工作；只把本 attempt 结算为 child_error 并记 `attempt.reuse_failed`；
+   *  ③ 受理 ≠ 开跑：返回体用 `delivery`/`started` 两个字段如实区分，禁止把「已投递」说成「已开始工作」。
+   */
+  const settleReuseDispatch = async (r, { signal, force }) => {
+    const subagents = ctx.get?.("subagents");
+    const base = {
+      ok: true,
+      attempt: r.attempt,
+      child_id: r.childId,
+      reused: true,
+      child_error: null,
+      model_route: r.modelRoute ?? null,
+      mode: r.mode ?? null,
+      mode_source: r.modeSource ?? null,
+      injected_cards: r.injectedCards ?? [],
+      injected_handoffs: r.injectedHandoffs ?? [],
+      // 复用**不**创建工作树：工作位置隔离只在全新 spawn 时发生；且子代理的 cwd/权限沿用其创建时
+      // 继承的父会话值（宿主实测），复用方**不能**在发送时切换 —— 如实回传而不是编一个 worktree。
+      worktree: false,
+      isolated: false,
+      worktree_reason: "reused_child",
+      worktree_created: false,
+      worktree_reused: false,
+      baseline_commit: r.baselineCommit ?? null,
+      brief: r.brief ?? null,
+      brief_source: r.briefSource ?? null,
+      prompt: r.prompt ?? null,
+      prompt_hash: r.promptHash ?? null,
+      context_digest: r.contextDigest ?? null,
+      prior_attempt: r.prior ? { goal: r.prior.goal, attempt: r.prior.attempt } : null,
+      delivery: "not_attempted",
+      started: false,
+    };
+    if (!subagents || typeof subagents.sendMessage !== "function") {
+      const msg = "subagents.sendMessage 不可用：无法向既有子代理投递任务（fail-closed，未声称已开始工作）";
+      if (r.closeFailure()) blankAttemptResults(r, msg);
+      return { ...base, child_error: msg, delivery: "unavailable", note: msg };
+    }
+    // 投递：模型可见内容 = 完整 attempt 提示词（与全新派发的提示词同源、同格式）。
+    let timer = null;
+    try {
+      const pending = subagents.sendMessage(
+        r.callerAgent,
+        r.childId,
+        [{ type: "text", text: r.prompt }],
+        { signal: signal ?? new AbortController().signal },
+      );
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error("投递超时"), { code: "REUSE_DELIVERY_TIMEOUT" })), REUSE_DELIVERY_TIMEOUT_MS);
+        timer?.unref?.();
+      });
+      const receipt = await Promise.race([pending, timeout]);
+      const messageId = typeof receipt === "string" ? receipt
+        : (receipt && typeof receipt.messageId === "string" ? receipt.messageId : null);
+      if (!messageId) {
+        // 受理形态无法识别 ⇒ 不确定 ⇒ fail-closed（绝不把未知回执当成功）。
+        throw Object.assign(new Error(`sendMessage 回执无法确认受理（${String(JSON.stringify(receipt)).slice(0, 120)}）`), { code: "REUSE_DELIVERY_TIMEOUT" });
+      }
+      return { ...base, delivery: "accepted", message_id: messageId, started: true, started_basis: "delivery_accepted" };
+    } catch (e) {
+      const timedOut = e?.code === "REUSE_DELIVERY_TIMEOUT";
+      const code = timedOut ? "delivery_timeout" : "delivery_rejected";
+      const detail = String(e?.message ?? e);
+      process.stderr.write(`[dsh-graph-host] 复用投递失败（${code}，本次 attempt 已按未派发处理）：${detail}\n`);
+      // 投递失败 ⇒ 本次 attempt 永远不会有子代理输出（host 可能已为本次复用起了一轮，但它跑的不是我们的任务），
+      // 必须补写 child_error 占位（g-374 既有不变式：无子代理输出的 attempt 由派发处补齐占位摘要），
+      // 否则工作区里「有 attempt、无任何结果文件」的孤儿记录无法被看板/摘要按同一规则解释。
+      blankAttemptResults(r, `复用投递失败（${code}）：${detail}`);
+      try {
+        appendAttemptReuseFailed(root, { goal: r.goal, attempt: r.attempt, childId: r.childId, bindingVersion: r.bindingVersion, code, detail, actor: "system:dispatch" });
+      } catch (evtErr) {
+        process.stderr.write(`[dsh-graph] attempt.reuse_failed 事件写入失败（已忽略）：${evtErr?.message ?? evtErr}\n`);
+      }
+      return {
+        ...base,
+        // force=true（既有强制启动语义）时如实保留绑定，但仍**不**声称已开始工作。
+        child_id: force ? r.childId : null,
+        child_error: `复用投递${timedOut ? "不确定（超时）" : "被拒绝"}：${detail}（未确认投递 ⇒ 按未派发处理，不声称已开始工作）`,
+        delivery: timedOut ? "timeout" : "rejected",
+        started: false,
+        note: "复用投递未确认：attempt 已结算为 child_error；未改动目标状态机，也未中断该子代理（避免误杀其原有工作）",
+      };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  /** 复用结算的「无正文」占位 —— 复用路径**不得**登记 attempt↔child 归属。 */
+  const blankAttemptResults = (r, note) => {
+    try {
+      writeChildErrorResults(r.root, r.goal, r.attempt, "system:dispatch", note);
+    } catch (err) {
+      process.stderr.write(`[dsh-graph] 复用占位摘要写入失败（已忽略）：${err?.message ?? err}\n`);
+    }
+  };
+
   // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
-  // （parent.options / childSessionMeta / captureDelegatedPolicyOverrides），传 null 必然失败。
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
   const resolveSpawnParent = (rootForReq) => {
     try {
@@ -6950,8 +7536,12 @@ export function apply(ctx, config) {
     mode,
     worktree,
     force = false,
+    child_id,
   }) => {
     if (!goal) throw new GraphError("missing goal");
+    // g-613：可选 `child_id` —— 复用**空闲**专家子代理承接本目标。
+    // 未传（undefined/null/空串）时 **完全不进入** 复用分支 ⇒ 全新 spawn 行为与 g-613 之前逐字等价。
+    const reuseChildId = typeof child_id === "string" && child_id.trim() ? child_id.trim() : null;
     // 1. 契约规范化与校验
     if (attempt_brief !== undefined && attempt_brief !== null && typeof attempt_brief !== "string") {
       throw new GraphError("attempt_brief 必须是 string 类型");
@@ -6975,6 +7565,10 @@ export function apply(ctx, config) {
     //    HTTP 入口（GUI 拖拽/执行按钮）是既有人工强制启动路径，保持原行为不受影响。
     const admission = assertExecutionAdmission(root, goal, { force, requireDescription: entrypoint === "tool" });
     const { goalFile, doc } = admission;
+
+    // 2.4 g-613：复用准入预检（**零副作用**、最早定位）：未通过 ⇒ 抛可读 GraphError，
+    //     此刻尚未建树、未迁移、未建 attempt、未启动/投递任何东西。
+    if (reuseChildId) inspectReuseChild(root, reuseChildId, parentAgent, { goal });
 
     // 2.5 g-473：工具能力自检（**最早**定位，零副作用）。
     //     缺必需工具（解析后的 shell / read / write / edit / graph_*）时不建 attempt、不建工作树、
@@ -7250,9 +7844,38 @@ export function apply(ctx, config) {
         worktreeProbe: probeSummary,
         dispatchInFlight: true,
       });
+
+      // g-613：复用路径在**同一同步临界区**内完成「重查空闲 → 独占 → 迁移 → 落 attempt → 绑定」，
+      // 之后才回到异步世界投递提示词。这里提前返回复用收据（复用意图确定后不再走 spawn 分支）。
+      if (reuseChildId) {
+        return {
+          reuse: buildReuseIntake(root, {
+            goal,
+            attempt,
+            childId: reuseChildId,
+            actor,
+            parentSessionId,
+            callerAgent: parentAgent,
+            prompt,
+            promptHash,
+            contextDigest,
+            modelRoute: effRoute,
+            mode: effModeRes.mode,
+            modeSource: effModeRes.source,
+            injectedCards,
+            injectedHandoffs: injectedHandoffRefs,
+            brief: resolvedBrief.brief,
+            briefSource: resolvedBrief.source,
+            baselineCommit: engineBaselineCommit ?? null,
+          }),
+        };
+      }
       return { attempt, wtResult, isolationReport, prompt };
     }, { lockTimeoutMs: 5000 });
     const { attempt, wtResult, isolationReport, prompt } = reservation;
+    // g-613：复用分支在此提前返回一个 Promise，不进入下方「建树 → 启动子代理」的同步临界区。
+    //（结构性约束：该临界区内不得出现异步等待关键字，见 g-406 守卫 A。）
+    if (reservation.reuse) return finishReuseDispatch(reservation.reuse, { signal, force });
 
     // 9. 启动与绑定子代理
     if (providerError) {
@@ -7427,6 +8050,36 @@ export function apply(ctx, config) {
         prompt,
       };
     }
+  };
+
+  /**
+   * g-613：复用路径的收尾（归因登记 → 投递 → 关照对账）。
+   *
+   * **必须定义在 `dispatchExecutionAttempt` 之外**（结构性要求）：派发函数内的「建树 → 启动子代理」
+   * 必须处于同一同步临界区、中间不得有 await（g-406 守卫 A 只取证派发函数区域）。复用分支在
+   * 解构后**提前 return** 到这里，投递 await 因此落在该取证区域之外，也不会插进建树与启动之间。
+   */
+  const finishReuseDispatch = async (r, { signal, force }) => {
+    // 归因登记：只有**绑定成功后**才把该 child 的当前归属翻到本目标，并进入「投递未确认」窗口
+    //（此时到达的 end 一律丢弃，见 isStaleOrUnconfirmedEnd）。
+    indexChildAttempt(r.childId, {
+      kind: "attempt", root: r.root, goal: r.goal, attempt: r.attempt, actor: r.actor,
+      awaited: true, delivering: true, epoch: epochOf(r.childId),
+    });
+    const out = await settleReuseDispatch(r, { signal, force });
+    // 投递确认后：清 awaited/delivering（此后到达的 end 才被允许写结果）。
+    if (out.delivery === "accepted") {
+      indexChildAttempt(r.childId, {
+        kind: "attempt", root: r.root, goal: r.goal, attempt: r.attempt, actor: r.actor,
+        awaited: false, delivering: false, epoch: epochOf(r.childId),
+      });
+    }
+    careRuntime?.notifyReusedBinding?.(r.root, {
+      goal: r.goal, attempt: r.attempt, child: r.childId, bindingVersion: r.bindingVersion,
+      prior: r.prior ? { goal: r.prior.goal, attempt: r.prior.attempt, bindingVersion: r.prior.bindingVersion } : null,
+      accepted: out.delivery === "accepted",
+    });
+    return out;
   };
 
   // ---- g-436：独立评审的统一派发服务（工具 graph_start_review 与 REST start-review 共用一套）----
@@ -7707,7 +8360,7 @@ export function apply(ctx, config) {
         return reviewOutcome({ ...base, reviewer_child_id: started.childId, child_error: msg });
       }
       // 归因登记：只在这里登记——结论结算以该真实 child 身份为唯一凭据。
-      indexReviewerChild(started.childId, { root, goal, reviewId, actor });
+      indexReviewerChild(started.childId, { kind: "reviewer", root, goal, reviewId, actor });
       return reviewOutcome({ ...base, reviewer_child_id: started.childId, child_error: null });
     } catch (e) {
       const err = subagentSpawnErrorText(e);
@@ -8472,7 +9125,7 @@ export function apply(ctx, config) {
       def: {
         name: "graph_start_attempt",
         description: sT("tool.graph_start_attempt"),
-        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA }, ["goal"]),
+        parameters: params({ goal: str, card: str, executor: str, provider: str, model: str, reasoning_effort: str, mode: str, worktree: { type: "boolean" }, attempt_brief: str, task_type: ATTEMPT_TASK_TYPE_SCHEMA, baseline_commit: ATTEMPT_OPTIONAL_STRING_SCHEMA, source_attempt: ATTEMPT_OPTIONAL_STRING_SCHEMA, acceptance_items: ATTEMPT_ACCEPTANCE_ITEMS_SCHEMA, child_id: ATTEMPT_REUSE_CHILD_ID_SCHEMA }, ["goal"]),
       },
       run: async (a, ex) => {
         // 校验 attempt_brief 类型（g-150 review 问题 4）
@@ -8490,6 +9143,14 @@ export function apply(ctx, config) {
           if (typeof a.mode !== "string" || !normalizeSubagentMode(a.mode)) {
             throw new GraphError(`mode 只允许 ${SUBAGENT_MODES.join("/")}`);
           }
+        }
+        // g-613：`child_id` 复用空闲专家子代理——类型校验最早（零副作用），真正的复用准入在
+        // dispatchExecutionAttempt 的同步临界区内完成（同一套判定、可重用错误）。
+        if (a.child_id !== undefined && a.child_id !== null && typeof a.child_id !== "string") {
+          throw new GraphError("child_id 必须是 string 类型（宿主 durable child session id）");
+        }
+        if (a.child_id !== undefined && a.child_id !== null && a.card !== undefined && a.card !== null) {
+          throw new GraphError("显式 child_id 仅用于承接目标执行；收集任务（card）请不传 child_id 以新建收集子代理");
         }
         const executor = a.executor ?? actorOf(ex);
         const r = rootFor(ex);
@@ -8588,6 +9249,7 @@ export function apply(ctx, config) {
           reasoning_effort: a.reasoning_effort,
           mode: a.mode,
           worktree: a.worktree,
+          child_id: a.child_id,
         });
         const result = {
           attempt: execRes.attempt,
@@ -8611,6 +9273,20 @@ export function apply(ctx, config) {
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
         if (execRes.brief) result.brief = execRes.brief;
+        // g-613：复用判定的可观测面（白名单构造——不在此登记主管就看不到「复用还是新开」以及
+        // 「投递是否被受理」）。只有复用路径才出现这些字段 ⇒ 未传 child_id 的响应逐字不变。
+        if (execRes.reused === true) {
+          result.reused = true;
+          result.delivery = execRes.delivery ?? null;
+          // 提示词哈希/上下文摘要与全新派发同口径回传（复用不额外回显整份提示词，但审计锚点必须可查）。
+          if (execRes.prompt_hash) result.prompt_hash = execRes.prompt_hash;
+          if (execRes.context_digest) result.context_digest = execRes.context_digest;
+          // started 只表示「宿主已受理投递」，**不是**「已开始工作」的证据。
+          result.started = execRes.started === true;
+          if (execRes.started_basis) result.started_basis = execRes.started_basis;
+          if (execRes.message_id) result.message_id = execRes.message_id;
+          result.prior_attempt = execRes.prior_attempt ?? null;
+        }
         // g-251：来源闭集四值一律回传（含 "brief"）——显式 brief 也是一等来源，不再被吞成 undefined，
         // 保证工具响应对来源的表述与 attempt meta/事件/goalDetail 三处完全一致。
         if (execRes.brief_source) result.brief_source = execRes.brief_source;
@@ -8927,6 +9603,14 @@ export function apply(ctx, config) {
               default: null,
               minimum: 30,
               maximum: 86400,
+            },
+            // g-618：关照唤醒正文「首次全量、后续精简」开关（默认开启 = 未配置/null）。
+            // 只控制**文案投递方式**；关闭 = 逐字回退「每份都内联完整纪律」的旧行为。
+            "supervisor.care_wake_compact": {
+              type: "boolean",
+              scope: "workspace",
+              default: true,
+              values: [true, false, null],
             },
             "prompt_overrides.subagent": {
               states: ["default", "override", "disable"],
@@ -10449,6 +11133,7 @@ export function apply(ctx, config) {
             mode,
             worktree,
             force: body.force === true,
+            child_id: body.child_id,
           });
           json(res, 200, {
             ok: true,
@@ -10470,6 +11155,17 @@ export function apply(ctx, config) {
             worktree_reused: execRes.worktree_reused === true,
             // g-437 P1：同工具入口（白名单两处同时登记）。
             baseline_commit: execRes.baseline_commit ?? null,
+            // g-613：复用面同样两处登记（同工具入口）。
+            ...(execRes.reused === true ? {
+              reused: true,
+              delivery: execRes.delivery ?? null,
+              prompt_hash: execRes.prompt_hash ?? null,
+              context_digest: execRes.context_digest ?? null,
+              started: execRes.started === true,
+              started_basis: execRes.started_basis ?? null,
+              message_id: execRes.message_id ?? null,
+              prior_attempt: execRes.prior_attempt ?? null,
+            } : {}),
           });
         } catch (e) {
           // g-610：同目标仍在运行/首次启动未结算 ⇒ 409；其余准入错误维持 400；
@@ -11089,6 +11785,14 @@ export function apply(ctx, config) {
       try {
         const off = ctx.on("subagent/end", captureAttemptResults);
         if (typeof off === "function") disposers.push(off);
+      } catch { /* 事件名不被宿主支持 ⇒ 静默（特性探测） */ }
+      // g-613：记录每个 child 的**代际观察值**（`subagent/start` 的 `runId`，宿主每次随机、不透明）。
+      // 只用于「该 end 是否属于当前代际」的比较，**不**用来证明谁在跑、不写盘。
+      try {
+        const offStart = ctx.on("subagent/start", (info) => {
+          try { recordEpoch(info?.id, typeof info?.runId === "string" ? info.runId : null); } catch { /* 忽略 */ }
+        });
+        if (typeof offStart === "function") disposers.push(offStart);
       } catch { /* 事件名不被宿主支持 ⇒ 静默（特性探测） */ }
     }
 

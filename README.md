@@ -12,18 +12,18 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
-  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.2--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.23.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v0.24.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
 
-**最新亮点（v0.23.0）**
+**最新亮点（v0.24.0）**
 
-- **长任务智能关照与僵局干预**：主管空闲期间对进行中的子代理长任务按生效间隔自动发起巡检与状态把关；支持连续未回复/进展停滞自动升级等待人工，到期只触发巡检而不武断中断执行，支持整组关照的暂停、继续与重置。
-- **子代理时间预算调度与动态基准重算**：支持在目标中显式配置预计任务时间预算（未配置继承项目/全局默认阈值）；首次派发、运行中调整预算或主管向运行中子代理发送新消息时，立即依据最新时间基准重新计算关照截止，并保持至少 5 分钟无答有效冷却防频发唤醒。
-- **运行轮次精确隔离与历史保真追溯**：子代理运行按起止时点划定独立轮次，停止即停表，重新运行自起新轮；精确记录每轮起始预算与变更时间线，禁止以停止时刻预算冒充整轮预算，正常宿主重建遇到同一运行中任务不拆分轮次并如实标注观察空窗。
-- **主管会话智能保活机制**：名下有子代理在运行且主管处于空闲时，自动在适当时机进行有界续期与单次防离线保活，避免长时间未交互导致上下文失效。
-- **插件 HTTP 接口安全加固与派发去重**：全面封闭无凭证访问风险，对齐宿主统一鉴权与身份白名单校验；强化派发准入门禁，严格防止同一目标并发派发重复执行尝试，杜绝状态冲突与资源争用。
+- **专家子代理可承接新目标**：`graph_start_attempt` 支持把**空闲**专家子代理（如 Agent Teams 成员）带上下文接到另一个目标上，免去重建与重读；运行中的一律拒绝，同一专家不会被两个未交付目标同时占用。
+- **关照唤醒不再连续打扰**：多个子代理的关照到期时间相近时合并为一次唤醒批量投递，不再隔几十秒连续叫醒主管；先到期任务最多顺延一个合并窗口。
+- **关照纪律不再重复注入**：唤醒正文改为「首次全量、后续精简」，多目标巡检时省下的篇幅随目标数放大（10 目标约省 85%）；精简版仍保留判据定义与两条防误判纪律，可用 `supervisor.care_wake_compact: false` 一键退回旧行为。
+- **支持 DSH 0.2.2 宿主**：声明范围调整为 `>=0.1.5-rc.2 <0.2.3-0`，并在 `0.2.2-rc.1` 上完成安装、启动与看板读写验证。
+- **测试基线恢复全绿**：修复真实宿主测试夹具对新宿主的适配，全量自证由 142 例漂移失败恢复为 2920+ 全绿。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。
 
@@ -85,6 +85,23 @@ dsh plugin --profile <name> add dsh-graph
 | 完成摘要 | `graph_write_results` · `graph_refresh_results` |
 | 换会话 | `graph_handoff` · `graph_claim_supervisor` |
 | 帮助 | `graph_help` |
+
+### 复用专家子代理（`graph_start_attempt(child_id=...)`）
+
+把任务交给**已存在的专家子代理**时，用 `graph_start_attempt(goal, child_id=<专家 id>)` 派发，
+不要对它直接 `send_message` 私聊派活——前者会把目标推进 `in_progress`、落到 attempt 归属、
+纳入关照调度并留 `attempt.bound` / `attempt.reused` 事件。
+
+- **只接受空闲**子代理：运行中一律拒绝（可读错误、零副作用），因为向运行中的子代理投递会被宿主当作
+  steer 合入当前步；
+- **跨目标独占**：同一 child 不得同时绑定多个未交付目标的活跃 attempt；归属与关照键含
+  项目+目标+attempt+child+绑定版本+代际，`A/att-001` 与 `B/att-001` 不串账；
+- **投递不确定即 fail-closed**：只有宿主确证受理才回 `delivery=accepted / started=true`，
+  否则回 `child_error` 并记 `attempt.reuse_failed`；
+- 旧轮迟到的 `subagent/end` 不污染新目标；复用后关照按新绑定重新计时；
+- **复用不切换工作目录、不改变工具权限**（继承创建时的父会话），也不创建 worktree
+  （`worktree=false`、`worktree_reason=reused_child`）。**worktree 是工作位置隔离，不是权限隔离**
+  ——同属工作区根的兄弟树仍可写，只有越出沙箱根才被拒绝。
 
 ## 看板（浏览器客户端）
 

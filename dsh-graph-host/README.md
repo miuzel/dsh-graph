@@ -12,7 +12,7 @@
   <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
-  <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.2--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+  <a href="https://raw.githubusercontent.com/miuzel/dsh-graph/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
 ---
@@ -42,7 +42,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 **当前版本**：v0.23.0。**环境要求**：Node.js ≥ 22（包内预编译 core 运行时）。宿主提供的核心包（`@deepseek-ai/cordis`、`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`）以 `peerDependencies` + `peerDependenciesMeta.optional`（DSH 生态惯例）声明，由 DSH 宿主环境提供，安装不产生 peer 告警；`yaml` 为插件自带运行依赖（声明在 `dependencies` 中），避免产生重复的核心包实例。
 
-**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.2-0`（上界 `-0` 排除 `0.2.2` 的一切预发布与正式版；整条 `0.2.1` 线已在范围内），`engines.dsh` 供 dsh-market 等宿主感知型市场在卡片展示与安装/更新预检中读取。⚠️ 宿主的**安装/启动门禁只读 `peerDependencies`、不读 `engines.dsh`**，故两处必须同步放宽（只改 `engines.dsh` 无效）。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。⚠️ 上列是**历史轮次**的安装/启停/REST 结论，覆盖的是各自版本的产品代码；g-507 引入的 **HTTP 鉴权入口**只在 `0.2.1-rc.2` 实测（见下文「HTTP 鉴权」一节），**不得**据本段推断其它版本上的鉴权结论。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
+**宿主兼容范围**：`engines.dsh` 与 `peerDependencies["@deepseek-ai/dsh-settings"]` 同步声明 `>=0.1.5-rc.2 <0.2.3-0`，覆盖 `0.2.2` 线；本包要求 Node ≥22，而 `0.2.2-rc.1` 宿主自身要求 Node ≥24.9.0。已核实的 `0.2.1-rc.5`、`0.2.2-alpha.3` 和 `0.2.2-rc.1` 中，宿主 `unmetRequirements` 在 `engines.dsh` 存在时单独据此判定并立即返回，忽略 peer；`0.2.0-rc.2` 及更早则只读 peer。出处：`@deepseek-ai/dsh-app-boot/lib/index.js`，`unmetRequirements`（0.2.0-rc.2:287-299；0.2.1-rc.5:279-290；0.2.2-alpha.3 和 0.2.2-rc.1:1096-1105）。本包始终声明 `engines.dsh`，因此在上述已核实的新实现中 peer 分支不会执行；这些实现仅在缺少 `engines.dsh` 时检查 peer。两处仍须同步以保持声明一致，并供 dsh-market 等市场和工具读取。**实测通过的宿主**：`0.1.6-alpha.2` ~ `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.0-rc.2`（负责人 2026-09-30 真机复验）、`0.2.1-alpha.2`（2026-10-09 隔离实例**无豁免**复验）。⚠️ 上列是**历史轮次**的安装/启停/REST 结论，覆盖的是各自版本的产品代码；g-507 引入的 **HTTP 鉴权入口**只在 `0.2.1-rc.2` 实测（见下文「HTTP 鉴权」一节），**不得**据本段推断其它版本上的鉴权结论。该区间顺带覆盖的 `0.1.8` 系**在 npm 上从未发布**（`0.1.7-rc.2` 之后直接跳版到 `0.2.0-rc.1`），故为空集，不构成未实测声明。
 
 **平台状态**：
 
@@ -270,6 +270,25 @@ dsh-graph 为 Agent 提供了完善的工具链（共 53 个 `graph_*` 工具）
 
 ---
 
+### 关照唤醒正文：首次全量、后续精简（`supervisor.care_wake_compact`）
+
+长任务关照的每次唤醒都会带上「检查清单 + 纪律 + 三值结论定义 + 回传要求」。项目级开关
+`supervisor.care_wake_compact` 控制**纪律与检查清单的投递方式**（默认 `null` = **开启**）：
+
+- **开启（默认）**：同一主管会话的**第一份**唤醒内联完整检查清单与纪律（正文与旧行为逐字一致）；
+  **第二份及以后**只保留兜底纪律（「计时到期不是卡死证据」「证据不足 ⇒ unknown」）+ 指向
+  `prompts/care-discipline.{zh,en}.md` 的资产路径，用来节省多目标巡检时的重复注入。
+- **关闭（`false`）**：每份唤醒都内联完整纪律 —— 逐字回退到旧行为，可一键退回。
+
+不变的部分（两态都一样）：`inspection=<id>`、每个目标的 goal/attempt/child、
+`outcome=progress|no-progress|unknown`、三值定义、evidence 与「必须用 `graph_care_outcome` 回传」的
+要求**永远内联**（回传校验是 fail-closed 的）；计数/锁/升级规则一律不变。纪律资产缺失或不可读时
+**fail-open 回退内联全文**（`care.inspection` 事件里以 `wake_discipline_degraded=true` 如实标注），
+绝不因少一个 `.md` 中断巡检。「已发过全量纪律」按**主管会话**判定并持久化到关照状态快照——
+换主管会话或宿主重启后的新会话都重新按首次处理。界面入口：设置 → **高级** → 子代理长任务关照。
+
+---
+
 ### 数据存储说明
 
 插件数据保存在当前工作区下的 `.dsh-graph/` 目录：
@@ -306,7 +325,7 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 **Current version**: v0.23.0. **Requirements**: Node.js ≥ 22 (includes the precompiled core runtime). Core packages provided by the DSH host (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-settings`) are declared under `peerDependencies` with `peerDependenciesMeta.optional` (standard DSH ecosystem convention) and provided by the host runtime without peer warnings; `yaml` is retained in `dependencies` as a plugin-specific runtime dependency, preventing duplicate core package instances.
 
-**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` declare `>=0.1.5-rc.2 <0.2.2-0` in lockstep (the `-0` upper bound excludes every `0.2.2` prerelease and final release; the entire `0.2.1` line is now inside the range); `engines.dsh` is what host-aware markets such as dsh-market read for card display and install/update pre-flight. ⚠️ The host's **install/boot gate reads `peerDependencies` only, never `engines.dsh`**, so both fields must be widened together (widening `engines.dsh` alone has no effect). **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). ⚠️ Those are **historical rounds** covering install/boot/REST on their own version's product code; the **HTTP authentication entry** introduced by g-507 was measured on `0.2.1-rc.2` only (see "HTTP authentication" below) and must **not** be inferred for other versions from this paragraph. The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
+**Host compatibility range**: `engines.dsh` and `peerDependencies["@deepseek-ai/dsh-settings"]` both declare `>=0.1.5-rc.2 <0.2.3-0`, covering the `0.2.2` line. This package requires Node ≥22; the `0.2.2-rc.1` host itself requires Node ≥24.9.0. In the verified `0.2.1-rc.5`, `0.2.2-alpha.3` and `0.2.2-rc.1` implementations, host `unmetRequirements` uses `engines.dsh` alone and returns immediately when present, ignoring peers; `0.2.0-rc.2` and earlier read only peers. Source: `@deepseek-ai/dsh-app-boot/lib/index.js`, `unmetRequirements` (0.2.0-rc.2:287-299; 0.2.1-rc.5:279-290; 0.2.2-alpha.3 and 0.2.2-rc.1:1096-1105). This package always declares `engines.dsh`, so in those verified newer implementations the peer branch is never reached; those implementations check peers only when `engines.dsh` is absent. Keep both declarations synchronized for consistency and for markets such as dsh-market and other tools. **Hosts verified**: `0.1.6-alpha.2` through `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2` (verified by the maintainer on 2026-09-30), and `0.2.1-alpha.2` (verified on 2026-10-09 in an isolated instance with **no** version exemption). ⚠️ Those are **historical rounds** covering install/boot/REST on their own version's product code; the **HTTP authentication entry** introduced by g-507 was measured on `0.2.1-rc.2` only (see "HTTP authentication" below) and must **not** be inferred for other versions from this paragraph. The `0.1.8` line incidentally covered by that range was **never published on npm** (versions jump straight from `0.1.7-rc.2` to `0.2.0-rc.1`), so it is an empty set and adds no unverified claim.
 
 **Platform status**:
 

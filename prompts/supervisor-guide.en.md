@@ -237,6 +237,28 @@ while the original agent remains in its original turn and can continue.
 **mark the real-time agent bound to the original card as “reused”** (the child_id is bound to multiple goals → the old binding displays
 “reused→new goal”), and proactively record an `attempt.reused` event (child_id, reused_by).
 
+**Reusing an expert subagent must go through the board (hard rule)**: when you decide to hand work to an **existing expert subagent**
+(an Agent Teams expert, the previous executor, a collector subagent, ...), you **must and may only** dispatch it with
+`graph_start_attempt(goal=<goal>, child_id=<expert child id>, attempt_brief=...)`;
+**never** bypass the board by sending that subagent a private `send_message` / native `subagent` task — that keeps the goal out of
+`in_progress`, leaves it outside care supervision, and makes the outcome unauditable (the exact shape of the "orphaned work / lane slip" incidents). On that entry the engine:
+
+- **accepts idle subagents only**. A running subagent is always rejected (readable error, zero side effects: no attempt, no state
+  transition) — a message to a running subagent is treated by the host as a **steer** folded into its current step, mixing the new goal with old work;
+- **enforces cross-goal exclusivity**: one child cannot be bound to active attempts of several undelivered goals at once (`A/att-001` vs `B/att-001` never cross-account: attribution/care keys include project + goal + attempt + child + binding version + generation);
+- **fails closed on delivery**: only a host-confirmed acceptance yields `delivery=accepted / started=true`; otherwise you get
+  `child_error` plus an `attempt.reuse_failed` event — "sent" is never reported as "started working";
+- **drops late `subagent/end` events of an older round** (by generation and by delivery-confirmation state) so they cannot pollute the new goal;
+- **restarts care timing on the new binding**; the old generation's inspection outcomes and human lock are never inherited.
+
+**Reuse does not switch the working directory and does not change tool permissions** (stated honestly): a subagent's sandbox root and
+tool whitelist are inherited from the parent session at **creation** time, and the host `sendMessage` cannot change cwd/model/permissions;
+the reuse path also creates **no** worktree (the response carries `worktree=false`, `worktree_reason=reused_child`). To change directory or
+permissions, dispatch a new subagent — **never** fake a directory switch with prompt text or a temporary `cd`. Also keep in mind:
+**a worktree is a working-location isolation, not a permission boundary** — sibling trees under the same workspace root stay writable in the
+main sandbox and only paths outside the sandbox root are refused (confirmed by the owner on 2026-11-06 with the host's own bwrap), so
+"switching worktree" does **not** narrow write permissions.
+
 **When to reuse and when to open a new session** (guiding principles):
 
 - **Open a new one by default**—do not trust reuse unless there is a clear benefit; new goals, new domains, and tasks unrelated to an existing session

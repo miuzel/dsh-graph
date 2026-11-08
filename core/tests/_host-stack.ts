@@ -20,14 +20,40 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-/** 宿主栈固定版本（与 DSH 0.2.1-rc.2 安装树一致；升级宿主时**必须**同步改这里）。 */
+/**
+ * 宿主栈固定版本（g-617：已对齐本机安装的 DSH **0.2.2-rc.1** 及其 cordis 4.1.0；升级宿主时**必须**同步改这里）。
+ *
+ * 为什么钉版本而不是「随便取最新的」：真实宿主栈是**宿主侧包**，本仓库不声明这些运行时依赖。
+ * 钉死版本让「测试在哪个宿主上跑」可复现，也让版本漂移**显式失败**而不是静默用错接口。
+ * 但「钉死」不等于「写死单一版本即可」：见 {@link HOST_STACK_COMPATIBLE}——同一 cordis 主版本内的
+ * 补丁/预发布位差异仍应可用，判定按**能力探测**（包是否齐备 + 主版本相符）而非逐字相等。
+ */
 export const HOST_STACK_PINS = Object.freeze({
-  "@deepseek-ai/cordis": "4.0.5",
-  "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.2",
-  "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
+  "@deepseek-ai/cordis": "4.1.0",
+  "@deepseek-ai/dsh-host-webserver": "0.2.2-rc.1",
+  "@deepseek-ai/dsh-client-connection": "0.2.2-rc.1",
 });
 
 const PACKAGES = Object.keys(HOST_STACK_PINS);
+
+/**
+ * g-617：**能力探测**式的宿主栈兼容判定（取代 g-507 的「版本逐字相等」）。
+ *
+ * 为什么改：旧实现要求 `dsh-host-webserver`/`dsh-client-connection` 与 `cordis` 三个包**逐字**等于
+ * 固定版本，于是宿主补丁位一升（0.2.1-rc.2 → 0.2.2-rc.1）就把「已安装的宿主」整体判为不可用，
+ * 夹具只好回落到 `tmp/` 私有副本或直接抛错 —— 这正是「钉死版本」在宿主升级时的失败形态。
+ * 现在按**真实能力**判定：
+ *   ① 三个包都必须**存在且版本可读**（缺包 = 真不可用，明确失败，不 skip）；
+ *   ② `cordis` 必须与固定版本**同一主版本**（跨主版本是真实的破坏性跃迁：Context/Service 契约会变）；
+ *   ③ `dsh-host-webserver` / `dsh-client-connection` 必须与固定版本**同一 `major.minor.patch` 主干**
+ *      （预发布/修版本位可以不同），因为它们必须与运行中的 DSH 宿主同批发布。
+ */
+export function hostStackCompatible(version: string | undefined, expected: string): boolean {
+  if (typeof version !== "string" || !version) return false;
+  const majorOf = (v: string) => v.split(/[.\-+]/)[0];
+  const trunkOf = (v: string) => v.split(/[+\-]/)[0]; // 去掉预发布/构建元数据：0.2.2-rc.1 → 0.2.2
+  return majorOf(version) === majorOf(expected) && trunkOf(version) === trunkOf(expected);
+}
 
 /** 依赖缺失（明确失败，不是 skip）。 */
 export class G507HostStackMissing extends Error {
@@ -48,16 +74,23 @@ function versionOf(scopeDir: string, pkg: string): string | undefined {
   }
 }
 
-/** 某个 `node_modules/@deepseek-ai` 目录是否同时具备三个包且版本与固定值一致。 */
+/** 某个 `node_modules/@deepseek-ai` 目录是否同时具备三个包且版本与固定值**能力兼容**（见 {@link hostStackCompatible}）。 */
 function scopeMatches(scopeDir: string): boolean {
-  return PACKAGES.every((pkg) => versionOf(scopeDir, pkg) === HOST_STACK_PINS[pkg]);
+  return PACKAGES.every((pkg) => hostStackCompatible(versionOf(scopeDir, pkg), HOST_STACK_PINS[pkg]));
 }
 
 /** 从 `dsh` 包位置推出同级的 `@deepseek-ai` 目录。 */
 function scopeFromDsh(dshDir: string): string | undefined {
   // …/node_modules/@deepseek-ai/dsh → …/node_modules/@deepseek-ai
-  const scope = dirname(dshDir);
-  return scopeMatches(scope) ? scope : undefined;
+  // g-617：全局安装形态是 `<globalRoot>/@deepseek-ai/dsh`，它**没有** `node_modules/` 这一层；
+  // 实际承载宿主栈的是它自己的 `<dsh>/node_modules/@deepseek-ai`（npm 按依赖就近放置）。
+  // 两处都探测，命中即返回，避免只认一种目录形态而静默落到私有副本。
+  const candidates = [
+    dirname(dshDir),
+    join(dshDir, "node_modules", "@deepseek-ai"),
+  ];
+  for (const scope of candidates) if (scopeMatches(scope)) return scope;
+  return undefined;
 }
 
 /** ① 显式环境变量。 */
@@ -73,14 +106,23 @@ function fromEnv(): string | undefined {
   return dir;
 }
 
-/** ② 仓库/被检 profile 依赖树里已安装的 DSH 宿主。 */
+/** ② 仓库/被检 profile 依赖树里已安装的 DSH 宿主（含 `npm root -g` 的全局安装）。 */
 function fromInstalledHost(): string | undefined {
-  const require = createRequire(new URL("../../package.json", import.meta.url));
   const candidates: string[] = [];
   try {
+    const require = createRequire(new URL("../../package.json", import.meta.url));
     candidates.push(dirname(require.resolve("@deepseek-ai/dsh/package.json")));
   } catch {
-    /* 未安装宿主：继续按路径探测 */
+    /* 本仓库不依赖 dsh ⇒ 继续按全局安装探测 */
+  }
+  // g-617：本仓库**从不**声明 @deepseek-ai/dsh 为依赖，所以上面那条在本仓库内必然落空；
+  // 若不补全局探测，解析就会退到 ③ 私有副本（可能是旧版本），从而与实际运行的宿主分叉。
+  // 判据 4 要求「装配到当前已安装 DSH」，故这里按 `npm root -g` 显式探测已安装宿主。
+  try {
+    const globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8", stdio: "pipe" }).trim();
+    candidates.push(join(globalRoot, "@deepseek-ai", "dsh"));
+  } catch {
+    /* npm 不可用 ⇒ 只剩 ③ */
   }
   for (const base of candidates) {
     const scope = scopeFromDsh(base);
@@ -173,5 +215,55 @@ export function hostStackAvailable(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * g-617：在进程内直构的宿主服务上**跑一遍它们的 `[Service.init]` 钩子**（等价于 cordis 装载时执行）。
+ *
+ * 为什么必须有它（A/B 两类共 139 例失败的同一根因）：
+ *   cordis 只有在服务经 `ctx.plugin()` / fiber 装载时才自动调用 `instance[Service.init]()`；
+ *   夹具都是 `new AgentLoop(ctx, …)` **直构**实例，于是：
+ *   · `AgentRegistry[Service.init]` 里 `ctx.sessionProjections.register(turnBoundaryProjectionDefinition)`
+ *     **从不执行** ⇒ `turnBoundaryProjectionHandle` 永远是 `undefined`
+ *     ⇒ `agents.turnBoundaryOf()` 抛 `Cannot read properties of undefined (reading 'stateOf')`（A 类）；
+ *   · `AgentLoop[Service.init]` 里 `ctx.agents.setFactory(this)` **从不执行**
+ *     ⇒ `agents.create()` 抛 `no agent factory registered (load an agent-loop plugin)`（B 类）。
+ *   两类是**同一个**“服务生命周期没被驱动”问题，只是先撞上哪个取决于调用方先碰 `create` 还是先碰 `turnBoundaryOf`。
+ *
+ * 为什么不是「改用别的公开构造路径」：`turnBoundaryProjectionHandle` 在 0.2.2-rc.1 里**仍然存在**
+ * 且仍是 `turnBoundaryOf` 的唯一来源 —— 缺的不是句柄本身，而是**驱动 init 的那一步**。
+ * 本函数不替换任何接口，只是把 cordis 本该替我们做的生命周期推进做出来（与 fiber 装载同一语义、同一顺序）。
+ *
+ * 按**能力探测**工作（判据 4：不得钉死某一宿主版本）：
+ *   · 有 `[Service.init]` 就 await（依赖顺序由调用方给出：先 registry 后 loop）；
+ *   · 没有该钩子的服务（纯注册型）直接跳过；
+ *   · 版本相关的分支全部收敛在 {@link hostStackCompatible} 与这里的两处 `typeof … === "function"` 探测，
+ *     不出现任何「本机是 0.2.x 所以…」的硬编码分支。
+ *
+ * @param services 按**依赖顺序**构造出的服务实例数组（被依赖者在前）。
+ * @returns 同一个数组（便于链式使用），但已全部 init 完毕。
+ * @throws {G507HostStackMissing} 当**一个**服务都找不到 init 钩子时 —— 说明宿主已改名/移除了该钩子，
+ *   此时必须**明确报错**（而不是静默跳过、让下游以晦涩的 `stateOf` / `no agent factory` 报错收场）。
+ *   见 {@link serviceInitHookMissing}。
+ */
+export async function initServiceInstances<T>(services: readonly T[]): Promise<readonly T[]> {
+  // cordis 的 Service.init 是 `Symbol.for("cordis.init")`（lib/index.js：`Service.init = symbols.init`），
+  // 用 Symbol.for 取同一个全局注册符号，避免依赖某个具体包导出的常量名。
+  const INIT = Symbol.for("cordis.init");
+  let ran = 0;
+  for (const service of services) {
+    const init = (service as any)?.[INIT];
+    if (typeof init === "function") { await init.call(service); ran += 1; }
+  }
+  if (services.length > 0 && ran === 0) {
+    // 兜底（主管要求）：钩子整体消失 ⇒ 明确失败。若未来宿主把 init 改到别处，这里会点名说清楚，
+    // 而不是让 139 个用例各自抛出「读不到 stateOf」这种看不出根因的错。
+    throw new G507HostStackMissing(
+      `宿主服务生命周期钩子缺失：${services.map((s) => (s as any)?.constructor?.name ?? "?").join(", ")} `
+      + `均未提供 Symbol.for("cordis.init") 钩子。cordis 可能已重命名/移除 Service.init —— `
+      + `请按新宿主的公开装配方式更新 core/tests/_host-stack.ts 的 initServiceInstances()（不要 skip 用例）。`,
+    );
+  }
+  return services;
 }
 

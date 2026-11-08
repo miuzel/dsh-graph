@@ -42,8 +42,9 @@ const readMd = (dir: string) =>
  *  × zh/en = 10，两语言对偶）。
  *  g-496 att-007：GUI 提示词模板（9 类 × zh/en = 18 份）迁入**宿主专属层** ⇒ 公共层当时仍是 26；
  *  att-009 追加 collect/summary/pm/review/attempt-instructions 五对 ⇒ 36。
- *  随包总量 = 36 + 18 = 54。两个数各自独立断言（见下），不得互相顶替。 */
-const EXPECTED_ASSET_COUNT = 36;
+ *  g-618 追加 care-discipline 一对（关照纪律 + 检查清单外置到公共层）⇒ 38。
+ *  随包总量 = 38 + 18 = 56。两个数各自独立断言（见下），不得互相顶替。 */
+const EXPECTED_ASSET_COUNT = 38;
 /** 宿主专属层资产数（g-496 att-007：9 类 GUI 提示词模板 × zh/en）。 */
 const EXPECTED_HOST_ASSET_COUNT = 18;
 /** 随包合并总量（公共层 + 宿主专属层）——**由两层清单相加得出，不硬编码**，
@@ -52,7 +53,7 @@ const EXPECTED_MERGED_ASSET_COUNT = EXPECTED_ASSET_COUNT + EXPECTED_HOST_ASSET_C
 
 // ============================================================ A. 布局不变量
 
-test("g-496 L-A：公共层 36 份 / 宿主专属层 18 份，各自单一源码副本、两层无重名、zh/en 对偶", () => {
+test("g-496 L-A：公共层 38 份 / 宿主专属层 18 份，各自单一源码副本、两层无重名、zh/en 对偶", () => {
   const pub = readMd(publicPrompts);
   const host = readMd(hostPrompts);
 
@@ -163,7 +164,7 @@ test("g-496 L-C：宿主读取按归属分根；宿主专属资产不回落公�
   assert.ok(typeof mod.helpAssetRelativePath === "function", "注册表投影必须可读");
   // 全部注册项都指向合并后的 prompts/ 布局（不再有根级特例）。
   const { HELP_PROMPT_ASSETS } = mod;
-  // g-496 att-007：白名单覆盖**两层合并后的全部**随包资产（公共 36 + 宿主 18 = 54）。
+  // g-496 att-007：白名单覆盖**两层合并后的全部**随包资产（公共 38 + 宿主 18 = 56）。
   assert.equal(HELP_PROMPT_ASSETS.length, EXPECTED_MERGED_ASSET_COUNT,
     `白名单必须覆盖全部 ${EXPECTED_MERGED_ASSET_COUNT} 份随包资产（公共层 + 宿主专属层），实得 ${HELP_PROMPT_ASSETS.length}`);
   for (const name of HELP_PROMPT_ASSETS) {
@@ -269,7 +270,7 @@ test("g-496 L-E：随包 dist/prompts 与两层源码逐字节一致（复制是
   const pubNames = readMd(publicPrompts);
   const hostNames = readMd(hostPrompts);
 
-  // g-496 att-007：随包资产 = 两层合并（公共 36 + 宿主 18 = 54）。
+  // g-496 att-007：随包资产 = 两层合并（公共 38 + 宿主 18 = 56）。
   assert.equal(distNames.length, EXPECTED_MERGED_ASSET_COUNT,
     `随包资产必须恰 ${EXPECTED_MERGED_ASSET_COUNT} 份（公共层 + 宿主专属层），实得 ${distNames.length}`);
   // 合并后的集合必须**精确等于**两层并集（既不漏层，也不多出无源资产）。

@@ -88,6 +88,28 @@ export const CARE_MAX_UNANSWERED_REMINDERS = 3;
 /** g-506 返工：无有效结论的连续提醒之间的最小冷却（负责人明确 300 秒）。 */
 export const CARE_NO_RESPONSE_COOLDOWN_MS = 300_000;
 
+/**
+ * g-616 方案 A：**合并唤醒宽限**（ms）。负责人裁定 2026-11-06 ——「单条定时唤醒」。
+ *
+ * 语义：本组仍有在途子代理时只维持**一条**定时器，按全组最早到期触发；触发时把
+ * 「**已到期**，且到期时刻落在最近本宽限内」的任务**一次**投进同一条巡检，而不是先投
+ * 一个、55 秒后再为邻居投第二次（现场：g-028 01:21:38 与 g-029 01:22:33，间隔 55 秒）。
+ *
+ * **只向过去算**（`dueAt <= now + window`，`now` 为唤醒时刻）：窗口内不会再有第二次唤醒，
+ * 故这些任务本就无法被更早关照 ⇒ 合并**零延迟成本、零提前**。负责人裁定接受的「先到期
+ * 任务可能被顺延至邻居也到期」即由此实现，**不需要**也不允许把宽限加在唤醒时刻上
+ * （`最早 + window` 会整体推迟 300s 冷却类唤醒，`g506 bootstrap HMR` 实测判红）。
+ *
+ * 取值依据：最低出于**调度抖动**——一次扫描/投递可能跨越秒级，窗口内到期而未被及时
+ * 捕获的任务不得因此各自再触发一次唤醒。取 **60 秒**（一整个分钟刻度，覆盖现场 55 秒
+ * 相邻到期），且远小于默认阈值/复查间隔 300 秒 ⇒ 最多把相邻到期收成一批。**不做**无限
+ * 凑合：超过宽限仍未到期的任务不会被拉进来（绝不因为「等下一个人」而饿死先到期者，判据 3）。
+ *
+ * 这是本目标的**唯一**聚合口径常量：不读项目配置、不随调度抖动变化、不隐式依赖
+ * 扫描周期（判据 2 要求「显式常量且有文档说明」）。
+ */
+export const CARE_COALESCE_WINDOW_MS = 60_000;
+
 /** 阈值的合法范围（秒）：既拒绝「0 秒 = 每个扫描都触发」，也拒绝病态长值。 */
 export const CARE_THRESHOLD_MIN_SECONDS = 30;
 export const CARE_THRESHOLD_MAX_SECONDS = 24 * 60 * 60; // 24h 上界
@@ -702,6 +724,11 @@ export interface CareInputs {
   delivering?: boolean;
   /** g-506 返工：本组是否已有**未解决且未过期**的巡检（有则不得再投递，避免重复唤醒）。 */
   openInspection?: boolean;
+  /**
+   * g-616 方案 A：在途巡检**覆盖**的目标（`openInspection === true` 时有效）。
+   * 其后的到期任务不在该集合内 ⇒ 计入 `deferredTasks`（顺延到下一轮，不丢弃）。
+   */
+  openInspectionTargets?: Array<{ child: string; attempt: string }>;
 }
 
 /** 单个任务的到期判定结果。 */
@@ -735,6 +762,11 @@ export interface CareDecision {
   escalateTasks: string[];
   /** g-506 返工：因**未回复/unknown 达 3 次**而需进入等待人工的任务（不得当作 no-progress）。 */
   noResponseTasks?: string[];
+  /**
+   * g-616 方案 A：本轮到期的任务，但因本组仍有**覆盖其他目标**的在途巡检而被**合并顺延**
+   * 到下一轮（在途巡检结束后一并投递）。非空即证明这些任务**没有被丢掉**，只是延后。
+   */
+  deferredTasks?: string[];
 }
 
 export type CareReason =
@@ -972,6 +1004,67 @@ export function careTaskDueAt(task: CareTaskState, timing: {
   return cooldownDue === null ? budgetDue : Math.max(budgetDue, cooldownDue);
 }
 
+/**
+ * g-616 方案 A（**单条定时唤醒**）：本组的定时器触发时刻 = 全组**最早**有效到期。
+ *
+ * 负责人裁定（2026-11-06）：只要有在途子代理，本 board 就只维持**一条**定时器，
+ * 按全组最早到期触发；触发后由 {@link careCoalesceBatch} 决定这一次**收哪些**任务。
+ *
+ * 与改造前 `scheduleEntry` 里 `Math.max(0, decision.nextDueAt - now())` 完全等价
+ * （`nextDueAt` 本就是 `Math.min` 全组最早），故判据 4 的 `Math.min` 语义不变。
+ *
+ * **为什么合并只用「已到期」而不提前唤醒**（返工教训，att-002）：若定时器按
+ * `最早 + 窗口` 提前触发，300s 冷却与 `careCooledDown`（等待主管回复）等**非到期类**
+ * 唤醒会整体推迟一个窗口 —— `g506 bootstrap HMR` 因此在 301s 冷却后必须再等满 60s
+ * 才醒来，既有断言判红。合并因此只做「到期即连同已到期的邻居一次投递」，
+ * 不改变任何**何时可以唤醒**的语义，只把**同一次**唤醒里该投递的任务收成一批。
+ *
+ * @param dueAts 全组**仍在途、未升人工**任务的下一次到期时刻（升限任务不参与）。
+ * @param now 当前时刻（ms epoch；保留以标注调用契约，判定不依赖它）。
+ * @returns 定时器触发时刻（全组最早）；`null` = 没有可计时的任务。
+ */
+export function careCoalescedWakeAt(dueAts: readonly number[], now: number): number | null {
+  let earliest: number | null = null;
+  for (const at of dueAts) {
+    if (typeof at !== "number" || !Number.isFinite(at)) continue;
+    if (earliest === null || at < earliest) earliest = at;
+  }
+  return earliest;
+}
+
+/**
+ * g-616 方案 A：**本次唤醒该投递哪些任务**（单一批量口径，宿主与测试共用）。
+ *
+ * 判据 `dueAt <= now + window` —— 宽限**只向前**（`now` 之前早已到期的当然也入选）。
+ *
+ * 两个必需条件（否则「绝不漏关照」被破坏）：
+ * 1. `dueAt <= now + window`：到期 + 在宽限内刚过期的邻居收成一批。窗口内不会有
+ *    第二次唤醒，故它们本就无法被更早关照 —— 合并**零延迟成本**、零提前。
+ * 边界（判据 2/3/4）：
+ * - 宽限是**显式常量** {@link CARE_COALESCE_WINDOW_MS}，不读配置、不依赖调度抖动；
+ * - 批内只含**仍在途且未升人工**的任务（升限/人工锁/暂停任务由既有语义排除）；
+ * - `dueAt` 本身不被改写 ⇒ 阈值/复查间隔/300s 冷却/上限/人工锁语义完全不变（判据 4）；
+ * - 每个入选任务都会在批内被**逐个评估并计账**，绝不跳过（判据 3）。
+ *
+ * @param schedules 全组**未升人工**任务的到期表（`dueAt = null` 者跳过）。
+ * @param now 唤醒时刻。
+ * @param windowMs 合并宽限（默认 {@link CARE_COALESCE_WINDOW_MS}；0 ⇒ 只收「此刻已到期且已过冷却」）。
+ */
+export function careCoalesceBatch(
+  schedules: ReadonlyArray<{ child: string; attempt: string; goal: string; dueAt: number | null }>,
+  now: number,
+  windowMs: number = CARE_COALESCE_WINDOW_MS,
+): Array<{ child: string; attempt: string; goal: string; dueAt: number }> {
+  const horizon = now + Math.max(0, windowMs);
+  const batch: Array<{ child: string; attempt: string; goal: string; dueAt: number }> = [];
+  for (const s of schedules) {
+    if (typeof s.dueAt !== "number" || !Number.isFinite(s.dueAt)) continue;
+    if (s.dueAt > horizon) continue; // 宽限之外 ⇒ 留给下一次唤醒
+    batch.push({ child: s.child, attempt: s.attempt, goal: s.goal, dueAt: s.dueAt });
+  }
+  return batch;
+}
+
 export function decideCare(inputs: CareInputs, capable = true): CareDecision {
   const emptyTasks: CareTaskSchedule[] = [];
   const noCountdown = (phase: CarePhase, reason: CareReason, escalateTasks: string[] = []): CareDecision => ({
@@ -1069,7 +1162,17 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
   const nextDueInMs = Math.max(0, nextDueAt - inputs.now);
 
   // ── 4b. 已有未解决巡检 ⇒ 等待结论，不重复唤醒 ─────────────────────────────
+  //
+  // g-616 方案 A（单条定时唤醒）：本组仍有**未回传结论**的巡检时不另发第二条唤醒——
+  // 主管在途轮次里已经拿到这批目标。若此后又有任务到期，它们会在同一列表的
+  // `dueInMs` 上继续可见（`tasks` 全量返回），并在在途巡检结束后的下一轮一并投递，
+  // 因此**不丢关照**（判据 3）；`deferredTasks` 把它们显式点出来，便于观测。
   if (inputs.openInspection === true) {
+    const covered = new Set((inputs.openInspectionTargets ?? []).map((t) => `${t.child}\u0000${t.attempt}`));
+    const deferredTasks = liveSchedules
+      .filter((s) => (s.dueInMs as number) <= 0)
+      .filter((s) => !covered.has(`${s.child}\u0000${s.attempt}`))
+      .map((s) => s.child);
     return {
       phase: "awaiting_outcome",
       deliver: false,
@@ -1079,10 +1182,16 @@ export function decideCare(inputs: CareInputs, capable = true): CareDecision {
       tasks: schedules,
       escalateTasks,
       noResponseTasks,
+      ...(deferredTasks.length > 0 ? { deferredTasks } : {}),
     };
   }
 
   // ── 5. 未到期 ⇒ 倒计时进行中 ─────────────────────────────────────────────
+  //
+  // g-616 方案 A：`nextDueAt` 仍是**全组最早有效到期**（判据 4：`Math.min` 语义不变），
+  // 但宿主不会直接按它唤醒；宿主用 {@link careCoalescedWakeAt} 得出「合并后的唤醒时刻」，
+  // 使先到期的任务顺延到邻居也到期时**一次**投递（不接受 55 秒内的第二次打断）。
+  // 本函数只负责报告到期事实与倒计时，合并时机是纯函数 `careCoalescedWakeAt` 的职责。
   if (nextDueInMs > 0) {
     return {
       phase: "counting",
@@ -1584,6 +1693,15 @@ export interface CareInspectionTarget {
   staleAt?: number | null;
   /** 取代它的稳定事件标识（消息 id；预算编辑写 "goal_budget"）——不含任何消息正文。 */
   supersededBy?: string | null;
+  /**
+   * 该 target 陈旧（任务结束/换绑）被作废的时刻与原因。
+   *
+   * g-616 返工（att-002）：这**不是**「逐 target 作废」的开关 —— 陈旧仍整条 `expired`
+   * （原语义，`inspection_not_open` 拒绝）。字段只为在 `care.inspection.expired` 事件里
+   * 点明「哪些 target 触发了过期」（判据 6 可观测性）。
+   */
+  expiredReason?: "stale_target" | null;
+  expiredAt?: number | null;
 }
 
 export interface CareInspection {
@@ -1658,6 +1776,40 @@ export function careInspectionOpen(inspection: CareInspection | null | undefined
   if (inspection.status === "failed" || inspection.status === "expired") return false;
   if (now > inspection.expiresAt) return false;
   return inspection.targets.some((t) => t.outcome === null);
+}
+
+/**
+ * **整条巡检**作废（B15 补充既有语义，g-616 保持**原样不变**）。
+ *
+ * 任一 target 已陈旧（任务结束/换绑）⇒ 整条巡检转 `expired`，`lastError = "stale_target"`；
+ * 此后 `careInspectionOpen` 为 false ⇒ 同批其他 target 的晚到结论一律按 `inspection_not_open`
+ * 拒绝（`g506 B15 补充` 与 `g506 bootstrap HMR` 钉住的正是这条语义）。
+ *
+ * g-616 返工（att-002）：上一轮把它改成「逐 target 作废」，使同批仍活 target 继续可回写，
+ * 直接破坏上述语义（2 例既有测试回归）⇒ 已回退。合并唤醒**不需要**改动巡检过期语义：
+ * 批内活着目标的关照由 `expireStaleInspections` 的事件口径保证（见宿主注释），
+ * 不需要让陈旧批继续接受回写。
+ *
+ * 纯函数：不修改入参；无陈旧 target 时返回原对象（调用方可据 `changed` 判无事发生）。
+ */
+export function expireStaleInspectionTargets(
+  inspection: CareInspection,
+  live: ReadonlyMap<string, number>,
+  now: number,
+): { inspection: CareInspection; expiredTargets: CareInspectionTarget[]; changed: boolean } {
+  if (inspection.status === "resolved" || inspection.status === "failed" || inspection.status === "expired") {
+    return { inspection, expiredTargets: [], changed: false };
+  }
+  const stale = inspection.targets.filter(
+    (t) => live.get(`${t.child}\u0000${t.attempt}`) !== (Number(t.bindingVersion) || 0),
+  );
+  if (stale.length === 0) return { inspection, expiredTargets: [], changed: false };
+  const expiredTargets = stale.map((t) => ({ ...t, expiredReason: "stale_target" as const, expiredAt: now }));
+  return {
+    inspection: { ...inspection, status: "expired", lastError: inspection.lastError ?? "stale_target" },
+    expiredTargets,
+    changed: true,
+  };
 }
 
 /** 把巡检状态推进为「按时间自然过期」（纯函数；只作用于未整体解决的记录）。 */
@@ -2014,10 +2166,108 @@ export function careStatusProjection(args: {
 }
 
 /**
+ * g-618：纪律 + 检查清单的**公共层资产**（`prompts/care-discipline.{zh,en}.md`）。
+ *
+ * 只有「首次全量 / 后续精简」的**投递方式**变，纪律内容本身一字不变：全量版把这份资产（经
+ * `{{careGates}}` 回填）逐字注入唤醒正文，与 g-618 之前的内联字面量逐字等价（由
+ * `g618-care-wake-compact.test.ts` 的关闭态逐字对照守卫）。
+ *
+ * 三值定义 `CARE_OUTCOME_CONTRACT_*` **不在此资产内**：它同时是 `graph_care_outcome` 工具描述的
+ * 单一真源，搬走会造成两处真源；本资产只承载**仅唤醒正文使用**的「检查清单 + 纪律」。
+ */
+export const CARE_DISCIPLINE_ASSET = "care-discipline";
+
+/** 精简版里必须**留在正文**的兜底纪律（负责人裁定：不得只给资产链接）。 */
+export const CARE_COMPACT_DISCIPLINE_ZH = [
+  "- 计时到期**不是**卡死证据：正常长耗时构建/测试/网络等待不得仅因超时被中断；",
+  "- 证据不足 ⇒ unknown，继续观察或直接询问子代理，不要伪称已发现逻辑死循环。",
+] as const;
+
+/** {@link CARE_COMPACT_DISCIPLINE_ZH} 的英文对称版本（en 不得含 CJK）。 */
+export const CARE_COMPACT_DISCIPLINE_EN = [
+  "- Reaching the timer is NOT evidence of a stall: a long build/test/network wait must not be interrupted merely for taking time;",
+  "- Insufficient evidence means unknown: keep observing or ask the child, and never claim a proven infinite loop.",
+] as const;
+
+/** 全量版纪律块的退化正文（资产不可读且调用方未提供回退时使用；绝不因此中断巡检）。 */
+const CARE_DISCIPLINE_FALLBACK_ZH = [
+  "检查清单（逐条对照可访问的近期消息、工具调用/结果、进度与阻塞证据）：",
+  "- 计时到期不是卡死证据；正常长耗时构建/测试/网络等待、有实质进展的任务不得仅因超时被中断。",
+  "- 证据不足 ⇒ 继续观察或直接询问子代理，不要伪称已发现逻辑死循环。",
+  "- 干预须遵守宿主真实能力与既有人工 gate：" + CARE_PRESERVED_GATES.join(" / ") + "；",
+  "- 有明确僵局证据才请求暂停并确认停稳；无法安全解决 / 范围或判据冲突 ⇒ 停止执行并报告人类裁决；",
+].join("\n");
+
+const CARE_DISCIPLINE_FALLBACK_EN = [
+  "Checklist (verify against the accessible recent messages, tool calls/results, and progress/blocking evidence):",
+  "- Reaching the timer is not evidence of a stall; long builds/tests/network waits with real progress must not be interrupted merely for taking time.",
+  "- If evidence is insufficient, keep observing or ask the child; never claim a proven infinite loop.",
+  "- Interventions must respect real host capabilities and existing human gates: " + CARE_PRESERVED_GATES.join(" / ") + ";",
+  "- Request a pause only with clear stall evidence; if it cannot be resolved safely or scope/criteria conflict, stop and report to the human;",
+].join("\n");
+
+/** 资产只允许引用**两个**由代码提供的机读清单占位符（停滞信号、人工 gate）；
+ *  其余双花括号原样保留 —— 不引入可被随意改写正文的通用插值/override 通道。 */
+function fillCareGates(text: string): string {
+  return text
+    .split("{{careGates}}").join(CARE_PRESERVED_GATES.join(" / "))
+    .split("{{careStallSignals}}").join(CARE_STALL_SIGNALS.join(" / "));
+}
+
+/**
+ * g-618：取回纪律块正文（**fail-open**）。
+ *
+ * 资产缺失/不可读（或读取后不含兜底纪律）⇒ 用调用方给出的内联回退正文，返回 `degraded: true`，
+ * 由宿主把降级事实写进 `care.inspection` 事件 —— **绝不**抛错中断巡检（g-346 的教训：
+ * `readCorePromptAsset` 缺文件即 throw，曾直接终止进行中的轮次）。
+ *
+ * 产物层（dist）的字节级新鲜度另由 `dist-freshness-g312` 守卫，本函数不兼任。
+ */
+export function resolveCareDisciplineText(input: {
+  lang?: "zh" | "en";
+  /** 资产读取器（宿主注入 `readCorePromptAsset`；本模块保持纯函数、不直接碰文件系统）。 */
+  load: (lang: "zh" | "en") => string;
+  /** 调用方提供的 inline 回退正文（资产不可用时逐字使用）。 */
+  fallback?: string | null;
+}): { text: string; source: "asset" | "fallback"; degraded: boolean } {
+  const lang = normalizeCareLang(input.lang);
+  const fallback = (input.fallback && input.fallback.trim()) ? input.fallback : builtinCareDiscipline(lang);
+  try {
+    const text = fillCareGates(String(input.load(lang)));
+    const anchors = careDisciplineAnchors(lang);
+    // 空军：资产被裁成空壳（缺兜底纪律）时同样视为不可用，绝不静默丢纪律。
+    if (anchors.every((a) => text.includes(a))) return { text, source: "asset", degraded: false };
+  } catch { /* fail-open：落到 inline 回退 */ }
+  return { text: fallback, source: "fallback", degraded: true };
+}
+
+function builtinCareDiscipline(lang: "zh" | "en"): string {
+  return lang === "zh" ? CARE_DISCIPLINE_FALLBACK_ZH : CARE_DISCIPLINE_FALLBACK_EN;
+}
+
+function normalizeCareLang(lang: string | null | undefined): "zh" | "en" {
+  return lang === "en" ? "en" : "zh";
+}
+
+/**
+ * 纪律资产必须包含的兜底记号（缺失 = 资产被裁成空壳 ⇒ 全量版退回 inline 回退）。
+ * 与 {@link CARE_COMPACT_DISCIPLINE_ZH}/{@link CARE_COMPACT_DISCIPLINE_EN} 同源，不另立第二套措辞。
+ */
+function careDisciplineAnchors(lang: "zh" | "en"): string[] {
+  return lang === "zh"
+    ? ["不得仅因超时被中断", "不要伪称已发现逻辑死循环", "rework=human"]
+    : ["must not be interrupted merely for taking time", "never claim a proven infinite loop", "rework=human"];
+}
+
+/**
  * 关照唤醒正文（**有界**；只含机读标识与检查清单，不含会话正文/隐藏思维）。
  *
  * 纪律逐条落在正文里：到期不是卡死证据；证据不足不得伪称死循环；三类干预遵守真实能力与人工 gate；
  * 必须用专用窄工具回传**本次** inspectionId + 任务绑定 + progress/no-progress/unknown + 证据。
+ *
+ * g-618「首次全量、后续精简」：`compact` 只影响**纪律/检查清单的投递方式**，机读必需项
+ * （inspection id、每个 target 的 goal/attempt/child、`outcome=…`、回传要求）**永远 inline**；
+ * 三值定义 `CARE_OUTCOME_CONTRACT_*` 两态都逐条保留（它是 `graph_care_outcome` 的单一真源）。
  */
 export function formatCareWakeMessage(input: {
   inspectionId: string;
@@ -2033,8 +2283,20 @@ export function formatCareWakeMessage(input: {
   }>;
   maxStagnantRounds: number;
   lang?: "zh" | "en";
+  /** g-618：`compact` = 同一主管会话的**后续**唤醒（精简版）；缺省 `full` = 首次全量。 */
+  mode?: "full" | "compact";
+  /** 全量版的纪律块正文（宿主经 {@link resolveCareDisciplineText} 取得；缺省用内置回退）。 */
+  discipline?: string | null;
+  /** 纪律资产路径（仅精简版展示；缺省 `care-discipline.<lang>.md`）。 */
+  disciplineRef?: string | null;
 }): string {
-  const zh = input.lang !== "en";
+  const lang = normalizeCareLang(input.lang);
+  const zh = lang === "zh";
+  const compact = input.mode === "compact";
+  const ref = input.disciplineRef || `${CARE_DISCIPLINE_ASSET}.${lang}.md`;
+  // 只把「非空」判定交给 trim()，正文**原样保留首行缩进**（逐字等价旧行为的前提）。
+  const givenDiscipline = typeof input.discipline === "string" && input.discipline.trim() ? input.discipline : null;
+  const discipline = compact ? "" : (givenDiscipline ?? builtinCareDiscipline(lang));
   const id = String(input.inspectionId).slice(0, 80);
   const targets = input.targets; // g-506 返工：不得只显示前 8 个而让第 9+ 个任务无法回传
   const lines: string[] = [];
@@ -2049,15 +2311,13 @@ export function formatCareWakeMessage(input: {
         `  · goal=${t.goal} attempt=${t.attempt} child=${t.child} 已持续约 ${elapsed} 分钟；距上次关照 ${since}；连续无进展 ${t.stagnantRounds}/${t.maxStagnantRounds}${t.humanLocked ? "（已待人）" : ""}`,
       );
     }
-    lines.push("请基于**可访问的近期消息、工具调用/结果、进度与阻塞证据**逐条核对是否僵局：");
-    lines.push(`  · ${CARE_STALL_SIGNALS.join(" / ")}`);
-    lines.push("纪律：");
-    lines.push("- 正常长耗时构建/测试/网络等待、有实质进展的任务不得仅因超时被中断；");
-    lines.push("- 证据不足 ⇒ 继续观察或直接询问子代理，不要伪称已发现逻辑死循环；");
-    lines.push("- 干预须遵守宿主真实能力与既有人工 gate：" + CARE_PRESERVED_GATES.join(" / ") + "；");
-    lines.push("- 本插件**不会**自动中断/放弃/重启子代理；宿主干预 seam 若未验证，只作提醒，由主管按授权流程处理。");
-    lines.push("- 有明确僵局证据才请求暂停并确认停稳；放弃重开须先确认旧 child 不运行并按既有准入与返工授权开新 attempt；");
-    lines.push("- 无法安全解决 / 范围或判据冲突 ⇒ 停止相关执行并报告人类裁决，禁止无限自动重试。");
+    if (compact) {
+      lines.push(`纪律（完整检查清单 + 纪律正文已在本主管会话首次关照中给出，勿重复展开；需要时按需查阅资产：prompts/${ref}）：`);
+      for (const line of CARE_COMPACT_DISCIPLINE_ZH) lines.push(line);
+    } else {
+      lines.push("请基于**可访问的近期消息、工具调用/结果、进度与阻塞证据**逐条核对是否僵局：");
+      for (const line of discipline.split(/\r?\n/)) if (line.trim()) lines.push(line.replace(/\s+$/, ""));
+    }
     lines.push("结论分类（按定义判断，不得凭 elapsed/预期静默推断）：");
     for (const clause of CARE_OUTCOME_CONTRACT_ZH) lines.push(`  · ${clause}`);
     lines.push(
@@ -2074,15 +2334,13 @@ export function formatCareWakeMessage(input: {
         `  · goal=${t.goal} attempt=${t.attempt} child=${t.child} running for about ${elapsed} min; last care ${since}; no-progress ${t.stagnantRounds}/${t.maxStagnantRounds}${t.humanLocked ? " (awaiting human)" : ""}`,
       );
     }
-    lines.push("Check for a stall using the accessible recent messages, tool calls/results, and progress/blocking evidence:");
-    lines.push(`  · ${CARE_STALL_SIGNALS.join(" / ")}`);
-    lines.push("Discipline:");
-    lines.push("- Long builds/tests/network waits with real progress must not be interrupted merely for taking time;");
-    lines.push("- If evidence is insufficient, keep observing or ask the child; never claim a proven infinite loop;");
-    lines.push("- Interventions must respect real host capabilities and existing human gates: " + CARE_PRESERVED_GATES.join(" / ") + ";");
-    lines.push("- This plugin NEVER auto-interrupts/abandons/restarts a child; unverified host intervention seams are advisory only and must go through authorized human gates.");
-    lines.push("- Request a pause only with clear stall evidence, and confirm the child has stopped; abandoning/restarting requires the existing admission and rework authorization;");
-    lines.push("- If it cannot be resolved safely or scope/criteria conflict, stop the execution and report to the human; never retry infinitely.");
+    if (compact) {
+      lines.push(`Discipline (the full checklist and discipline text were sent in this supervisor session's first care round; do not re-expand; consult the asset on demand: prompts/${ref}):`);
+      for (const line of CARE_COMPACT_DISCIPLINE_EN) lines.push(line);
+    } else {
+      lines.push("Check for a stall using the accessible recent messages, tool calls/results, and progress/blocking evidence:");
+      for (const line of discipline.split(/\r?\n/)) if (line.trim()) lines.push(line.replace(/\s+$/, ""));
+    }
     lines.push("Outcome definitions (judge by these definitions; never infer from elapsed time or expected silence):");
     for (const clause of CARE_OUTCOME_CONTRACT_EN) lines.push(`  · ${clause}`);
     lines.push(

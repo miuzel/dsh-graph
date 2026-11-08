@@ -38,6 +38,9 @@
           care: normalizeCareDraft(form?.supervisor?.care),
           care_threshold_seconds: normalizeCareSecondsDraft(form?.supervisor?.care_threshold_seconds),
           care_recheck_seconds: normalizeCareSecondsDraft(form?.supervisor?.care_recheck_seconds),
+          // g-618：「首次全量、后续精简」开关真布尔归一（与 normalizeModuleSwitchDraft 同口径）；
+          // null/未配置 = 默认开启，绝不回填成显式 true。
+          care_wake_compact: normalizeModuleSwitchDraft(form?.supervisor?.care_wake_compact),
         },
         prompt_overrides: { subagent: normalizePromptOverrideDraft(po) },
         modules: Object.fromEntries(MODULE_SWITCH_KEYS.map((k) => [k, normalizeModuleSwitchDraft(form?.modules?.[k])])),
@@ -356,6 +359,12 @@
         const norm = (v) => (v === undefined ? null : v);
         if (norm(to) !== null || norm(from) !== null) leaf(["supervisor", key]);
       }
+      // g-618：真布尔开关同模块口径——只有草稿是布尔、或基线是布尔而草稿回 null 时才提交。
+      {
+        const to = getLeafPath(draft, ["supervisor", "care_wake_compact"]);
+        const from = getLeafPath(base, ["supervisor", "care_wake_compact"]);
+        if (to === true || to === false || from === true || from === false) leaf(["supervisor", "care_wake_compact"]);
+      }
       // g-480：模块开关同 agent_teams 口径——「无基线且草稿为 null」= 无话可说（不把「未配置」实体化
       // 进 project.yaml）；只有草稿是布尔、或基线是布尔而草稿回 null（显式清空回到默认开启）时才提交。
       for (const k of MODULE_SWITCH_KEYS) {
@@ -442,6 +451,8 @@
         "supervisor.care",
         "supervisor.care_threshold_seconds",
         "supervisor.care_recheck_seconds",
+        // g-618：唤醒正文形态开关（同为主管会话行为面）
+        "supervisor.care_wake_compact",
         "prompt_overrides.subagent",
       ],
     };
@@ -1469,6 +1480,21 @@
                       onChange: (e) => set(["supervisor", "care_recheck_seconds"], e.target.value === "" ? null : Number(e.target.value)),
                     }))),
                 h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.careSecondsHint")),
+                // g-618：「首次全量、后续精简」开关（**默认开启** = 未配置/null 即勾选；
+                // 只有显式 false 才取消勾选 ⇒ 关闭 = 逐字回退「每份都内联完整纪律」的旧行为）。
+                h("div", { style: { display: "flex", alignItems: "flex-start", gap: 6, marginTop: 6 } },
+                  h("input", {
+                    id: "dg-care-wake-compact",
+                    type: "checkbox",
+                    checked: form.supervisor?.care_wake_compact !== false,
+                    onChange: (e) => set(["supervisor", "care_wake_compact"], e.target.checked),
+                    "aria-label": dgT("settings.careWakeCompactLabel"),
+                    style: { flexShrink: 0, marginTop: 2 },
+                  }),
+                  h("div", { style: { minWidth: 0 } },
+                    h("label", { htmlFor: "dg-care-wake-compact", style: { fontWeight: 700, fontSize: 12, cursor: "pointer" } },
+                      dgT("settings.careWakeCompactLabel")),
+                    h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } }, dgT("settings.careWakeCompactHint")))),
                 eff
                   ? h("div", { style: { ...S.meta, marginTop: 2, fontSize: 11 } },
                       dgT("settings.careEffectiveTiming")

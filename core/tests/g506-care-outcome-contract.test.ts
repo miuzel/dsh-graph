@@ -23,11 +23,22 @@ import {
   CARE_OUTCOME_CONTRACT_ZH,
   CARE_OUTCOMES,
   applyCareOutcome,
-  formatCareWakeMessage,
+  formatCareWakeMessage as formatCareWakeMessageRaw,
   newCareGroupState,
+  resolveCareDisciplineText,
 } from "../../dist/core/care.js";
+import { readCorePromptAsset } from "../../dist/core/ops.js";
 import { SERVER_I18N, sT } from "../../dist/lib/server-i18n.js";
 import { apply } from "../../dist/index.js";
+
+/**
+ * g-618：「首次全量、后续精简」上线后，**完整纪律**只出现在「开启态首发」这一场景。
+ * 本套件的断言一字未改，只把场景显式限定到「开关默认开启 + 同一主管会话的第一份」：
+ * `mode:"full"` + 公共层纪律资产（生产宿主走的正是这条装配路径）。精简版另由
+ * `g618-care-wake-compact.test.ts` 守卫（并断言兜底纪律仍在、机读必需项齐全）。
+ */
+const disciplineZh = resolveCareDisciplineText({ lang: "zh", load: (l) => readCorePromptAsset("care-discipline", l) }).text;
+const formatCareWakeMessage = (input: any) => formatCareWakeMessageRaw({ mode: "full", discipline: disciplineZh, ...input });
 
 const KEY = "tool.graph_care_outcome";
 const dict = SERVER_I18N as unknown as Record<"zh" | "en", Record<string, string>>;

@@ -15,7 +15,7 @@
  *
  * 断言面：
  *  A. 真源唯一：`dsh-graph-host/package.json` 的 `engines.dsh` 与
- *     `peerDependencies["@deepseek-ai/dsh-settings"]` 必须**逐字相等**（宿主门禁只读后者，
+ *     `peerDependencies["@deepseek-ai/dsh-settings"]` 必须**逐字相等**（新宿主门禁优先 engines.dsh，
  *     两者漂移即判定真源不唯一 ⇒ 直接判红，不进入徽标比对）。
  *  B. 期望值**从 manifest 推导**（不硬编码版本串）：按 shields.io 编码规则把范围串编码为徽标段。
  *  C. 三处逐字比对：根 `README.md` / 包内 `dsh-graph-host/README.md` / **打包层** `dist/README.md`
@@ -131,7 +131,7 @@ test("g-466 判据：宿主兼容真源唯一（engines.dsh == peerDependencies�
   const enginesRange = pkg.engines?.dsh;
   const peerRange = pkg.peerDependencies?.["@deepseek-ai/dsh-settings"];
   assert.ok(enginesRange, "package.json 必须声明 engines.dsh");
-  assert.ok(peerRange, 'package.json 必须声明 peerDependencies["@deepseek-ai/dsh-settings"]（宿主门禁唯一真源）');
+  assert.ok(peerRange, 'package.json 必须声明 peerDependencies["@deepseek-ai/dsh-settings"]（保持与 engines.dsh 一致）');
   assert.equal(enginesRange, peerRange, "宿主兼容真源必须唯一：engines.dsh 与 peerDependencies 逐字相等");
 
   const range = enginesRange as string;
@@ -151,7 +151,7 @@ test("g-466 判据：宿主兼容真源唯一（engines.dsh == peerDependencies�
 // =====================================================================================
 
 test("g-466 负向对照：旧上界/编码变体（单写连字符、小写百分号、+ 空格）/缺徽标 必红，合法改写不误红", () => {
-  const range = ">=0.1.5-rc.2 <0.2.2-0";
+  const range = ">=0.1.5-rc.2 <0.2.3-0";
   const encoded = shieldsEncodeRange(range);
   const legacyEncoded = shieldsEncodeRange(LEGACY_RANGE);
   const host = readFileSync(HOST_README, "utf8");
@@ -185,7 +185,7 @@ test("g-466 负向对照：旧上界/编码变体（单写连字符、小写百�
   // ① 旧上界（正是本次真实漏检的形态；编码串现场推导，仓库内无字面量）
   expectRed(host.replace(encoded, legacyEncoded), "与 manifest 不符", "旧上界范围（推导形态）");
   // ② 单写连字符变体（解码回明文仍正确 ⇒ 只有「逐字比对」这条腿能接住）
-  const singleDash = host.replace(encoded, encoded.replace("0.2.2--0", "0.2.2-0"));
+  const singleDash = host.replace(encoded, encoded.replace("0.2.3--0", "0.2.3-0"));
   expectRed(singleDash, "与 manifest 不符", "单写连字符变体");
   assert.deepEqual(
     badgeProblems(mutated(singleDash), range).filter((p) => p.includes("解码回明文")),
