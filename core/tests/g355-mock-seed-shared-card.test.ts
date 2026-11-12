@@ -196,7 +196,8 @@ test("g-355 B 负向对照：卡片定位回退到 goal 自有目录 ⇒ seed �
 
     mkdirSync(join(mirror, "scripts"), { recursive: true });
     writeFileSync(join(mirror, "scripts", "dsh-graph-mock-seed.mjs"), reverted);
-    // 镜像只需 core 顶层 .ts（seed 经 REPO_ROOT/core/main.ts 调用引擎；main.ts 只相对引用同层 .ts）
+    // 镜像 core 入口及其纯域依赖，不改变负向断言目标。
+    cpSync(join(REPO, "core", "domain"), join(mirror, "core", "domain"), { recursive: true });
     mkdirSync(join(mirror, "core"), { recursive: true });
     for (const f of readdirSync(join(REPO, "core"))) {
       if (f.endsWith(".ts")) cpSync(join(REPO, "core", f), join(mirror, "core", f));
