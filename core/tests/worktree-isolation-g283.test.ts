@@ -208,12 +208,17 @@ test("g-283 回归：dispatch 在提示词组装前计算 isWorktree 并传给 r
   // g-289 起，isWorktree 由「类型 + 工作区干净度」的综合决策函数解析，仍是「解析后布尔」，
   // 提示词隔离声明依旧与其严格一致（g-283 不变式保持不变）。
   const decIdx = src.indexOf("const isolationDecision = resolveWorktreeIsolationDecision(gType, worktree, cleanliness)");
-  const isIdx = src.indexOf("const isWorktree = isolationDecision.isolate");
+  // 复用 child 保留原 cwd，不创建新树；其余派发仍严格服从同一隔离决策。
+  const isIdx = src.indexOf("const isWorktree = !reuseChildId && isolationDecision.isolate");
   const guideIdx = src.indexOf("resolveWorktreeGuide(gType, isWorktree, promptLanguage)");
   assert.ok(decIdx >= 0, "index.js 存在 g-289 隔离决策解析（resolveWorktreeIsolationDecision）");
   assert.ok(isIdx >= 0, "index.js 存在 isWorktree 解析（取自决策结果）");
   assert.ok(guideIdx >= 0, "index.js 调用 resolveWorktreeGuide 传入 isWorktree（解析后布尔，非原始 worktree 参数）");
   assert.ok(decIdx < isIdx && isIdx < guideIdx, "决策→isWorktree→提示词 顺序正确");
+  const expected = "const isWorktree = !reuseChildId && isolationDecision.isolate";
+  const guard = (text: string) => text.includes(expected);
+  assert.equal(guard(src.replace(expected, "const isWorktree = isolationDecision.isolate")), false, "去掉复用排除必红");
+  assert.equal(guard(src.replace(expected, "const isWorktree = false")), false, "放宽非复用隔离必红");
   // 不再以原始 worktree 参数作为第二参调用（旧缺陷根因）
   assert.ok(!src.includes("resolveWorktreeGuide(gType, worktree,"), "dispatch 不再用原始 worktree 参数解析提示词");
 });

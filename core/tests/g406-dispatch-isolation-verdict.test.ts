@@ -83,6 +83,7 @@ function createHarness({ gitRepo = false, providers = ["spawn"], providerHasPrep
     writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n", "utf8");
     execFileSync("git", ["add", "."], { cwd: ws });
     execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+    execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   }
   const root = join(ws, ".dsh-graph");
   init(root);

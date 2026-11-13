@@ -10,7 +10,7 @@
 import { pathToFileURL } from "node:url";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,13 +125,15 @@ export async function makeRealHost(opts: {
   const wsBase = join(process.cwd(), "tmp", "g610");
   mkdirSync(wsBase, { recursive: true });
   const ws = opts.workspace ?? mkdtempSync(join(wsBase, "real-"));
+  const newWorkspace = !opts.workspace || !existsSync(ws);
   mkdirSync(ws, { recursive: true });
-  if (opts.gitRepo) {
+  if (newWorkspace && opts.gitRepo !== false) {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
     writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n.sessions/\n");
     writeFileSync(join(ws, "README"), "x");
     execFileSync("git", ["add", "."], { cwd: ws });
     execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+    execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   }
   const root = join(ws, ".dsh-graph");
   init(root);

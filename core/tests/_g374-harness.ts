@@ -3,6 +3,7 @@
 // 为什么共用：F5（LLM 摘要通道 / 缓存 / 降级 / 归因红线）、F6（报文骨架）、F7（输入预算）三套断言
 // 必须落在**同一个**宿主行为上；各写一份桩会让「归因红线」这类跨路径断言出现口径漂移。
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -59,6 +60,11 @@ export function createHarnessWith(opts: {
 }) {
   const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "legacy";
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-h-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
+  writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n.worktrees/\n");
+  execFileSync("git", ["add", ".gitignore"], { cwd: ws });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "init"], { cwd: ws });
+  execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   const root = join(ws, ".dsh-graph");
   init(root);
   const capturedRequests: any[] = [];
@@ -101,11 +107,12 @@ export function createHarnessWith(opts: {
   const ctx: any = {
     get: (name: string) => {
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      if (name === "workingDirectory") return { get: () => ws };
       if (name === "agents" && childRegistry) {
         return {
           get: (id: string) => {
             const row = childRegistry[String(id)];
-            return row ? { id, status: row.status ?? "idle" } : undefined;
+            return row ? { id, session: { id }, status: row.status ?? "idle" } : undefined;
           },
           isOwnedBy: (id: string, _agent: any) => {
             const row = childRegistry[String(id)];

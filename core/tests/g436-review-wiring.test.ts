@@ -91,6 +91,7 @@ function createHarness(opts: { policy?: string; regions?: string[]; childQueue?:
   writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n", "utf8");
   execFileSync("git", ["add", "."], { cwd: ws });
   execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+  execFileSync("git", ["branch", "v-test-test"], { cwd: ws });
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws }).toString().trim();
 
   const root = join(ws, ".dsh-graph");

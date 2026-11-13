@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   init,
   createGoal,
@@ -200,6 +201,9 @@ function closePriorAttempts(root: string, goal: string): void {
 
 test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / start-collection）均持久化解析后路由", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g194-ws-"));
+  execFileSync("git", ["init", "-q", ws]);
+  execFileSync("git", ["-C", ws, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "fixture"]);
+  execFileSync("git", ["-C", ws, "branch", "v1.0-test"]);
   const root = join(ws, ".dsh-graph");
   init(root);
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: s1\nexecutor:\n  provider: proj-p\n  model: proj-m\n");

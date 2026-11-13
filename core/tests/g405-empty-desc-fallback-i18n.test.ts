@@ -61,10 +61,10 @@
  *   且属 g-397 已定型的**客户端回执**路径 —— 不是派发渲染器的内置文本，未擅自扩大改动面。
  */
 
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -132,7 +132,15 @@ test("g-405 判据 1/3/4：兜底表 en 零汉字、zh 逐字等于基线，且�
 // ============================================================================
 
 function makeHarness() {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g405-"));
+  const tmp = join(process.cwd(), "tmp");
+  mkdirSync(tmp, { recursive: true });
+  const ws = mkdtempSync(join(tmp, "dsh-graph-g405-"));
+  const git = (args: string[], input?: string) => execFileSync("git", args, { cwd: ws, input, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" } }).trim();
+  git(["init", "-q"]);
+  const tree = git(["mktree"], "");
+  const commit = git(["commit-tree", tree, "-m", "fixture"]);
+  git(["update-ref", "HEAD", commit]);
+  git(["update-ref", "refs/heads/v-g405-test", commit]);
   const root = join(ws, ".dsh-graph");
   init(root);
   const captured: any[] = [];

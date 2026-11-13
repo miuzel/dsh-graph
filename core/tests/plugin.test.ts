@@ -5,17 +5,26 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, dirname } from "node:path";
+import { execFileSync } from "node:child_process";
 import { init, findGoalFile, loadGoal, loadCard, createGoal, setCriteria, transition, readSupervisorSession } from "../ops.ts";
 import { resolveRoot } from "../root.ts";
 import { readEvents } from "../events.ts";
 import { apply } from "../../dist/index.js";
+
+function initDispatchGit(ws: string) {
+  execFileSync("git", ["init", "-q", ws]);
+  execFileSync("git", ["-C", ws, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "fixture"]);
+  execFileSync("git", ["-C", ws, "branch", "v-t-test"]);
+}
 
 function assertLossless(v: unknown): void {
   assert.deepEqual(JSON.parse(JSON.stringify(v)), v, "输出必须是无损 JSON");
 }
 
 test("全部 graph_* 工具在 mock ctx 下可执行且输出无损 JSON", async () => {
-  const root = mkdtempSync(join(tmpdir(), "dsh-graph-plugin-"));
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-plugin-"));
+  initDispatchGit(ws);
+  const root = join(ws, ".dsh-graph");
   init(root);
   const registered: any[] = [];
   const ctx = {
@@ -132,6 +141,7 @@ test("g-113 host 工具兜底 sandboxPolicy.workspaceRoot（无 session header �
 test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基准（.dsh-graph/versions/...）", async () => {
   const base = mkdtempSync(join(tmpdir(), "dsh-graph-host-rel-"));
   const ws = join(base, "proj");
+  initDispatchGit(ws);
   init(join(ws, ".dsh-graph"));
   const goalId = createGoal(join(ws, ".dsh-graph"), { title: "rel 目标", version: "v-t", actor: "test" });
   setCriteria(join(ws, ".dsh-graph"), goalId, ["判据一"], "test");
@@ -166,7 +176,9 @@ test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基�
 // ===== g-202：graph_start_attempt 统一覆盖 Goal execution 与 card collection =====
 
 test("g-202 graph_start_attempt：无 card 创建并绑定 Goal attempt、ready→in_progress", async () => {
-  const root = mkdtempSync(join(tmpdir(), "dsh-graph-g202-exec-"));
+  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g202-exec-"));
+  initDispatchGit(ws);
+  const root = join(ws, ".dsh-graph");
   init(root);
   // g-378：ready 目标派发要求目标描述非空（空描述须先 graph_set_description 补写）。
   const goal = createGoal(root, {

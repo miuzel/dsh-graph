@@ -41,10 +41,10 @@
  * - profile 全局设置服务在本进程不可用 ⇒ 覆盖一律经 workspace `project.yaml` 写入（真实链路）。
  */
 
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ROLE_PROFILES,
@@ -94,7 +94,15 @@ type Harness = ReturnType<typeof makeHarness>;
 
 /** 单进程只 apply 一次；语言经可变持有者动态读取（见文件头「已知证据边界」）。 */
 function makeHarness() {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g390-"));
+  const tmp = join(process.cwd(), "tmp");
+  mkdirSync(tmp, { recursive: true });
+  const ws = mkdtempSync(join(tmp, "dsh-graph-g390-"));
+  const git = (args: string[], input?: string) => execFileSync("git", args, { cwd: ws, input, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" } }).trim();
+  git(["init", "-q"]);
+  const tree = git(["mktree"], "");
+  const commit = git(["commit-tree", tree, "-m", "fixture"]);
+  git(["update-ref", "HEAD", commit]);
+  git(["update-ref", "refs/heads/v-g390-test", commit]);
   const root = join(ws, ".dsh-graph");
   init(root);
   const captured: any[] = [];

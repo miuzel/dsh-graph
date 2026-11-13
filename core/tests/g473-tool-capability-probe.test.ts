@@ -31,6 +31,7 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   DISPATCH_CAPABILITY_MISSING_EVENT,
   GRAPH_MINIMAL_ALLOWED_TOOLS,
@@ -396,6 +397,12 @@ test("g-473：诊断事件名稳定（宿主据此记事件；改名即破坏看
 /** 夹具：`tools.get(name, scope)` 由 `availableSet` 决定真假，并记录每次探测的入参。 */
 function makeDispatchHarness(availableSet: Set<string>) {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g473-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: ws, stdio: "pipe" });
+  git("init", "-b", "main");
+  writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n.worktrees/\n");
+  git("add", ".gitignore");
+  git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "seed");
+  git("branch", "v-g473-test");
   const root = join(ws, ".dsh-graph");
   init(root);
   const spawned: any[] = [];

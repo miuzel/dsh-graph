@@ -800,6 +800,7 @@ function createHarness(projectYaml: string): HostHarness {
   // 若任其取当前时间，同一秒内的两次夹具才相等、跨秒即假红 —— 那是夹具抖动，不是配置差异）。
   const gitDate = { ...process.env, GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" };
   execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: ws, env: gitDate });
+  execFileSync("git", ["branch", "v-test-test"], { cwd: ws });
   const root = join(ws, ".dsh-graph");
   init(root);
   writeFileSync(join(root, "project.yaml"), projectYaml, "utf8");

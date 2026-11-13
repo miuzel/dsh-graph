@@ -10,8 +10,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+function fixtureWorkspace(prefix: string): string {
+  const tmp = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "tmp");
+  mkdirSync(tmp, { recursive: true });
+  return mkdtempSync(join(tmp, prefix));
+}
+
+function initFixtureGit(ws: string): void {
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: ws, stdio: "pipe" });
+  git("init");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.test");
+  writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n");
+  git("add", ".gitignore");
+  git("commit", "-m", "fixture");
+  git("branch", "v-t-test");
+}
 import {
   init,
   createGoal,
@@ -35,7 +54,7 @@ let routeDefs: any[] = [];
 let webServer: any = null;
 
 function tmpRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g120-"));
+  const dir = fixtureWorkspace("dsh-graph-g120-");
   init(dir);
   return dir;
 }
@@ -176,6 +195,7 @@ function fakeResponse() {
 
 /** 构造带 subagents/agents/webServer stub 的 ctx：捕获两处派发实际送入子代理的 prompt。 */
 function makeHostCtx(captured: { prompt?: string }, workspace?: string) {
+  if (workspace) initFixtureGit(workspace);
   const routes = new Map<string, any>();
   const registered: any[] = [];
   { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
@@ -218,7 +238,7 @@ function assertPromptInjected(prompt: string, cards: string[]) {
 }
 
 test("g-120：graph_start_attempt 工具 prompt 注入卡片成果段 + 隔离声明，事件记 injected_cards", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-host-"));
+  const ws = fixtureWorkspace("dsh-graph-g120-host-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const { goal, c1, c2 } = goalWithCards(root);
@@ -236,7 +256,7 @@ test("g-120：graph_start_attempt 工具 prompt 注入卡片成果段 + 隔离�
 });
 
 test("g-120：graph_start_attempt worktree=false 声明未启用隔离但保留卡片注入", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-host-"));
+  const ws = fixtureWorkspace("dsh-graph-g120-host-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const { goal, c1, c2 } = goalWithCards(root);
@@ -249,7 +269,7 @@ test("g-120：graph_start_attempt worktree=false 声明未启用隔离但保留�
 });
 
 test("g-120：start-execution 端点 prompt 注入卡片成果段 + 隔离声明，事件记 injected_cards", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-ep-"));
+  const ws = fixtureWorkspace("dsh-graph-g120-ep-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const { goal, c1, c2 } = goalWithCards(root);
@@ -276,7 +296,7 @@ test("g-120：start-execution 端点 prompt 注入卡片成果段 + 隔离声明
 });
 
 test("g-120：start-execution 端点 worktree=false 声明未启用隔离；无成果卡时注入空清单", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g120-ep-"));
+  const ws = fixtureWorkspace("dsh-graph-g120-ep-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const { goal, c1 } = goalWithCards(root);
@@ -294,7 +314,7 @@ test("g-120：start-execution 端点 worktree=false 声明未启用隔离；无�
   assertPromptInjected(captured.prompt!, [c1]);
 
   // 无成果卡（只有 empty 卡）：注入清单为空、段标题仍在
-  const ws2 = mkdtempSync(join(tmpdir(), "dsh-graph-g120-ep2-"));
+  const ws2 = fixtureWorkspace("dsh-graph-g120-ep2-");
   const root2 = join(ws2, ".dsh-graph");
   init(root2);
   const goal2 = createGoal(root2, { title: "empty-only", version: "v-t", actor: "test" });
@@ -373,7 +393,7 @@ test("g-240: 多卡注入总预算控制与折叠机制，保留附件引用且�
 });
 
 test("g-240: 卡片精确路径以 .dsh-graph/ 开头且在工作区根相对路径真实可读", () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-ws-path-"));
+  const ws = fixtureWorkspace("dsh-graph-ws-path-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "路径测试目标", version: "v-t", actor: "test" });

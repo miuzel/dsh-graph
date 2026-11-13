@@ -53,7 +53,7 @@ function createHarness({
   providers = ["spawn"],
   providerHasPrepareContinuable = true,
   spawnError = null,
-  gitRepo = false,
+  gitRepo = true,
 }: {
   customWorkspace?: string;
   providers?: string[];
@@ -72,6 +72,7 @@ function createHarness({
     writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n", "utf8");
     execFileSync("git", ["add", "."], { cwd: ws });
     execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+    execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   }
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -319,6 +320,7 @@ test("g-241 判据 2：旧 attempt 兼容性——缺少 4 项事实时 goalDeta
 
 test("g-241 判据 3：attempt meta 与事件记录 template_version、context_version、context_digest、prompt_hash，注入卡片/handoff 来自同一快照", async () => {
   const { ws, root, toolsByName, execContext, capturedRequests } = createHarness();
+  const baseline = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws, encoding: "utf8" }).trim();
   const goalId = createGoal(root, { title: "快照与恢复", version: "v1.0", actor: "human:gui" });
   setCriteria(root, goalId, ["质量要求 1"], "human:gui");
 
@@ -331,7 +333,7 @@ test("g-241 判据 3：attempt meta 与事件记录 template_version、context_v
       goal: goalId,
       attempt_brief: "验证快照 hash",
       task_type: "merge",
-      baseline_commit: "1234567",
+      baseline_commit: baseline,
       source_attempt: "att-000",
       acceptance_items: ["pnpm test"],
     },
@@ -352,7 +354,7 @@ test("g-241 判据 3：attempt meta 与事件记录 template_version、context_v
 
   // 验证关键任务事实完全可从 attempt.md 恢复，而不是只剩 hash
   assert.equal(doc.meta.task_type, "merge");
-  assert.equal(doc.meta.baseline_commit, "1234567");
+  assert.equal(doc.meta.baseline_commit, baseline);
   assert.equal(doc.meta.source_attempt, "att-000");
   assert.deepEqual(doc.meta.acceptance_items, ["pnpm test"]);
   assert.equal(doc.meta.brief, "验证快照 hash");
@@ -731,7 +733,7 @@ test("g-283 默认规则：feature 省略 worktree 默认勾选自动建树，ta
 });
 
 test("g-283 失败即停：非 git 仓库 + worktree=true 拒绝派发，未创建 attempt 且未启动子代理", async () => {
-  const { root, toolsByName, execContext, capturedRequests } = createHarness(); // 非 git 仓库
+  const { root, toolsByName, execContext, capturedRequests } = createHarness({ gitRepo: false }); // 非 git 仓库
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
   const goalId = createGoal(root, { title: "非git隔离", version: "v1.0", type: "feature", actor: "human:gui" });
   setCriteria(root, goalId, ["判据"], "human:gui");

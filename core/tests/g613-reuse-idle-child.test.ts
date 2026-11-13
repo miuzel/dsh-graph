@@ -345,6 +345,7 @@ test("g-613 判据 8：复用不建 worktree、不宣称切换 cwd/权限（work
   writeFileSync(join(h.ws, "README"), "x");
   execFileSync("git", ["add", "."], { cwd: h.ws });
   execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: h.ws });
+  execFileSync("git", ["branch", "-f", "v1.0-test", "HEAD"], { cwd: h.ws });
   const res = await h.call("graph_start_attempt", { goal: b, attempt_brief: "x", child_id: CHILD, worktree: true });
   assert.equal(res.reused, true);
   assert.equal(res.isolated, false, "复用不得伪称隔离");

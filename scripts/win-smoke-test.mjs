@@ -758,12 +758,12 @@ const OS_SITE_ROWS = [
   ["dsh-graph-host/index.js", "mkdirSync", 1, ["apply"],
    "attempts 目录创建",
    "ws:T3.attempts_dir_present"],
-  ["dsh-graph-host/index.js", "realpathSync", 4, ["resolveSchemastery", "discoverAttemptWorktrees"],
-   "workspace canonical key / worktree 真实路径",
-   "exempt:宿主 workspace 归一由 T4/T5 间接覆盖；软链拒绝见 pg:P2"],
-  ["dsh-graph-host/index.js", "statSync", 3, ["apply"],
-   "文件 mtime 探测（REST 载荷）",
-   "exempt:只读探测；REST 读路径由 T5 覆盖"],
+  ["dsh-graph-host/index.js", "realpathSync", 6, ["resolveSchemastery", "discoverAttemptWorktrees", "apply"],
+   "workspace canonical key / worktree 真实路径；复用 child 时归一实际 cwd 与 Git common dir，校验仓库归属",
+   "exempt:宿主 workspace 归一由 T4/T5 间接覆盖；复用 child cwd 校验需宿主工作目录服务及 git，见 core/tests/g474-child-reuse.test.ts；软链拒绝见 pg:P2"],
+  ["dsh-graph-host/index.js", "statSync", 4, ["apply"],
+   "文件 mtime 探测（REST 载荷）；复用 child 时校验实际 cwd 为目录",
+   "exempt:只读探测；REST 读路径由 T5 覆盖，复用 child cwd 校验需宿主工作目录服务及 git，见 core/tests/g474-child-reuse.test.ts"],
 // 台账规模**不写死**：行数与命中数由 buildLedgerRow 汇总后运行时打印（`台账=<rows>项/<hits>处命中`），
 // 未登记即判红。历史教训：此处曾写死 253 / 257，而实际先后是 255 / 258 ⇒ 一律以运行时报数为准。
 ];

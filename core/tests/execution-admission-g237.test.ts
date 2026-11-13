@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,6 +56,11 @@ function createHarness({
   onSpawn?: () => void;
 } = {}) {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g237-ws-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
+  writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n.worktrees/\n");
+  execFileSync("git", ["add", ".gitignore"], { cwd: ws });
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=t@e", "commit", "-qm", "init"], { cwd: ws });
+  execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   const root = join(ws, ".dsh-graph");
   init(root);
 

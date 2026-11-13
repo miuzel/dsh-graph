@@ -135,19 +135,21 @@ test("g-451 判据 1：建树即原子写入归属标记——路径/字段/内�
   assert.equal(dirname(admin), join(common, "worktrees"), "标记仍写在 <git-common-dir>/worktrees/<name>/ 下");
   assert.equal(file, join(admin, MARKER), "标记路径 = 该树 Git 管理目录 + 固定文件名（原子写不改变落点）");
 
-  // 内容/字段不变：完整 JSON + 结尾换行，字段集合与取值逐字等同修复前
+  // 完整 JSON + 结尾换行，原字段不变，新增基线须准确记录建树锚点
   const content = readFileSync(file, "utf8");
   assert.equal(content.endsWith("\n"), true, "标记仍以换行结尾");
   const parsed = JSON.parse(content) as Record<string, unknown>;
   assert.deepEqual(
     Object.keys(parsed).sort(),
-    ["attempt", "branch", "canonical_root", "created_at", "goal"],
-    "字段集合只增不减地逐字不变",
+    ["attempt", "baseline_commit", "branch", "canonical_root", "created_at", "goal"],
+    "原字段及新增基线字段的集合必须准确",
   );
   assert.equal(parsed.canonical_root, root);
   assert.equal(parsed.goal, "g-1");
   assert.equal(parsed.attempt, "att-001");
   assert.equal(parsed.branch, "g-1-att-01");
+  assert.equal(parsed.baseline_commit, git(ws, "rev-parse", "HEAD"), "基线必须是建树时的主树提交");
+  assert.equal(parsed.baseline_commit, created.baseline_commit, "标记基线必须与建树结果一致");
   assert.equal(typeof parsed.created_at, "string");
   assert.deepEqual(readBoardOwner(tree), parsed, "读回与写入逐字一致");
 

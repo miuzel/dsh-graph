@@ -27,7 +27,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createHarness, prepare, restCall } from "./_g374-harness.ts";
+import { createHarness as createBaseHarness, prepare, restCall } from "./_g374-harness.ts";
+import { execFileSync } from "node:child_process";
+
+function createHarness() {
+  const h = createBaseHarness();
+  // 版本目标必须从真实本地版本分支派发，而不是依赖当前工作树 HEAD。
+  execFileSync("git", ["rev-parse", "--verify", "refs/heads/v1.0-test"], { cwd: h.ws });
+  return h;
+}
 import {
   ATTEMPT_BRIEF_SOURCE_VALUES,
   createGoal,

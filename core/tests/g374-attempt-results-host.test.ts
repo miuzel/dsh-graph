@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +24,11 @@ function createHarness({ providers = ["spawn"], withOn = true, withSubagents = t
 } = {}) {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-host-"));
   const root = join(ws, ".dsh-graph");
+  // 每个夹具使用私有仓库及版本基线，避免依赖外层工作树。
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: ws, stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  git("-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init", "--allow-empty");
+  git("branch", "v1.0-test");
   init(root);
   const events: Record<string, Function[]> = {};
   const capturedRequests: any[] = [];

@@ -9230,6 +9230,10 @@ export function startAttempt(
     modeSource?: "override" | "project" | "global" | "default" | null;
     taskType?: "merge" | "rewrite" | "fix" | null;
     baselineCommit?: string | null;
+    baselineSource?: "explicit" | "version_branch" | "main_head" | "existing_worktree" | null;
+    baselineRef?: string | null;
+    baselineVersion?: string | null;
+    baselineFallbackReason?: string | null;
     sourceAttempt?: string | null;
     acceptanceItems?: string[] | null;
     templateVersion?: string | null;
@@ -9337,6 +9341,10 @@ export function startAttempt(
   if (opts.baselineCommit !== undefined) {
     meta.baseline_commit = opts.baselineCommit !== null ? opts.baselineCommit.trim() : null;
   }
+  if (opts.baselineSource !== undefined) meta.baseline_source = opts.baselineSource;
+  if (opts.baselineRef !== undefined) meta.baseline_ref = opts.baselineRef;
+  if (opts.baselineVersion !== undefined) meta.baseline_version = opts.baselineVersion;
+  if (opts.baselineFallbackReason !== undefined) meta.baseline_fallback_reason = opts.baselineFallbackReason;
   if (opts.sourceAttempt !== undefined) {
     meta.source_attempt = opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null;
   }
@@ -9391,6 +9399,10 @@ export function startAttempt(
     ...(normalizedMode && opts.modeSource ? { mode_source: opts.modeSource } : {}),
     ...(opts.taskType !== undefined ? { task_type: opts.taskType } : {}),
     ...(opts.baselineCommit !== undefined ? { baseline_commit: opts.baselineCommit !== null ? opts.baselineCommit.trim() : null } : {}),
+    ...(opts.baselineSource !== undefined ? { baseline_source: opts.baselineSource } : {}),
+    ...(opts.baselineRef !== undefined ? { baseline_ref: opts.baselineRef } : {}),
+    ...(opts.baselineVersion !== undefined ? { baseline_version: opts.baselineVersion } : {}),
+    ...(opts.baselineFallbackReason !== undefined ? { baseline_fallback_reason: opts.baselineFallbackReason } : {}),
     ...(opts.sourceAttempt !== undefined ? { source_attempt: opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null } : {}),
     ...(opts.acceptanceItems !== undefined ? { acceptance_items: opts.acceptanceItems !== null ? opts.acceptanceItems.map((it) => it.trim()) : null } : {}),
     ...(opts.templateVersion && opts.templateVersion.trim() ? { template_version: opts.templateVersion.trim() } : {}),
@@ -13087,6 +13099,10 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             // g-241：结构化任务事实与快照审计
             task_type: m.task_type ?? null,
             baseline_commit: m.baseline_commit ?? null,
+            baseline_source: m.baseline_source ?? null,
+            baseline_ref: m.baseline_ref ?? null,
+            baseline_version: m.baseline_version ?? null,
+            baseline_fallback_reason: m.baseline_fallback_reason ?? null,
             source_attempt: m.source_attempt ?? null,
             acceptance_items: Array.isArray(m.acceptance_items) ? m.acceptance_items : (m.acceptance_items === null ? null : null),
             template_version: m.template_version ?? null,
@@ -14225,6 +14241,7 @@ export function resolveAccept(
       attemptWorktree: attemptMeta.worktree,
       baseline: evidence.baseline_commit,
       attemptBaseline: typeof attemptMeta.baseline_commit === "string" ? attemptMeta.baseline_commit : null,
+      attemptBaselineSource: typeof attemptMeta.baseline_source === "string" ? attemptMeta.baseline_source : null,
       // g-435/g-437：与策略解析**同一份**有效排除前缀（单一默认点），不引入第二套默认。
       nonProductPrefixes: effectiveNonProductPrefixesOf(projConf.review.non_product_prefixes),
     });

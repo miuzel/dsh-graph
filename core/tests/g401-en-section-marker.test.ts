@@ -47,10 +47,10 @@
  * - 真机 / GUI 未走查：本文件只覆盖引擎侧 prompt 组装链路（与 g-400 同一证据边界）。
  */
 
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -180,7 +180,15 @@ test("g-401 判据 2：zh 表与 en 表 5 条契约标记逐字等于基线（�
 // ============================================================================
 
 function makeHarness() {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g401-"));
+  const tmp = join(process.cwd(), "tmp");
+  mkdirSync(tmp, { recursive: true });
+  const ws = mkdtempSync(join(tmp, "dsh-graph-g401-"));
+  const git = (args: string[], input?: string) => execFileSync("git", args, { cwd: ws, input, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" } }).trim();
+  git(["init", "-q"]);
+  const tree = git(["mktree"], "");
+  const commit = git(["commit-tree", tree, "-m", "fixture"]);
+  git(["update-ref", "HEAD", commit]);
+  git(["update-ref", "refs/heads/v-g401-test", commit]);
   const root = join(ws, ".dsh-graph");
   init(root);
   const captured: any[] = [];

@@ -28,6 +28,7 @@
  */
 
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,6 +76,15 @@ function writeYaml(root: string, text: string): void {
 
 function readYaml(root: string): string {
   return readFileSync(join(root, "project.yaml"), "utf8");
+}
+
+function initVersionGit(ws: string): void {
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
+  const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" };
+  const tree = execFileSync("git", ["mktree"], { cwd: ws, input: "", encoding: "utf8" }).trim();
+  const commit = execFileSync("git", ["commit-tree", tree, "-m", "fixture"], { cwd: ws, env, encoding: "utf8" }).trim();
+  execFileSync("git", ["update-ref", "refs/heads/main", commit], { cwd: ws });
+  execFileSync("git", ["branch", "v-g333-test"], { cwd: ws });
 }
 
 function newGoal(root: string, title: string): string {
@@ -330,6 +340,7 @@ test("g-333 判据 4：含空格/引号/#/多行/制表符的文本往返逐字�
 
 test("g-333 判据 1/4/5：REST 写入 → 派发正文逐字包含该文本（断言落在注入正文，非 promptHash）", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g333-e2e-"));
+  initVersionGit(ws);
   const root = join(ws, ".dsh-graph");
   init(root);
   writeYaml(root, "supervisor:\n  session: sess-super\n");
@@ -388,6 +399,7 @@ test("g-333 判据 1/4/5：REST 写入 → 派发正文逐字包含该文本（�
 
 test("g-333 判据 1：graph_update_settings 写入即生效（第三条写入路径）", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g333-tool-"));
+  initVersionGit(ws);
   const root = join(ws, ".dsh-graph");
   init(root);
   writeYaml(root, "supervisor:\n  session: sess-super\n");
@@ -408,6 +420,7 @@ test("g-333 判据 1：graph_update_settings 写入即生效（第三条写入�
 
 test("g-333 判据 1/3：弹窗草稿（真实 buildSettingsPatch）→ REST → 派发正文", async () => {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g333-modal-"));
+  initVersionGit(ws);
   const root = join(ws, ".dsh-graph");
   init(root);
   writeYaml(root, "supervisor:\n  session: sess-super\n");

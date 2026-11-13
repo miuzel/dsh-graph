@@ -7349,7 +7349,7 @@ export function apply(ctx, config) {
    * 由 dispatch 的既有失败收敛把该 attempt 结算为 child_error（**零残留**：不投递、不迁移）。
    * 绑定成功后 closeFailure 失效，后续投递失败只改本 attempt 的记录与事件，绝不误伤别的目标。
    */
-  const buildReuseIntake = (root, { goal, attempt, childId, actor, parentSessionId, callerAgent, prompt, promptHash, contextDigest, modelRoute, mode, modeSource, injectedCards, injectedHandoffs, brief, briefSource, baselineCommit }) => {
+  const buildReuseIntake = (root, { goal, attempt, childId, actor, parentSessionId, callerAgent, prompt, promptHash, contextDigest, modelRoute, mode, modeSource, injectedCards, injectedHandoffs, brief, briefSource, baselineCommit, baselineInfo }) => {
     let closeFailure = true;
     const fail = (message) => {
       if (!closeFailure) return;
@@ -7392,7 +7392,7 @@ export function apply(ctx, config) {
     }
     return {
       root, goal, attempt, childId, bindingVersion, prior, actor, callerAgent, prompt, promptHash, contextDigest,
-      modelRoute, mode, modeSource, injectedCards, injectedHandoffs, brief, briefSource, baselineCommit,
+      modelRoute, mode, modeSource, injectedCards, injectedHandoffs, brief, briefSource, baselineCommit, baselineInfo,
       closeFailure: () => closeFailure,
     };
   };
@@ -7427,6 +7427,10 @@ export function apply(ctx, config) {
       worktree_created: false,
       worktree_reused: false,
       baseline_commit: r.baselineCommit ?? null,
+      baseline_source: r.baselineInfo?.baseline_source ?? null,
+      baseline_ref: r.baselineInfo?.baseline_ref ?? null,
+      baseline_version: r.baselineInfo?.baseline_version ?? null,
+      baseline_fallback_reason: r.baselineInfo?.baseline_fallback_reason ?? null,
       brief: r.brief ?? null,
       brief_source: r.briefSource ?? null,
       prompt: r.prompt ?? null,
@@ -7684,7 +7688,7 @@ export function apply(ctx, config) {
       );
     }
     const isolationDecision = resolveWorktreeIsolationDecision(gType, worktree, cleanliness);
-    const isWorktree = isolationDecision.isolate;
+    const isWorktree = !reuseChildId && isolationDecision.isolate;
     const worktreeBlock = resolveWorktreeGuide(gType, isWorktree, promptLanguage);
     const subagentPromptSection = (() => {
       // g-333：单一消费者（结构化三态 + 遗留回落 + 全局回落），见 resolveSubagentPrompt。
@@ -7739,10 +7743,33 @@ export function apply(ctx, config) {
 
       // 真实创建 / 幂等复用 / 失败即停（在状态迁移与创建 attempt 之前执行，失败即停零副作用）
       const wtResult = prepareAttemptWorktree(root, goal, nextAttId, {
-        enabled: isWorktree,
+        enabled: reuseChildId ? false : isWorktree,
         baselineCommit: baseline_commit,
-        reason: isolationDecision.reason,
+        version: doc.meta.version ?? null,
+        validateMainHead: !(reuseChildId && doc.meta.version),
+        reason: reuseChildId ? "reused_child" : isolationDecision.reason,
       });
+      if (reuseChildId && doc.meta.version) {
+        // Only the host's live working-directory projection can establish the child's default cwd.
+        // `get`, unlike `ensure`, is read-only and never repairs a missing directory.
+        inspectReuseChild(root, reuseChildId, parentAgent, { goal });
+        const live = liveChildAgent(reuseChildId);
+        let cwd;
+        try {
+          const service = ctx.get?.("workingDirectory");
+          if (!live.agent?.session || typeof service?.get !== "function") throw new Error("工作目录服务或会话不可用");
+          const reported = service.get(live.agent.session);
+          if (typeof reported !== "string" || !isAbsolute(reported)) throw new Error("cwd 未知或非绝对路径");
+          cwd = realpathSync(reported);
+          if (!statSync(cwd).isDirectory()) throw new Error("cwd 不是目录");
+          const gitRead = (dir, args) => execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+          const common = (dir) => realpathSync(resolve(dir, gitRead(dir, ["rev-parse", "--git-common-dir"])));
+          if (common(cwd) !== common(workspace)) throw new Error("child cwd 不属于目标仓库");
+          if (gitRead(cwd, ["rev-parse", "--verify", "HEAD^{commit}"]) !== wtResult.baseline_commit) throw new Error("child cwd HEAD 与基线不一致");
+        } catch (e) {
+          throw new GraphError(`无法验证复用 child 的实际工作目录与基线一致（${e?.message ?? e}），拒绝派发`);
+        }
+      }
 
       // g-414：建树已成功（失败已于上一行抛 GraphError ⇒ 此刻未迁移状态、未建 attempt、未启动子代理，
       // 且 attempts/ 尚未被创建 = 真正零副作用可重试）⇒ 此时才为后续写入准备目标 attempts/ 目录。
@@ -7751,15 +7778,9 @@ export function apply(ctx, config) {
 
       // g-437 P1：**门禁③的区间锚点必须由引擎在派发时落盘**（引擎只信 attempt 记录，绝不信报告）。
       // 否则「报告把 baseline 取到自己的 HEAD」就能让 diff 恒为空（0 行 0 未跟踪）必然放行。
-      //  - 隔离 attempt：锚点 = 刚建/复用工作树的实际起点（`prepareAttemptWorktree` 已算好并落盘）；
-      //  - 非隔离 attempt：在工作区仓库根执行，recorded 形态里没有 head ⇒ 取派发这一刻的仓库 HEAD；
-      //  - 显式 `baseline_commit` 优先（原样回显，语义不变）；取不到（非 Git 仓库 / 无提交 / git 不可用）
-      //    ⇒ `undefined`/`null`（不写基线；门禁③对这类 attempt fail-closed 拒绝，不退回采信报告）。
-      const engineBaselineCommit = baseline_commit !== undefined && baseline_commit !== null
-        ? baseline_commit
-        : (wtResult.worktree && typeof wtResult.worktree.head === "string" && wtResult.worktree.head
-          ? wtResult.worktree.head
-          : readRepoHead(dirname(root)));
+      // g-474：解析器给出已校验 SHA；复用树仅用持久化的原锚点，不能以当前 HEAD 冒充。
+      // 非隔离时解析基线须与主工作树 HEAD 一致；无版本且不可取 HEAD 时保留 null。
+      const engineBaselineCommit = wtResult.baseline_commit;
 
       // g-406：派发返回必须**可据以判定隔离**，否则 `worktree:false` 会把两种完全不同的
       // 情形混成同一个值：①解析为「本次不建树」（显式 worktree=false / 干净工作区下
@@ -7776,6 +7797,10 @@ export function apply(ctx, config) {
         // g-437 P1：落盘的区间锚点（fast_track 的 `machine_report.baseline_commit` 必须与之相等）。
         // null = 取不到锚点（非 Git 仓库等）⇒ 该 attempt 走不了 fast_track，如实回传而不是编一个值。
         baseline_commit: engineBaselineCommit ?? null,
+        baseline_source: wtResult.baseline_source ?? null,
+        baseline_ref: wtResult.baseline_ref ?? null,
+        baseline_version: wtResult.baseline_version ?? null,
+        baseline_fallback_reason: wtResult.baseline_fallback_reason ?? null,
       };
 
       const prompt = formatAttemptPrompt({
@@ -7833,6 +7858,10 @@ export function apply(ctx, config) {
         modeSource: effModeRes.source,
         taskType: task_type,
         baselineCommit: engineBaselineCommit,
+        baselineSource: wtResult.baseline_source,
+        baselineRef: wtResult.baseline_ref,
+        baselineVersion: wtResult.baseline_version,
+        baselineFallbackReason: wtResult.baseline_fallback_reason,
         sourceAttempt: source_attempt,
         acceptanceItems: acceptance_items,
         templateVersion,
@@ -7867,6 +7896,7 @@ export function apply(ctx, config) {
             brief: resolvedBrief.brief,
             briefSource: resolvedBrief.source,
             baselineCommit: engineBaselineCommit ?? null,
+            baselineInfo: isolationReport,
           }),
         };
       }
@@ -9269,6 +9299,10 @@ export function apply(ctx, config) {
           // g-437 P1：区间锚点也必须回传（与上面四件套同一理由——白名单漏登记主管就看不到）。
           // 主管据此填 `machine_report.baseline_commit`；null = 该 attempt 无锚点（走不了 fast_track）。
           baseline_commit: execRes.baseline_commit ?? null,
+          baseline_source: execRes.baseline_source ?? null,
+          baseline_ref: execRes.baseline_ref ?? null,
+          baseline_version: execRes.baseline_version ?? null,
+          baseline_fallback_reason: execRes.baseline_fallback_reason ?? null,
         };
         if (execRes.child_error) result.child_error = execRes.child_error;
         if (execRes.note) result.note = execRes.note;
@@ -11155,6 +11189,10 @@ export function apply(ctx, config) {
             worktree_reused: execRes.worktree_reused === true,
             // g-437 P1：同工具入口（白名单两处同时登记）。
             baseline_commit: execRes.baseline_commit ?? null,
+          baseline_source: execRes.baseline_source ?? null,
+          baseline_ref: execRes.baseline_ref ?? null,
+          baseline_version: execRes.baseline_version ?? null,
+          baseline_fallback_reason: execRes.baseline_fallback_reason ?? null,
             // g-613：复用面同样两处登记（同工具入口）。
             ...(execRes.reused === true ? {
               reused: true,

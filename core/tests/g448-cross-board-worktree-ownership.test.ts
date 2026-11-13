@@ -48,6 +48,8 @@ function repo(): string {
   writeFileSync(join(dir, ".gitignore"), ".worktrees/\n.dsh-graph/\n");
   git(dir, "add", "-A");
   git(dir, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init");
+  // 真实入口的 v1.0 目标按版本分支解析基线；夹具显式提供该分支。
+  git(dir, "branch", "v1.0-test", "HEAD");
   return dir;
 }
 function boardDir(ws: string, name: string): string {

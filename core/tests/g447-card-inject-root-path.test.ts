@@ -49,6 +49,7 @@ function gitWorkspace(prefix: string): string {
   writeFileSync(join(ws, "seed.txt"), "seed\n");
   run("add", ".gitignore", "seed.txt");
   run("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "seed");
+  run("branch", "v-t-test");
   return ws;
 }
 
@@ -287,7 +288,7 @@ const execCtx = (ws: string) => ({
 /** 端到端：给定图根配置，断言 prompt 中的卡片精确路径按 workspace 解析后读到的**正是该图根**的卡片。 */
 async function assertPromptCardPaths(makeConfig: (ws: string) => any, makeBoardRoot: (ws: string) => string, expectTag: string) {
   _clearCanonicalRootCache();
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g447-host-"));
+  const ws = gitWorkspace("dsh-graph-g447-host-");
   const defaultRoot = join(ws, ".dsh-graph");
   const defaultBoard = makePromptBoard(defaultRoot, "DEFAULT");
   const root = makeBoardRoot(ws);

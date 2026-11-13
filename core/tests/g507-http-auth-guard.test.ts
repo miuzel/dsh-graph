@@ -251,6 +251,8 @@ test("g-507 S5：迁移清单上的旧套件全部经唯一门禁入口驱动（
     "g507-http-auth-surface.test.ts",
     "g507-http-auth-real-host.test.ts",
     "g251-brief-source-contract.test.ts",
+    "g474-baseline.test.ts",
+    "g474-child-reuse.test.ts",
     // g-506：关照 REST 门禁证据套件（同样经唯一入口驱动）。
     "g506-care.test.ts",
   ]);
