@@ -81,6 +81,7 @@ function makeSandbox(opts: { withFreshnessSuite?: boolean } = {}): Sandbox {
   // g-496：公共层提示词资产在仓库根 `prompts/`（构建合并两层的源之一），沙箱须同构镜像。
   cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
+  cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));
   }

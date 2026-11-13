@@ -32,6 +32,8 @@ dest="$DEST_DIR/core"
 rm -rf "$dest"
 mkdir -p "$dest"
 cp "$CORE_DIST"/*.js "$dest"/
+# g-393: compatibility entries import the internal hostless domain modules.
+cp -r "$CORE_DIST/domain" "$dest"/
 echo "已同步：$(ls "$dest"/*.js | wc -l) 个 .js"
 
 echo "== 3. 一致性校验（无 .ts 泄漏） =="

@@ -74,7 +74,8 @@ const FALLBACK_RE = /退回两次 rename/;
  *  以 cd42089 的**实测**随包文件数 84（含上述全部项与 diagrams/lib 等）为基线 ⇒ 84 + 2 = 86）。
  *  刻意用**精确计数**而不是派生：派生需要在测试里再持有一份 build.sh 的资产清单（第二副本），
  *  与本包「单一真源」口径冲突；清单漂移由本常量的精确比较如实判红。 */
-const DIST_FILE_COUNT = 86;
+// g-393: two compiled hostless domain modules; keep the exact count fail-closed.
+const DIST_FILE_COUNT = 88;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）
@@ -98,6 +99,7 @@ function makeSandbox(): Sandbox {
   // g-496：公共层提示词资产在仓库根 `prompts/`（构建合并两层的源之一），沙箱须同构镜像。
   cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
+  cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));
   }
@@ -227,6 +229,9 @@ test("g-359 判据 3：退化发布路径（无 mv --exchange 时两次 rename�
     );
     const normalManifest = treeManifest(distDir);
     const normalFiles = listFilesRel(distDir);
+    for (const name of ["model", "machine"]) {
+      assert.ok(normalFiles.includes(`core/domain/${name}.js`), `compiled domain module missing: ${name}`);
+    }
     assert.equal(
       normalFiles.length,
       DIST_FILE_COUNT,
