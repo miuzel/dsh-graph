@@ -11,7 +11,8 @@ v0.24.1 是**紧急兼容补丁**，只修 DSH `0.2.2-rc.3` 适配，不含新�
 2. **修复激活参数结构不兼容**（g-624）：rc.3 移除了 `startActivation` 的嵌套 `request`，改为扁平 spec 且 `delivery` 必填。`startSubagentCompat` 单点构建双形态（有 `list()` ⇒ 嵌套；无 `list()` ⇒ 扁平），两形态都显式 `delivery: "parent"`。
 3. **适配被删除的中断 API**（g-625）：rc.3 删 `interruptByParent`，本地改用 `interrupt(child, {kind:"ancestor", agent})`；`interruptByUser` 是 Remote/Gateway 面，插件不使用。
 4. **适配被删除的子级目录 API**（g-625）：`listChildren` → `sessionQuery.observeSession` 的 `subagentCatalog` 投影；缺投影/异常一律按 unknown，绝不当作「没有 child」。
-5. **适配被删除的归属 API**（g-625）：`agents.isOwnedBy` → `subagents.rootOf` 比较 Agent 对象身份 + `header.parentSession`；19 处文本面收敛为 8 个功能面，UNAUTHORIZED 按「不可确认」处理。
+5. **适配被删除的归属 API**（g-625）：`agents.isOwnedBy` → `subagents.rootOf` 比较 Agent 对象身份 + `header.parentSession`；19 处文本面收敛为 8 个功能面。
+6. **修复 rc.3 上关照不可用**（g-626）：`rootOf` 抛错时会直接判「不可确认」，导致 `children_probe` 不可用、关照整体不采样。改为回退到公开 `parentSession`（相等⇒yes / 指向他人⇒no / 缺失⇒unknown），UNAUTHORIZED 本身绝不放行。
 
 ## 1. 版本号一致性核查
 
@@ -24,9 +25,10 @@ v0.24.1 是**紧急兼容补丁**，只修 DSH `0.2.2-rc.3` 适配，不含新�
 
 ## 2. 门禁与自证（发布树）
 
-发布树：`.worktrees/release-v0.24.1`（detached at `aeff775`，等价于待打 tag 的树）。
+发布树：`.worktrees/release-v0.24.1`（detached at `fd1062e`，等价于待打 tag 的树）。
 
-- [x] 全套测试：`node scripts/run-tests.mjs` -> `tests=3001 pass=3001 fail=0 skipped=0 todo=0 cancelled=0 exit=0 ms=96938`
+- [x] 全套测试（**rc.3 宿主栈**）：`node scripts/run-tests.mjs` -> `tests=3013 pass=3013 fail=0 skipped=0 todo=0 cancelled=0 exit=0 ms=91604`
+- [x] 宿主栈固定并记录：`G505_HOST_STACK_DIR=.../lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai`，实测 `dsh=0.2.2-rc.3`、`dsh-subagent=0.2.2-rc.3`（此前该栈为 rc.1，全局升级后必须先固定再跑门禁）
 - [x] 产物新鲜度（只读）：`node --test core/tests/dist-freshness-g312.test.ts` -> 9/9
 - [x] 客户端语法：`node --check dist/lib/client.js`、`node --check dist/index.js` 通过
 - [x] 构建：`bash scripts/build.sh` 原子发布成功，`dist/index.js` 含 `ownershipProbeOf` 等三收口
@@ -47,16 +49,17 @@ v0.24.1 是**紧急兼容补丁**，只修 DSH `0.2.2-rc.3` 适配，不含新�
 
 ## 4. 产物与指纹
 
-- [x] 候选包文件名：`dsh-graph-0.24.1.tgz`（86 个文件，解包 5,176,669 B）
-- [x] 文件体积：1,712,879 字节
-- [x] SHA-256：`112b6b2db3c99516d68c8f8a5d1db34a9dcafb8e58f61802d27f608539141dee`
-- [x] SHA-1：`d4284398a8f0fc45e0f4c5224326287404c313a4`
+- [x] 候选包文件名：`dsh-graph-0.24.1.tgz`（86 个文件）
+- [x] 文件体积：1,713,581 字节
+- [x] SHA-256：`6f05e8a15cdb521cfa35c0619031165776ea850503d2294cf78138dca417a0e2`
+- [x] SHA-1：`48fa98816a2cf946c84002192185f0a05c94456e`
 - [x] 隔离性核验：包内无 `.tgz` / `.git` 残留；产物位于发布树 `tmp/pack2/`（不入库）
-- [x] 可复现性：在发布提交 `aeff775` 上重新打包，SHA-256 与上表**逐字相同**（同一内容 ⇒ 已跑的 Windows 门禁对新树同样有效）
+- [x] 可复现性：同一发布提交 `fd1062e` 两次打包 SHA-256 逐字相同；Windows 门禁校验的正是该指纹（见 T2 段）
 
 ## 5. Windows 原生门禁（红线）
 
-- [x] 在**原生 Windows** 上用 `pwsh` 运行 `node win-smoke-test.mjs --tarball dsh-graph-0.24.1.tgz --port 3091`
+- [x] 在**原生 Windows** 上用 `pwsh` 运行 `node win-smoke-test.mjs --tarball dsh-graph-0.24.1.tgz --port 3091 --h3-dispatch-json h3-facts.json`
+- [x] T2 实测被测产物指纹：`1713581 B sha256=6f05e8a1…`（即本节第 4 节的包）
 - [x] 结果：**PASS**，通过 22 / 失败 0 / 告警 1（win32/x64，node v24.21.0）
 - [x] T3 看板文件系统生命周期：32 步全通过，每步盘面断言；跨进程并发 CAS 4 抢 1 恰好 1 成功
 - [x] T4/T5：实例启动、插件加载、`dsh-graph` 路由注册、看板载荷可读、Web UI 可达（HTTP 303）
@@ -90,4 +93,6 @@ npm publish ./dsh-graph-0.24.1.tgz               # 负责人执行（tarball sha
 - `archive-worktrees`（rc.3 归档会话是否影响 graph 自管 `.worktrees/`）未实测。
 - `subagent-names` / `working-directory` / `session-projection-handles` / `tool-executor-plugins` 仅静态核对「不涉及」。
 - rc.3 上 `rootOf` 对缺 `parentSession` 的历史 child 会判 unknown ⇒ 复用会要求重建（fail-closed 取舍）。
+- **发布门禁对宿主版本敏感**：真实宿主测试按 `npm root -g` 解析宿主栈。本次全局宿主在改版过程中被从 rc.1 升到 rc.3（rc.1 全绿 → rc.3 出现 7 条关照失败）。今后跑门禁必须显式固定 `G505_HOST_STACK_DIR` 并记录实测版本，否则"全绿"结论会随环境漂移。
+- **H3 事实的采集时点**：三条真机派发事实（reviewer/collector/executor-minimal）采集于 g-625 构建；g-626 只改归属探测回退，未改派发准入/启动路径。rc.3 宿主栈上的**全量门禁**（3013/3013）是在 g-626 构建上跑的。
 - `catalog` 语义（直接子级、catalog 事件序、排除 fork 继承）与旧 `listChildren` 不完全等价。
