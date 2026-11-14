@@ -68,12 +68,21 @@ v0.24.1 是**紧急兼容补丁**，只修 DSH `0.2.2-rc.3` 适配，不含新�
   - 取证环境：rc.3 隔离实例（3093）测试项目工作区；`executor-minimal` 由项目设置 `executor.mode=minimal` 触发（`mode_source=project`），取证后已恢复；`reviewer` 用工作区内临时 git 仓库的一次真实提交作 candidate
 - [x] 告警项已消除：包内无产品源码导致台账未对账，改在仓库根跑 `node scripts/win-smoke-test.mjs --static-only .` -> 8/0/0，台账 67 项 / 268 处命中
 
-## 6. 未完成（人工 gate，需负责人放行）
+## 6. 发布步骤（人工 gate）
 
-- [ ] 合入 `main`
+- [x] 合入 `main`：`v0.24.1-test` 以 fast-forward 合入 `main`（本地，未推送）
 - [ ] 打 tag `v0.24.1` 并推送
 - [ ] `npm publish`
 - [ ] GitHub Release 正文与 awesome-dsh-plugin 更新（按 `docs/release-handbook.md`）
+
+### 发布自检（按顺序执行）
+
+```bash
+git switch main && git log --oneline -1          # 应为 v0.24.1 发布提交
+git tag -a v0.24.1 -m "dsh-graph v0.24.1"        # 负责人执行
+git push origin main --follow-tags               # 负责人执行
+npm publish ./dsh-graph-0.24.1.tgz               # 负责人执行（tarball sha256 见第 4 节）
+```
 
 ## 7. 已知限制（如实记录）
 
