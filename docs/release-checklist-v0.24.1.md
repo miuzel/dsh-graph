@@ -57,10 +57,15 @@ v0.24.1 是**紧急兼容补丁**，只修 DSH `0.2.2-rc.3` 适配，不含新�
 ## 5. Windows 原生门禁（红线）
 
 - [x] 在**原生 Windows** 上用 `pwsh` 运行 `node win-smoke-test.mjs --tarball dsh-graph-0.24.1.tgz --port 3091`
-- [x] 结果：**PASS**，通过 21 / 失败 0 / 告警 1（win32/x64，node v24.21.0）
+- [x] 结果：**PASS**，通过 22 / 失败 0 / 告警 1（win32/x64，node v24.21.0）
 - [x] T3 看板文件系统生命周期：32 步全通过，每步盘面断言；跨进程并发 CAS 4 抢 1 恰好 1 成功
 - [x] T4/T5：实例启动、插件加载、`dsh-graph` 路由注册、看板载荷可读、Web UI 可达（HTTP 303）
-- [x] harness 组合矩阵：H1/H2/H4/H5/H6 PASS，H3（需真机实例真派发 reviewer+collector+executor-minimal）**显式 SKIP**，不冒充通过
+- [x] harness 组合矩阵：**H1–H6 全部 PASS（6/6）**。H3 由 `--h3-dispatch-json h3-facts.json` 提供真机事实后**真判通过**：
+  - `reviewer` → `e9a1b856-bbd2-4886-a747-5372f49ec928`
+  - `collector` → `ea73873c-4409-4219-9f00-97d0cdfe332b`
+  - `executor-minimal` → `9517bf53-b8a8-453a-9fca-51e480b161ca`
+  - 三条 `child_id` 均非空、`errors` 均为空；无 `tools.restrict() names unknown`、无启动失败/`child_error`
+  - 取证环境：rc.3 隔离实例（3093）测试项目工作区；`executor-minimal` 由项目设置 `executor.mode=minimal` 触发（`mode_source=project`），取证后已恢复；`reviewer` 用工作区内临时 git 仓库的一次真实提交作 candidate
 - [x] 告警项已消除：包内无产品源码导致台账未对账，改在仓库根跑 `node scripts/win-smoke-test.mjs --static-only .` -> 8/0/0，台账 67 项 / 268 处命中
 
 ## 6. 未完成（人工 gate，需负责人放行）
