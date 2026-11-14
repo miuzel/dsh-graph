@@ -43,13 +43,18 @@
   排除 fork 继承」，与旧 `listChildren` 的读取面**不完全等价**；需要递归发现时 `listDescendants(root)` 在
   rc.3 仍然存在（返回 pre-order 行 + 分支诊断），但插件当前只做「直接子级 label 判定」。
   证据：`g625` B/E 组（present/absent/missing 三态、观察释放计数）；**真机未验证**。
-- **已修复：`agents.isOwnedBy` → `subagents.rootOf`（g-625）**。rc.3 删除
+- **已修复：`agents.isOwnedBy` → `subagents.rootOf`（g-625）+ parentSession 回退（g-626）**。rc.3 删除
   `AgentRegistry.isOwnedBy()`；唯一收口 `ownershipProbeOf()`：旧 API 优先；缺失时用
   `rootOf(agent)` **比较 Agent 对象**判同树，再用公开 `session.header.parentSession` 收紧到
-  「直接创建者」。`rootOf` 对未管理/陈旧实例抛 `UNAUTHORIZED` ⇒ 只能判 `unknown`（fail-closed），
+  「直接创建者」。
+  **g-626 修正**：`rootOf` 抛错（含未管理/陈旧实例的 `UNAUTHORIZED`）时不再直接判 unknown，而是回退到
+  公开证据 `parentSession` —— 恰等于主管会话 ⇒ `yes`（直接创建者）；指向他人 ⇒ `no`；缺失/不可读 ⇒
+  `unknown`。`UNAUTHORIZED` **本身永不构成放行理由**；`rootOf` 成功时口径与 g-625 完全一致。
+  该回退恢复了 rc.3 上 `children_probe`（此前被判不可用 ⇒ 关照整体不采样）。
   绝不是「无归属」。旧代码 19 处文本面收敛为 8 个功能面（keepalive runningChildren / capabilityOf /
   status 能力探测、care entry / sampleTasks / capabilitiesOf / submitOutcome、g-613 复用准入）。
-  证据：`g625` A/D/E 组（rc.1/rc.3 归属夹具、恢复准入三态、结构收口守卫）；**真机未验证**。
+  证据：`g625` A/D/E 组 + `g626` 六组合矩阵与反向变异；rc.3 宿主栈上 `g612` att008 A–H 全绿
+  （此前 7 条 15s 超时「care task sampled」）。**Windows 真机未单独演练该路径**。
 ## 激活 spec 形态判别依据（可核实的能力探测）
 
 判别不猜版本号，用同一批真实安装核对过的能力差：
@@ -86,7 +91,7 @@
 | `subagent-activation-options`（v0.2.1-rc.2） | **已修复** | 见上节；单测覆盖两形态；真机完整链路未验证 |
 | `subagent-service-methods`（v0.2.1-rc.2，删 `list`/`listChildren`/`drainChildren`） | **已修复（单测）/ 真机未验证** | `list()` 探测（g-624）与 `listChildren` 迁移（g-625）均已收口：旧方法优先，rc.3 走 `sessionQuery.subagentCatalog`；缺投影显式 unknown。`drainChildren` 未使用 |
 | `subagent-user-controls`（v0.2.1-rc.2，删 `interruptByParent`） | **已修复（单测）/ 真机未验证** | 3 处收敛点统一经 `interruptChildCompat()`：rc.1 三参旧路径、rc.3 `interrupt(child, {kind:"ancestor", agent})`（不使用 Remote face `interruptByUser`）；UNAUTHORIZED/失败如实上报「未中断」。rc.3 真机中断未演练 |
-| `subagent-runtime-ownership`（v0.2.1-rc.3，删 `AgentRegistry.isOwnedBy` 等） | **已修复（单测）/ 真机未验证** | 8 个功能面统一经 `ownershipProbeOf()`：rc.1 旧名优先、rc.3 `rootOf` 对象比较 + `header.parentSession`；`UNAUTHORIZED` ⇒ unknown（fail-closed）。rc.3 真机复用/主列表未演练 |
+| `subagent-runtime-ownership`（v0.2.1-rc.3，删 `AgentRegistry.isOwnedBy` 等） | **已修复（单测 + rc.3 真宿主门禁）** | 8 个功能面统一经 `ownershipProbeOf()`：rc.1 旧名优先、rc.3 `rootOf` 对象比较 + `header.parentSession`；g-626 起 `rootOf` 抛错回退 parentSession（相等 yes / 不等 no / 缺失 unknown），UNAUTHORIZED 本身不放行。rc.3 宿主栈上 `g612`/`g505`/`g506`/`g613`/`g618` 全绿 |
 | `subagent-control-tools`（v0.2.1-rc.1，`modelSelection`/`modelDiscovery`/`/list-agents`） | **已验证（静态核对：不涉及）** | 源码与 prompt 资产未引用 `modelSelection` / `modelDiscovery` / `list-agents` / `/list-agents`；插件只注册并调用 `graph_*` 工具。未真机逐项演练 |
 | `subagent-names`（v0.2.2-alpha.3，`send_message`/`interrupt_agent` 改按名称、`list_agents` 行格式、catalog v3） | **已验证（静态核对：不涉及宿主 API）** | 插件不直接调用 `send_message` / `interrupt_agent` / `list_agents` 工具，也不读 `list_agents` 行；prompt 资产同样未引用这些工具名。插件派发时不传 `name`（可选），依赖宿主的 `agent-N` 默认命名。**未验证**：catalog payload v3 的跨版本会话互开（旧进程能否打开创建过子代理的新会话）不在本补丁范围 |
 | `subagent-interrupt-default`（v0.2.2-rc.1，内置预设关闭 `interrupt_agent`） | **已验证（静态核对：不涉及）** | 插件不依赖 `interrupt_agent` 工具；子代理中断走服务 API（g-625 用本地 `interrupt(child, {kind:"ancestor", agent})`；`interruptByUser` 只是 Remote/Gateway 面，插件**不使用**）。未真机演练预设开关 |
