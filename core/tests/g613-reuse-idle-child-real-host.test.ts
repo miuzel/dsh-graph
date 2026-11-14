@@ -129,7 +129,10 @@ test("g-613 真实宿主 E2E ①：child 空闲 ⇒ attempt 建立+绑定+in_pro
     assert.equal(seen.length, 1, "恰好向该 child 投递一次任务");
     assert.match(seen[0], /承接 E2E 场景一/, "child 收到的就是本次 attempt 的任务（含本次 brief）");
     assert.equal(h.childLive(started.childId), "running", "复用后 child 进入新一轮");
-    assert.equal(h.subagents.list().length, 1, "未新建第二个 child（provider 数不变）");
+    // g-626：rc.3 删除了 `subagents.list()`；以 live registry 里「直接挂在主管会话下的 child」计数，
+    // 语义等价（未新建第二个 child）。
+    const childAgents = h.reg.list().filter((a: any) => String(a?.session?.header?.parentSession ?? "") === String(h.parent.id));
+    assert.equal(childAgents.length, 1, "未新建第二个 child（provider 数不变）");
   } finally {
     h.fake.releaseAll();
     await h.shutdown();

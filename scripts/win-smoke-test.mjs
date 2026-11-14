@@ -1359,6 +1359,10 @@ export const DSH_TOOL_PLUGIN_REGISTRY = Object.freeze([
   ["@deepseek-ai/dsh-tool-workflow", null, "角色白名单不裁剪"],
   ["@deepseek-ai/dsh-tool-working-directory", null, "角色白名单不裁剪"],
   ["@deepseek-ai/dsh-tool-workspace-dependencies", null, "SDK bundle 专用，不在角色白名单"],
+  // 0.2.2-rc.3 组合新增（g-626）：二者都是模型面向工具，但**不在** `toolFilterForRole` 的角色白名单里
+  // ⇒ 按既有台账口径登记为非目标（若将来写进角色白名单，必须同步改成工具名数组并由 description 佐证）。
+  ["@deepseek-ai/dsh-tool-agent-team", null, "Agent Teams 工具（team_task_*），不在角色白名单"],
+  ["@deepseek-ai/dsh-tool-office", null, "Office 文档工具（office_*），不在角色白名单"],
 ]);
 
 /** `@deepseek-ai/dsh-tool-x/sub/path` → `@deepseek-ai/dsh-tool-x`（台账按包名比对）。 */

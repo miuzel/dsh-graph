@@ -138,6 +138,7 @@ function fakeClock(start = 1_000_000) {
 
 /** 真实宿主包解析（不写死作者机器路径、不联网安装）。 */
 import { initServiceInstances } from "./_host-stack.ts";
+import { installRc3SubagentOwnership } from "./_rc3-subagents-stub.ts";
 
 async function resolveHostScope(): Promise<string> {
   const env = process.env.G505_HOST_STACK_DIR || process.env.G507_HOST_STACK_DIR;
@@ -256,6 +257,8 @@ async function makeRealHost(opts: { adapterDefaults?: boolean } = {}) {
   const loop = new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
   // g-617：驱动直构服务的 `[Service.init]`（cordis 只在 ctx.plugin() 装载时自动调用）。
   await initServiceInstances([reg, loop]);
+  // g-626：补 rc.3 归属面（真实宿主由 dsh-subagent 的 rootOf 提供；轻量夹具未装载它）。
+  const subagents = installRc3SubagentOwnership(hostCtx, reg);
   const observed: any[] = [];
   hostCtx.on("llm/stream", (options: any, next: any) => { observed.push(options); return next(); });
   const sendTurn = async (agent: any, text: string) => {
@@ -264,7 +267,7 @@ async function makeRealHost(opts: { adapterDefaults?: boolean } = {}) {
     await agent.whenIdle();
     return observed[observed.length - 1] ?? null;
   };
-  return { hostCtx, llm: llmMod, llmRuntime: llm, adapter, reg, loop, sendTurn, observed };
+  return { hostCtx, llm: llmMod, llmRuntime: llm, adapter, reg, loop, subagents, sendTurn, observed };
 }
 
 async function makeAgent(host: any, id: string, root: string, options: any = { provider: "observed", model: "observed-model" }) {
@@ -306,7 +309,7 @@ async function makeRuntime(host: any, opts: {
   const runtime = createKeepAliveRuntime({
     ctx: {
       on: (name: string, handler: any) => host.hostCtx.on(name, handler),
-      get: (name: string) => (name === "llm" ? host.llmRuntime : name === "agents" ? host.reg : undefined),
+      get: (name: string) => (name === "llm" ? host.llmRuntime : name === "agents" ? host.reg : name === "subagents" ? host.subagents : undefined),
     },
     readGlobal: opts.readGlobal ?? (() => ({ enabled: null, malformed: false, available: true, raw: "" })),
     resolveRoot: opts.resolveRoot ?? ((ws: string) => ws),

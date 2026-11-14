@@ -78,6 +78,8 @@ interface TreeFixture {
   grandchildSameSession: any;
   foreign: any;
   unmanaged: any;
+  unmanagedForeign: any;
+  unmanagedNoParent: any;
   noParent: any;
   agents: any;
   subagents: any;
@@ -92,11 +94,14 @@ function rc3Ownership(): TreeFixture {
   const grandchildSameSession = agentObj("child-1b", "sup-1");
   const foreign = agentObj("child-2", "sup-other");
   const unmanaged = agentObj("child-3", "sup-1");
+  const unmanagedForeign = agentObj("child-3b", "sup-other");
+  const unmanagedNoParent = agentObj("child-3c");
   const noParent = agentObj("child-4");
   const sameTreeOtherParent = agentObj("child-5", "someone-else");
   const byId: Record<string, any> = {
     "sup-1": owner, "sup-other": otherRoot, "child-1": direct, "child-1b": grandchildSameSession,
-    "child-2": foreign, "child-3": unmanaged, "child-4": noParent, "child-5": sameTreeOtherParent,
+    "child-2": foreign, "child-3": unmanaged, "child-3b": unmanagedForeign, "child-3c": unmanagedNoParent,
+    "child-4": noParent, "child-5": sameTreeOtherParent,
   };
   const rootOfCalls: any[] = [];
   const agents = {
@@ -113,7 +118,7 @@ function rc3Ownership(): TreeFixture {
       throw UNAUTHORIZED;
     },
   };
-  return { owner, otherRoot, direct, grandchildSameSession, foreign, unmanaged, noParent, sameTreeOtherParent, agents, subagents, rootOfCalls };
+  return { owner, otherRoot, direct, grandchildSameSession, foreign, unmanaged, unmanagedForeign, unmanagedNoParent, noParent, sameTreeOtherParent, agents, subagents, rootOfCalls };
 }
 
 test("g-625 A① rc.1（有 isOwnedBy，且 rootOf 也在位）⇒ 必须走旧名，rootOf 一次都不许调", () => {
@@ -149,11 +154,16 @@ test("g-625 A③ rc.3（仅 rootOf）⇒ 同树 + parentSession 直系判 yes；
   assert.equal(probe.ownsId("gone-child", fx.owner), "no", "不在 live registry ⇒ no");
 });
 
-test("g-625 A④ rc.3 rootOf 抛 UNAUTHORIZED（未管理/陈旧实例）⇒ unknown，绝不当「无归属」", () => {
+test("g-625 A④ rc.3 rootOf 抛 UNAUTHORIZED：父会话直系 ⇒ yes（g-626 回退）；不等 ⇒ no；缺失 ⇒ unknown", () => {
   const fx = rc3Ownership();
   const probe = ownershipProbeOf(fx.agents, fx.subagents);
-  assert.equal(probe.ownsAgent(fx.unmanaged, fx.owner), "unknown", "rootOf 抛错只能判不可确认");
-  assert.equal(probe.ownsId("child-3", fx.owner), "unknown");
+  assert.equal(probe.ownsAgent(fx.unmanaged, fx.owner), "yes",
+    "g-626：rootOf 抛错时回退到公开 parentSession；父会话 === 本主管会话 ⇒ 直接创建者 ⇒ yes");
+  assert.equal(probe.ownsId("child-3", fx.owner), "yes");
+  assert.equal(probe.ownsAgent(fx.unmanagedForeign, fx.owner), "no",
+    "UNAUTHORIZED 本身绝不放行：父会话指向他人 ⇒ no");
+  assert.equal(probe.ownsAgent(fx.unmanagedNoParent, fx.owner), "unknown",
+    "父会话缺失 ⇒ 仍不可确认（fail-closed，绝不当「无归属」或放行）");
 });
 
 test("g-625 A⑤ rc.3 同树但 parentSession 缺失/指他人 ⇒ unknown / no（rc.1 判据是「直接子级」）", () => {
@@ -624,15 +634,24 @@ test("g-625 E⑤ rc.3 复用准入：跨主管（另一棵树）⇒ 明确拒绝
   assert.equal(h.sentMessages.length, 0);
 });
 
-test("g-625 E⑥ rc.3 rootOf 抛 UNAUTHORIZED（未管理/陈旧实例）⇒ 不可确认，复用 fail-closed", async () => {
-  const h = rc3ReuseHarness({ status: "idle", unmanaged: true });
+test("g-625 E⑥ rc.3 rootOf 抛 UNAUTHORIZED 且父会话缺失 ⇒ 不可确认，复用 fail-closed", async () => {
+  const h = rc3ReuseHarness({ status: "idle", unmanaged: true, parentSession: null });
   const goal = reuseGoal(h);
   await assert.rejects(
     () => h.call("graph_start_attempt", { goal, attempt_brief: "未管理", task_type: "fix", child_id: CHILD }),
     /无法确认 child .* 是否属于当前主管/,
-    "rootOf 抛错只能判「不可确认」并拒绝，绝不能当成「无归属」放行",
+    "rootOf 抛错且无 parentSession 证据只能判「不可确认」并拒绝，绝不能当成「无归属」或放行",
   );
   assert.equal(h.sentMessages.length, 0);
+});
+
+test("g-625 E⑦ rc.3 rootOf 抛错但父会话是直接创建者 ⇒ 允许复用（g-626 回退，仍要求恰为直系）", async () => {
+  const h = rc3ReuseHarness({ status: "idle", unmanaged: true, parentSession: "sess-exec" });
+  const goal = reuseGoal(h);
+  const res = await h.call("graph_start_attempt", { goal, attempt_brief: "回退直系", task_type: "fix", child_id: CHILD });
+  assert.equal(res.reused, true, "g-626：UNAUTHORIZED 不是放行理由，但 parentSession === 主管会话是强证据");
+  assert.equal(res.child_id, CHILD);
+  assert.equal(h.sentMessages.length, 1, "必须向被复用 child 投递一次");
 });
 
 // ============================================================================

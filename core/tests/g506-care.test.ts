@@ -710,6 +710,7 @@ test("g506 投影/正文：到零只表示巡检到期；唤醒正文有界且�
 
 /** 真实宿主包解析（与既有 g505 套件同口径；不联网安装）。 */
 import { initServiceInstances } from "./_host-stack.ts";
+import { installRc3SubagentOwnership } from "./_rc3-subagents-stub.ts";
 
 async function resolveHostScope(): Promise<string> {
   const env = process.env.G505_HOST_STACK_DIR || process.env.G507_HOST_STACK_DIR;
@@ -802,7 +803,9 @@ async function makeRealHost() {
   new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
   // g-617：驱动直构服务的 `[Service.init]`（cordis 只在 ctx.plugin() 装载时自动调用）。
   await initServiceInstances([reg, hostCtx.get("agentLoop")]);
-  return { hostCtx, llm: llmMod, llmRuntime, reg, adapter };
+  // g-626：补 rc.3 归属面（真实宿主由 dsh-subagent 的 rootOf 提供；轻量夹具未装载它）。
+  const subagents = installRc3SubagentOwnership(hostCtx, reg);
+  return { hostCtx, llm: llmMod, llmRuntime, reg, adapter, subagents };
 }
 
 function fakeClock(start = NOW) {
@@ -945,7 +948,7 @@ test("g506 B1 真实 boardPayload：版本目标 + 独立目标均采样，backl
   void mod;
   const ops: any = await import("../ops.ts");
   const runtime = (await import("../../dist/index.js") as any).createCareRuntime({
-    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : undefined) },
+    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : n === "subagents" ? host.subagents : undefined) },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false }),
     resolveRoot: (ws: string) => ws,
     readProjectConfigFn: () => ({ supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 300 } }),
@@ -1870,7 +1873,7 @@ test("g506 REST：有 live 主管时 pause/resume/reset 生效并跨请求保真
   const sup = (await host.reg.create({ sessionId: "sup-rest", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
   writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${sup.id}\n  care: "true"\n`);
   const h = makeApplyHarness(root, {
-    extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined),
+    extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined),
   });
   try {
     const st0 = await h.call("GET", `/api/dsh-graph/care/status?workspace=${encodeURIComponent(root)}`);
@@ -1904,7 +1907,7 @@ test("g506 复审：pause/resume 同 expectedRevision 的 HTTP 网络重试也�
   const root = makeBoard("");
   const sup = (await host.reg.create({ sessionId: "sup-pr", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: root } })).agent;
   writeFileSync(join(root, "project.yaml"), `supervisor:\n  session: ${sup.id}\n  care: "true"\n`);
-  const h = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+  const h = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined) });
   try {
     const pre = await h.call("GET", `/api/dsh-graph/care/status?workspace=${encodeURIComponent(root)}`);
     const rev0 = pre.body.revision;
@@ -1965,17 +1968,17 @@ test("g506 B14 受保护 HTTP reset：同 request_id 原 revision 重试/重启�
     sup.send = originalSend;
   }
   // 受保护 HTTP 入口本身：401/403/503 对 POST reset 同样 fail-closed。
-  const unauth = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+  const unauth = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined) });
   const r401 = await unauth.call("POST", "/api/dsh-graph/care/control", { workspace: root, action: "reset", request_id: "auth-1" }, {});
   assert.equal(r401.code, 401);
-  const notOwner = makeApplyHarness(root, { connection: ownerConnectionStub({ owner: false }), extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+  const notOwner = makeApplyHarness(root, { connection: ownerConnectionStub({ owner: false }), extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined) });
   const r403 = await notOwner.call("POST", "/api/dsh-graph/care/control", { workspace: root, action: "reset", request_id: "auth-2" }, { [OWNER_HEADER]: "1" });
   assert.equal(r403.code, 403);
-  const noConn = makeApplyHarness(root, { connection: null, extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+  const noConn = makeApplyHarness(root, { connection: null, extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined) });
   const r503 = await noConn.call("POST", "/api/dsh-graph/care/control", { workspace: root, action: "reset", request_id: "auth-3" }, { [OWNER_HEADER]: "1" });
   assert.equal(r503.code, 503);
   for (const x of [unauth, notOwner, noConn]) for (const fn of x.cleanups) { try { fn(); } catch { /* ignore */ } }
-  const h = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+  const h = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined) });
   try {
     const pre = await h.call("GET", `/api/dsh-graph/care/status?workspace=${encodeURIComponent(root)}`);
     assert.equal(pre.code, 200);
@@ -2005,7 +2008,7 @@ test("g506 B14 受保护 HTTP reset：同 request_id 原 revision 重试/重启�
     assert.equal(conflict.body.error, "request_conflict");
     // 重启后同 id/旧 revision 仍幂等，且不解除暂停/人类锁（此处无锁，验证 pause 不被重放误触发）
     for (const fn of h.cleanups) { try { fn(); } catch { /* ignore */ } }
-    const h2 = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+    const h2 = makeApplyHarness(root, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined) });
     try {
       const replay2 = await h2.call("POST", "/api/dsh-graph/care/control", body);
       assert.equal(replay2.code, 200);
@@ -2016,7 +2019,7 @@ test("g506 B14 受保护 HTTP reset：同 request_id 原 revision 重试/重启�
     // 两个 workspace：同 id 不得被错误视为另一工作区的重放
     const supB = (await host.reg.create({ sessionId: "sup-http-b", agentOptions: { provider: "observed", model: "m" }, meta: { cwd: rootB } })).agent;
     writeFileSync(join(rootB, "project.yaml"), `supervisor:\n  session: ${supB.id}\n  care: "true"\n`);
-    const hb = makeApplyHarness(rootB, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : undefined) });
+    const hb = makeApplyHarness(rootB, { extraGet: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llmRuntime : name === "subagents" ? host.subagents : undefined) });
     try {
       const b = await hb.call("POST", "/api/dsh-graph/care/control", { workspace: rootB, action: "reset", request_id: "replay-http-1" });
       assert.equal(b.code, 200);
@@ -2043,7 +2046,8 @@ test("g506 B7 能力如实投影：进展读取不等于可干预；interrupt/re
   const scheduler = fakeScheduler(clock);
   const payload = boardPayload([{ id: "goal-cap", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   // 模拟宿主暴露了干预 seam（但插件没有授权/验证，绝不能当 available）
-  host.subagents = { interrupt() {}, sendMessage() {} } as any;
+  // g-626：保留夹具的 rc.3 归属面（rootOf），只模拟「暴露了干预 seam」。
+  host.subagents = { ...host.subagents, interrupt() {}, sendMessage() {} } as any;
   const { runtime, events } = await makeCareRuntime(host, { clock, scheduler, payload, supervisorId: sup.id });
   runtime.start();
   try {
@@ -2082,12 +2086,11 @@ test("g506 B9 缺 runMaintenance：不判 capable、零 send/事件/计数、tim
     send: (...args: any[]) => { sendCount += 1; return (sup.send as any)(...args); },
   };
   Object.defineProperty(proxySup, "status", { get: () => sup.status });
+  // rc.3 的 AgentRegistry 已无 `isOwnedBy`（g-625）：夹具同样不伪造旧 API，
+  // 归属走真实的 `subagents.rootOf` + 公开 parentSession（g-626 回退覆盖 proxy 对象身份不符）。
   const agentsProxy: any = {
     get: (id: string) => (id === sup.id ? proxySup : host.reg.get(id)),
     list: (...args: any[]) => (host.reg.list as any)(...args),
-    isOwnedBy: (childId: string, agent: any) => agent === proxySup
-      ? host.reg.isOwnedBy(childId, sup)
-      : host.reg.isOwnedBy(childId, agent),
   };
   let configReads = 0;
   const { runtime, events } = await makeCareRuntime(host, {
@@ -2184,7 +2187,7 @@ test("g506 与 g505：care source 不被当作 human 活动；保活 ping 不产
   const careMod: any = await import("../../dist/index.js");
   const events: any[] = [];
   const care = careMod.createCareRuntime({
-    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : undefined) },
+    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : n === "subagents" ? host.subagents : undefined) },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false }),
     resolveRoot: (ws: string) => ws,
     readProjectConfigFn: () => ({ supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } }),
@@ -2195,7 +2198,7 @@ test("g506 与 g505：care source 不被当作 human 活动；保活 ping 不产
   });
   // g505 保活运行时：真实公开服务 + 假时钟；配置全开
   const keep = careMod.createKeepAliveRuntime({
-    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : undefined) },
+    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : n === "subagents" ? host.subagents : undefined) },
     readGlobal: () => ({ enabled: true, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => ws,
     defaultWorkspace: () => WS,

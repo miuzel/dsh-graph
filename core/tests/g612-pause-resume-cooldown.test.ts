@@ -63,7 +63,7 @@ function makeCare(h: any, clock: any, scheduler: any, idPrefix: string) {
   return createCareRuntime({
     ctx: {
       on: (name: string, fn: any) => h.ctx.on(name, fn),
-      get: (name: string) => (name === "agents" ? h.reg : name === "llm" ? h.llm : undefined),
+      get: (name: string) => (name === "agents" ? h.reg : name === "subagents" ? h.subagents : name === "llm" ? h.llm : undefined),
     },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),

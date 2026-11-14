@@ -151,7 +151,7 @@ function makeCare(host: any, opts: {
   const runtime = createCareRuntime({
     ctx: {
       on: (name: string, h: any) => host.ctx.on(name, h),
-      get: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llm : undefined),
+      get: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llm : name === "subagents" ? host.subagents : undefined),
     },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),
@@ -180,7 +180,7 @@ function makeKeep(host: any, opts: {
   return createKeepAliveRuntime({
     ctx: {
       on: (name: string, h: any) => host.ctx.on(name, h),
-      get: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llm : undefined),
+      get: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llm : name === "subagents" ? host.subagents : undefined),
     },
     readGlobal: () => ({ enabled: true, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),

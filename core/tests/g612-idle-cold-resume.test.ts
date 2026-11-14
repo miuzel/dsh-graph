@@ -80,7 +80,10 @@ function makeCare(
   return createCareRuntime({
     ctx: {
       on: (name: string, fn: any) => h.ctx.on(name, fn),
-      get: (name: string) => (name === "agents" ? h.reg : name === "llm" ? h.llm : undefined),
+      // g-626：rc.3 删除了 `agents.isOwnedBy` ⇒ 归属探测收口必须能拿到真实 `subagents`
+      // （`rootOf`）。真实宿主由 `ctx.get("subagents")` 提供；生产 `createCareRuntime({ ctx })`
+      // 传的就是完整宿主 ctx，这里只是让测试夹具与宿主同形（此前漏传会把 children_probe 判缺）。
+      get: (name: string) => (name === "agents" ? h.reg : name === "subagents" ? h.subagents : name === "llm" ? h.llm : undefined),
     },
     readGlobal: GLOBAL,
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),

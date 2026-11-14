@@ -794,9 +794,11 @@ export async function startSubagentCompat(subagents, spec) {
 //   3. `agents.isOwnedBy(childId, owner)` → `ctx.subagents.rootOf(agent)`（比较 **Agent 对象**，
 //      不是 id）+ `session.header.parentSession`（直接创建者）。
 // rc.1（0.2.2-rc.1）**仍保留旧 API** ⇒ 一律「旧 API 优先、缺失才走新 API」，不得只为 rc.3 删旧路径；
-// 旧 API 在位时行为与 v0.24.0 逐字一致。新 API 缺失/异常一律 fail-closed（"unknown"），
-// 绝不静默退化成「无子代理」「无归属」（rc.3 的 `rootOf` 对未管理/陈旧实例抛
-// `SubagentError(UNAUTHORIZED)` ⇒ 只能判「不可确认」，不能判「无归属」）。
+// 旧 API 在位时行为与 v0.24.0 逐字一致。新 API **整体缺失**一律 fail-closed（"unknown"），
+// 绝不静默退化成「无子代理」「无归属」。g-626：`rootOf` **抛错**（含未管理/陈旧实例的
+// `SubagentError(UNAUTHORIZED)`）不再直接放弃，而是回退到已在手的公开证据
+// `session.header.parentSession`（见 `ownsViaRootOf`）；该证据缺失/不等时仍按 unknown/no
+// fail-closed —— UNAUTHORIZED 本身绝不构成放行理由。
 //
 // **使用点登记**（旧代码 19 处文本面 = 5 处真实调用 + 能力探测 + 注释；收敛为 8 个功能面）：
 //   ① keepalive `sampleRunningChildren`：按归属过滤 live Agent 后计 running；
@@ -813,12 +815,18 @@ export async function startSubagentCompat(subagents, spec) {
  * @typedef {"yes" | "no" | "unknown"} OwnershipVerdict
  */
 /**
- * 建立一次归属探测（g-625 唯一收口）。
+ * 建立一次归属探测（g-625 唯一收口；g-626 增加 rc.3 的 parentSession 回退）。
  *
  * 旧宿主（有 `agents.isOwnedBy`）⇒ 原样调用，逐字保持 v0.24.0 语义（id + 精确 owner Agent）。
  * 新宿主（只有 `subagents.rootOf`）⇒ 两次 `rootOf` **比较 Agent 对象**判同树，再用公开
  * `session.header.parentSession` 收紧到「直接创建者」（rc.1 `isOwnedBy` 的语义是直接运行时子级）。
- * 任一环节不可确认（缺 API / 非 live / `rootOf` 抛 UNAUTHORIZED / 读不到 parentSession）⇒ `unknown`。
+ * **g-626**：`rootOf` 对夹具/未管理/陈旧实例会抛 `SubagentError(UNAUTHORIZED)`（身份严格比对），
+ * 此时**不**直接判 unknown，而是回退到已在手的强证据 `session.header.parentSession`：
+ *   · 存在且 `=== ownerSessionId` ⇒ `yes`（直接创建者）；
+ *   · 存在但不等 ⇒ `no`；
+ *   · 缺失/不可读、或 owner 会话 id 不可读 ⇒ `unknown`（仍然 fail-closed）。
+ * UNAUTHORIZED 本身不是放行理由；`rootOf` **成功**时口径与 g-625 完全一致（对象身份 + 父会话收紧）。
+ * `agents.get` 取不到 live Agent ⇒ `no`（ownsId，与既有语义一致）。
  *
  * @param agents 宿主 `agents` 注册表服务（可能为 undefined）
  * @param subagents 宿主 `subagents` 服务（可能为 undefined）
@@ -837,17 +845,44 @@ export function ownershipProbeOf(agents, subagents) {
     const sid = agent?.session?.id ?? agent?.id;
     return sid === undefined || sid === null || sid === "" ? null : String(sid);
   };
+  /**
+   * 读 child 的公开「直接创建者」证据（`session.header.parentSession`）。
+   * 缺失（undefined/null/空串）/ 不可读 ⇒ `null`；调用方必须按 unknown 或（回退时）不放行处理。
+   * @returns {string | null}
+   */
+  const parentSessionOf = (agent) => {
+    try {
+      const raw = agent?.session?.header?.parentSession;
+      return raw === undefined || raw === null || raw === "" ? null : String(raw);
+    } catch { return null; }
+  };
+  /**
+   * g-625 新宿主归属判定；g-626 让 `rootOf` 抛错时**回退**到 parentSession 强证据（fail-closed）。
+   *
+   * 先把两条证据取出来（owner 会话 id / child 的直接创建者），再探测 rootOf：
+   *   · 两次 rootOf 都成功 ⇒ 与 g-625 一致：比较 **Agent 对象**判同树，再收紧「直接创建者」；
+   *   · 任一 rootOf 抛错 ⇒ 回退（**不**因 UNAUTHORIZED 放行）：
+   *       父会话存在且 === owner 会话 ⇒ yes；存在但不等 ⇒ no；缺失/不可读 ⇒ unknown。
+   */
   const ownsViaRootOf = (childAgent, ownerAgent) => {
+    const ownerSid = sessionIdOf(ownerAgent);
+    const parentSid = parentSessionOf(childAgent);
     let ownerRoot = null;
     let childRoot = null;
-    try { ownerRoot = subagents.rootOf(ownerAgent); } catch { return "unknown"; }
-    try { childRoot = subagents.rootOf(childAgent); } catch { return "unknown"; }
+    let rootFailed = false;
+    try { ownerRoot = subagents.rootOf(ownerAgent); } catch { rootFailed = true; }
+    if (!rootFailed) {
+      try { childRoot = subagents.rootOf(childAgent); } catch { rootFailed = true; }
+    }
+    if (rootFailed) {
+      // 回退只认「公开的直接创建者」这一条证据：缺任一或不等都不得放行。
+      if (ownerSid === null || parentSid === null) return "unknown";
+      return parentSid === ownerSid ? "yes" : "no";
+    }
     // 官方迁移口径：比较 **Agent 对象**（不是 id）。
     if (!ownerRoot || childRoot !== ownerRoot) return childRoot && ownerRoot ? "no" : "unknown";
-    const ownerSid = sessionIdOf(ownerAgent);
-    const parentSid = childAgent?.session?.header?.parentSession;
-    if (ownerSid === null || parentSid === undefined || parentSid === null) return "unknown";
-    return String(parentSid) === ownerSid ? "yes" : "no";
+    if (ownerSid === null || parentSid === null) return "unknown";
+    return parentSid === ownerSid ? "yes" : "no";
   };
   const ownsAgent = (childAgent, ownerAgent) => {
     if (!oldSupported && !newSupported) return "unknown";

@@ -50,6 +50,12 @@ export interface ReuseChildStub {
    * `SubagentError(UNAUTHORIZED)`。插件只能据此判「归属不可确认」，**不得**判「无归属」。
    */
   unmanaged?: boolean;
+  /**
+   * g-626：rc.3 下公开的 `session.header.parentSession`（直接创建者会话 id）。
+   * 缺省 `"sess-exec"`（= 本夹具主管 execAgent 的会话 id）；`null` = 显式缺失。
+   * `rootOf` 抛错时插件回退到该证据判定归属（相等 ⇒ yes / 不等 ⇒ no / 缺失 ⇒ unknown）。
+   */
+  parentSession?: string | null;
 }
 
 export interface ReuseHarnessOptions {
@@ -124,8 +130,13 @@ export function createHarnessWith(opts: {
     if (!row) return undefined;
     const base: any = { id, status: row.status ?? "idle" };
     // 仅 rc.3 形态补公开 session 头（rc.1 桩形状保持逐字不变，避免影响既有进度/能力断言）。
+    // g-626：`parentSession` 可由用例显式指定（`null` = 缺失），缺省仍是本夹具主管会话 "sess-exec"。
+    const parentSession = row.parentSession === undefined ? "sess-exec" : row.parentSession;
     return ownershipApi === "rootOf"
-      ? { ...base, session: { id, header: { cwd: ws, parentSession: "sess-exec" } } }
+      ? {
+          ...base,
+          session: { id, header: { cwd: ws, ...(parentSession === null ? {} : { parentSession }) } },
+        }
       : base;
   };
   if (ownershipApi === "rootOf") {

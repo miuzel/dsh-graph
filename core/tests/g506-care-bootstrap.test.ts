@@ -38,6 +38,7 @@ import { appendEvent, readEvents } from "../events.ts";
 import { invalidateBoardCache } from "../cache.ts";
 import { apply, createCareRuntime } from "../../dist/index.js";
 import { createRegisterStub } from "./_http-auth-harness.ts";
+import { installRc3SubagentOwnership } from "./_rc3-subagents-stub.ts";
 
 // ───────────────────────────── 私有 tmp（只用本树 tmp/） ─────────────────────────────
 const TMP_BASE = realpathSync((() => {
@@ -150,7 +151,9 @@ async function makeRealHost() {
   new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
   // g-617：驱动直构服务的 `[Service.init]`（cordis 只在 ctx.plugin() 装载时自动调用）。
   await initServiceInstances([reg, hostCtx.get("agentLoop")]);
-  return { hostCtx, llm: llmMod, llmRuntime, reg, adapter };
+  // g-626：补 rc.3 归属面（真实宿主由 dsh-subagent 的 rootOf 提供；轻量夹具未装载它）。
+  const subagents = installRc3SubagentOwnership(hostCtx, reg);
+  return { hostCtx, llm: llmMod, llmRuntime, reg, adapter, subagents };
 }
 
 // ───────────────────────────── 假时钟 / 假定时器 ─────────────────────────────
@@ -268,7 +271,7 @@ function makeRuntime(host: any, opts: {
   const runtime = createCareRuntime({
     ctx: {
       on: (name: string, handler: any) => host.hostCtx.on(name, handler),
-      get: (name: string) => (name === "agents" ? (opts.agentsService ? opts.agentsService() : host.reg) : undefined),
+      get: (name: string) => (name === "agents" ? (opts.agentsService ? opts.agentsService() : host.reg) : name === "subagents" ? host.subagents : undefined),
     },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),
@@ -926,7 +929,7 @@ test("g506 生产路径：默认 workspace 指向别的 root 时，真实 graph_
   const sent = trackSends(sup);
 
   // 默认 workspace = 别的 root（sandboxPolicy），config.root 不是绝对路径 ⇒ 启动不布防目标 root
-  const h = makeApplyHarness({ sandboxWorkspace: otherWs, extraGet: (n) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : undefined), settingsService: careSettingsStub });
+  const h = makeApplyHarness({ sandboxWorkspace: otherWs, extraGet: (n) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : n === "subagents" ? host.subagents : undefined), settingsService: careSettingsStub });
   try {
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(readEvents(target.root).filter((e: any) => e.event === "care.inspection").length, 0, "启动时默认根不是目标 root ⇒ 尚未投递");
@@ -961,7 +964,7 @@ test("g506 生产路径负向：绕过 claim 工具直写 project.yaml 且无事
   writeRealGoal(target.root, { child: child.id, parent: sup.id, startedAt: new Date(Date.now() - 130_000).toISOString() });
   const sent = trackSends(sup);
 
-  const h = makeApplyHarness({ sandboxWorkspace: otherWs, extraGet: (n) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : undefined), settingsService: careSettingsStub });
+  const h = makeApplyHarness({ sandboxWorkspace: otherWs, extraGet: (n) => (n === "agents" ? host.reg : n === "llm" ? host.llmRuntime : n === "subagents" ? host.subagents : undefined), settingsService: careSettingsStub });
   try {
     // 直写 project.yaml（不经工具、无 Cordis 事件；有界发现窗口 30s 远未到）
     claimSupervisor(target.root, sup.id, "human:gui");

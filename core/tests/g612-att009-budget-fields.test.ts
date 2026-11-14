@@ -60,7 +60,7 @@ async function setup(recheck: number, idPrefix: string) {
   const scheduler = fakeScheduler(clock);
   let seq = 0;
   const care = createCareRuntime({
-    ctx: { on: (name: string, fn: any) => h.ctx.on(name, fn), get: (name: string) => (name === "agents" ? h.reg : name === "llm" ? h.llm : undefined) },
+    ctx: { on: (name: string, fn: any) => h.ctx.on(name, fn), get: (name: string) => (name === "agents" ? h.reg : name === "subagents" ? h.subagents : name === "llm" ? h.llm : undefined) },
     readGlobal: GLOBAL,
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),
     defaultWorkspace: () => h.ws,
