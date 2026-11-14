@@ -24,9 +24,9 @@ v0.24.1 是**紧急兼容补丁**，只修 DSH `0.2.2-rc.3` 适配，不含新�
 
 ## 2. 门禁与自证（发布树）
 
-发布树：`.worktrees/release-v0.24.1`（detached at `ecad4e0`，等价于待打 tag 的树）。
+发布树：`.worktrees/release-v0.24.1`（detached at `aeff775`，等价于待打 tag 的树）。
 
-- [x] 全套测试：`node scripts/run-tests.mjs` -> `tests=3001 pass=3001 fail=0 skipped=0 todo=0 cancelled=0 exit=0 ms=96722`
+- [x] 全套测试：`node scripts/run-tests.mjs` -> `tests=3001 pass=3001 fail=0 skipped=0 todo=0 cancelled=0 exit=0 ms=96938`
 - [x] 产物新鲜度（只读）：`node --test core/tests/dist-freshness-g312.test.ts` -> 9/9
 - [x] 客户端语法：`node --check dist/lib/client.js`、`node --check dist/index.js` 通过
 - [x] 构建：`bash scripts/build.sh` 原子发布成功，`dist/index.js` 含 `ownershipProbeOf` 等三收口
@@ -51,7 +51,8 @@ v0.24.1 是**紧急兼容补丁**，只修 DSH `0.2.2-rc.3` 适配，不含新�
 - [x] 文件体积：1,712,879 字节
 - [x] SHA-256：`112b6b2db3c99516d68c8f8a5d1db34a9dcafb8e58f61802d27f608539141dee`
 - [x] SHA-1：`d4284398a8f0fc45e0f4c5224326287404c313a4`
-- [x] 隔离性核验：包内无 `.tgz` / `.git` 残留；产物位于发布树 `tmp/pack/`（不入库）
+- [x] 隔离性核验：包内无 `.tgz` / `.git` 残留；产物位于发布树 `tmp/pack2/`（不入库）
+- [x] 可复现性：在发布提交 `aeff775` 上重新打包，SHA-256 与上表**逐字相同**（同一内容 ⇒ 已跑的 Windows 门禁对新树同样有效）
 
 ## 5. Windows 原生门禁（红线）
 
