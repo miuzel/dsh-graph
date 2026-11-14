@@ -89,7 +89,7 @@
 | `subagent-runtime-ownership`（v0.2.1-rc.3，删 `AgentRegistry.isOwnedBy` 等） | **已修复（单测）/ 真机未验证** | 8 个功能面统一经 `ownershipProbeOf()`：rc.1 旧名优先、rc.3 `rootOf` 对象比较 + `header.parentSession`；`UNAUTHORIZED` ⇒ unknown（fail-closed）。rc.3 真机复用/主列表未演练 |
 | `subagent-control-tools`（v0.2.1-rc.1，`modelSelection`/`modelDiscovery`/`/list-agents`） | **已验证（静态核对：不涉及）** | 源码与 prompt 资产未引用 `modelSelection` / `modelDiscovery` / `list-agents` / `/list-agents`；插件只注册并调用 `graph_*` 工具。未真机逐项演练 |
 | `subagent-names`（v0.2.2-alpha.3，`send_message`/`interrupt_agent` 改按名称、`list_agents` 行格式、catalog v3） | **已验证（静态核对：不涉及宿主 API）** | 插件不直接调用 `send_message` / `interrupt_agent` / `list_agents` 工具，也不读 `list_agents` 行；prompt 资产同样未引用这些工具名。插件派发时不传 `name`（可选），依赖宿主的 `agent-N` 默认命名。**未验证**：catalog payload v3 的跨版本会话互开（旧进程能否打开创建过子代理的新会话）不在本补丁范围 |
-| `subagent-interrupt-default`（v0.2.2-rc.1，内置预设关闭 `interrupt_agent`） | **已验证（静态核对：不涉及）** | 插件不依赖 `interrupt_agent` 工具；子代理中断走服务 API（g-625 已迁到 `interruptByUser`，见上条）。未真机演练预设开关 |
+| `subagent-interrupt-default`（v0.2.2-rc.1，内置预设关闭 `interrupt_agent`） | **已验证（静态核对：不涉及）** | 插件不依赖 `interrupt_agent` 工具；子代理中断走服务 API（g-625 用本地 `interrupt(child, {kind:"ancestor", agent})`；`interruptByUser` 只是 Remote/Gateway 面，插件**不使用**）。未真机演练预设开关 |
 | `working-directory`（v0.2.1-alpha.1，删 `{{cwd}}` 变量与 provider `cwd` 配置） | **已验证（静态核对：不涉及）** | 插件 prompt 资产无 `{{cwd}}`；未配置 ACP/DSH-SDK subagent provider 的 `cwd`；派发时不传 `cwd`（由宿主继承父会话当前目录）。插件把 `session.header.cwd` 当作 workspace/权限根使用（属指南允许的「原始项目身份/权限根」用法），未另读「当前执行目录」。未真机演练 `working_directory()` 切换后的子代理目录 |
 | `session-projection-handles`（v0.2.1-rc.2） | **已验证（静态核对：不涉及）** | 插件未调用 `ctx.sessionProjections.register/stateOf`，也未引用 `SessionProjectionStateMap`；只经公开 `ctx.get(...)` 读服务 |
 | `tool-executor-plugins`（v0.2.1-rc.2） | **已验证（静态核对：不涉及）** | 插件未配置 `@deepseek-ai/dsh-tools` 的 `mode` / `maxParallelSubCalls`，未设置 `DSH_TOOLS_MODE`；工具经 `ctx.tools` 注册，不自行选执行器 |
@@ -98,11 +98,13 @@
 
 ## 未验证清单（不得当作通过）
 
-1. **rc.3 真机完整派发链路**：本次只在单元测试中验证 spec 形态与 helper 行为；rc.3 隔离实例上
-   「provider 探测 → startActivation 真实建出 child → 绑定/结果截获」的全链路**未重跑**。
-2. g-625 的三项迁移（`interruptByUser` / `subagentCatalog` / `rootOf` 归属）只在单测与宿主桩上验证，
-   **rc.3 隔离实例真机未演练**：派发失败后的真实中断、真实 catalog 孤儿判定、真实复用准入
-   四项须由主管在 rc.3 实例上另行取证。
+1. **rc.3 真机完整派发链路**：**已取证（2026-11-14，3093 隔离实例，0.2.2-rc.3）** —— provider 探测通过、
+   `startActivation` 真实建出 child（`child_id` 非空）、子代理跑完并回结果；同目标二次派发被明确拒绝
+   「仍在运行（公开 registry=running）」，未退化为「查不到/无归属」。
+2. g-625 的三项迁移：`subagentCatalog` 与 `rootOf` 归属**已在 rc.3 真机间接验证**（见上条拒绝路径与
+   存活判定），复用准入被拒但理由准确（「不在 live registry（已结束/冷态）」）；
+   **仍未真机演练**：派发失败后的真实中断（`interrupt` 只在失败收敛触发，未人为制造失败注入）、
+   真实 catalog 孤儿回收（缺 receipt 分支）、以及复用**成功**路径。
 3. `subagent-names` / `subagent-interrupt-default` / `working-directory` / `session-projection-handles`
    / `tool-executor-plugins`：仅静态核对「不涉及」，未按指南的验收步骤逐项演练。
 4. `archive-worktrees`：未实测会话归档对 graph 工作树的影响。
@@ -121,7 +123,8 @@
 - `startActivation` 在 rc.3 读取 `spec.parent.id`、在 rc.1 读取 `spec.request.parent.id`；
   rc.3 的 manager 以 `spec.delivery === "caller"` 区分交付策略（显式 `parent` 保持通知父代理）。
 - rc.3 三份升级指南：`subagent-service-methods`（删 `list`/`listChildren`/`drainChildren`）、
-  `subagent-user-controls`（`interruptByParent` → `interruptByUser`）、
+  `subagent-user-controls`（指南表述为 `interruptByParent` → `interruptByUser`；实际本地服务面以
+  下方 `interrupt(...)` 为准确替代，`interruptByUser` 仅 Remote face）、
   `subagent-runtime-ownership`（删 `isOwnedBy`/`roots()`/`enter()` owner 参数）。
 - rc.3 `SubagentInterruptAuthority` = `{kind:"user"}` | `{kind:"ancestor", agent}`；本地入口是
   `interrupt(targetSessionId, authority)`；`interruptByUser(childSessionId)` 只是 Remote face（Gateway 授权，
