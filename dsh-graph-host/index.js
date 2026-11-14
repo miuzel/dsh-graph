@@ -779,6 +779,222 @@ export async function startSubagentCompat(subagents, spec) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
+// g-625：DSH 0.2.2-rc.3 删除的三个 subagent/agent 管理 API 的**双版本收口**
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// rc.3 自带升级指南（`docs/upgrade-guide/v0.2.1-rc.2/subagent-service-methods`、
+// `.../v0.2.1-rc.2/subagent-user-controls`、`.../v0.2.1-rc.3/subagent-runtime-ownership`）删除：
+//   1. `subagents.interruptByParent(childId, parentSessionId, 'continuable')` 被删除。rc.3 **本地**服务面是
+//      `subagents.interrupt(targetSessionId, authority)`，authority = `{kind:"ancestor", agent}`（插件派出
+//      child 时持有确切父 Agent）或 `{kind:"user"}`。`interruptByUser(childId)` 只是 **Remote face**
+//      （Gateway 授权，user 语义），**不得**拿来冒充本地收敛；本收口只用 ancestor 身份；
+//   2. `subagents.listChildren(parentSessionId)` → `ctx.sessionQuery.observeSession(parentSessionId)`
+//      读 `observation.projections.values.subagentCatalog`（直接子级、catalog 事件序、排除 fork 继承）；
+//      缺投影必须当**不可用/unknown**，不得当「无 child」；递归发现可用仍存在的 `listDescendants()`；
+//   3. `agents.isOwnedBy(childId, owner)` → `ctx.subagents.rootOf(agent)`（比较 **Agent 对象**，
+//      不是 id）+ `session.header.parentSession`（直接创建者）。
+// rc.1（0.2.2-rc.1）**仍保留旧 API** ⇒ 一律「旧 API 优先、缺失才走新 API」，不得只为 rc.3 删旧路径；
+// 旧 API 在位时行为与 v0.24.0 逐字一致。新 API 缺失/异常一律 fail-closed（"unknown"），
+// 绝不静默退化成「无子代理」「无归属」（rc.3 的 `rootOf` 对未管理/陈旧实例抛
+// `SubagentError(UNAUTHORIZED)` ⇒ 只能判「不可确认」，不能判「无归属」）。
+//
+// **使用点登记**（旧代码 19 处文本面 = 5 处真实调用 + 能力探测 + 注释；收敛为 8 个功能面）：
+//   ① keepalive `sampleRunningChildren`：按归属过滤 live Agent 后计 running；
+//   ② keepalive `capabilityOf`：agentsOk 能力探测；
+//   ③ keepalive keepaliveStatusProjection：与 ② 同口径的能力探测；
+//   ④ care `entryOfChildAgent`：child → care entry 归属；
+//   ⑤ care `sampleTasks`：catalog ∩ live registry ∩ ownership ∩ running；
+//   ⑥ care `capabilitiesOf`：children_probe；
+//   ⑦ care `submitOutcome`：窄结果受理的 live/ownership 复核；
+//   ⑧ g-613 `inspectReuseChild` → `callerOwnsChild`：复用准入。
+// 结构守卫 `core/tests/g625-subagent-api-compat.test.ts` 禁止这三个方法名出现在 helper 之外。
+/**
+ * 归属探测的三种结论：`yes` / `no` / `unknown`（**不可确认**，调用方必须 fail-closed）。
+ * @typedef {"yes" | "no" | "unknown"} OwnershipVerdict
+ */
+/**
+ * 建立一次归属探测（g-625 唯一收口）。
+ *
+ * 旧宿主（有 `agents.isOwnedBy`）⇒ 原样调用，逐字保持 v0.24.0 语义（id + 精确 owner Agent）。
+ * 新宿主（只有 `subagents.rootOf`）⇒ 两次 `rootOf` **比较 Agent 对象**判同树，再用公开
+ * `session.header.parentSession` 收紧到「直接创建者」（rc.1 `isOwnedBy` 的语义是直接运行时子级）。
+ * 任一环节不可确认（缺 API / 非 live / `rootOf` 抛 UNAUTHORIZED / 读不到 parentSession）⇒ `unknown`。
+ *
+ * @param agents 宿主 `agents` 注册表服务（可能为 undefined）
+ * @param subagents 宿主 `subagents` 服务（可能为 undefined）
+ * @returns {{ supported: boolean, mode: "isOwnedBy" | "rootOf" | "unavailable", reason: string | null,
+ *   ownsAgent: (child: any, owner: any) => OwnershipVerdict,
+ *   ownsId: (childId: string, owner: any) => OwnershipVerdict }}
+ */
+export function ownershipProbeOf(agents, subagents) {
+  const oldSupported = !!agents && typeof agents.isOwnedBy === "function";
+  const newSupported = !!subagents && typeof subagents.rootOf === "function";
+  const mode = oldSupported ? "isOwnedBy" : (newSupported ? "rootOf" : "unavailable");
+  const reason = oldSupported || newSupported
+    ? null
+    : "缺归属 API（agents.isOwnedBy 与 subagents.rootOf 皆不可用）";
+  const sessionIdOf = (agent) => {
+    const sid = agent?.session?.id ?? agent?.id;
+    return sid === undefined || sid === null || sid === "" ? null : String(sid);
+  };
+  const ownsViaRootOf = (childAgent, ownerAgent) => {
+    let ownerRoot = null;
+    let childRoot = null;
+    try { ownerRoot = subagents.rootOf(ownerAgent); } catch { return "unknown"; }
+    try { childRoot = subagents.rootOf(childAgent); } catch { return "unknown"; }
+    // 官方迁移口径：比较 **Agent 对象**（不是 id）。
+    if (!ownerRoot || childRoot !== ownerRoot) return childRoot && ownerRoot ? "no" : "unknown";
+    const ownerSid = sessionIdOf(ownerAgent);
+    const parentSid = childAgent?.session?.header?.parentSession;
+    if (ownerSid === null || parentSid === undefined || parentSid === null) return "unknown";
+    return String(parentSid) === ownerSid ? "yes" : "no";
+  };
+  const ownsAgent = (childAgent, ownerAgent) => {
+    if (!oldSupported && !newSupported) return "unknown";
+    if (!childAgent || !ownerAgent) return "unknown";
+    if (oldSupported) {
+      const childId = sessionIdOf(childAgent);
+      if (childId === null) return "unknown";
+      try { return agents.isOwnedBy(childId, ownerAgent) === true ? "yes" : "no"; } catch { return "unknown"; }
+    }
+    return ownsViaRootOf(childAgent, ownerAgent);
+  };
+  const ownsId = (childId, ownerAgent) => {
+    if (!oldSupported && !newSupported) return "unknown";
+    if (!ownerAgent || childId === undefined || childId === null || childId === "") return "unknown";
+    if (oldSupported) {
+      try { return agents.isOwnedBy(String(childId), ownerAgent) === true ? "yes" : "no"; } catch { return "unknown"; }
+    }
+    let childAgent = null;
+    try { childAgent = typeof agents?.get === "function" ? agents.get(String(childId)) : null; } catch { return "unknown"; }
+    // 已不在 live registry ⇒ 可确定「不是当前 live 归属」（与 rc.1 isOwnedBy 的 false 对齐）。
+    if (!childAgent) return "no";
+    return ownsViaRootOf(childAgent, ownerAgent);
+  };
+  return { supported: oldSupported || newSupported, mode, reason, ownsAgent, ownsId };
+}
+
+/**
+ * 读取某父会话的**直接子级目录**（g-625 唯一收口）。
+ *
+ * 旧宿主（服务方法 `subagents.listChildren` 在位）⇒ 原样调用（rc.1 行为不变）。
+ * 新宿主（rc.3 删除了服务方法）⇒ `sessionQuery.observeSession(parentSessionId)` 读
+ * `projections.values.subagentCatalog`，读后立即释放观察（`Symbol.dispose`）。
+ * **缺 catalog 投影 / observe 抛错 / 旧方法抛错 ⇒ `ok:false`**：调用方只能按 unknown 处理，
+ * 绝不把「读不到」当成「没有 child」。
+ *
+ * @param services `{ subagents?, sessionQuery? }`（分别来自 `ctx.get("subagents")` / `ctx.get("sessionQuery")`）
+ * @param parentSessionId 父（主管）会话 id
+ * @param options `{ signal? }` 取消信号（观测结束时一并释放）
+ * @returns {Promise<{ ok: boolean, mode: string, rows: any[], reason: string | null, detail?: string }>}
+ */
+export async function readChildCatalogCompat(services, parentSessionId, options) {
+  const subagents = services?.subagents ?? null;
+  const sessionQuery = services?.sessionQuery ?? null;
+  const parentId = parentSessionId === undefined || parentSessionId === null || parentSessionId === ""
+    ? null
+    : String(parentSessionId);
+  const fail = (mode, reason, detail) => ({ ok: false, mode, rows: [], reason, ...(detail ? { detail: String(detail) } : {}) });
+  if (!parentId) return fail("unavailable", "no_parent_session");
+  if (subagents && typeof subagents.listChildren === "function") {
+    try {
+      const rows = await subagents.listChildren(parentId);
+      if (!Array.isArray(rows)) return fail("listChildren", "invalid_row_set");
+      return { ok: true, mode: "listChildren", rows, reason: null };
+    } catch (error) {
+      return fail("listChildren", "listChildren_error", error?.message ?? error);
+    }
+  }
+  if (!sessionQuery || typeof sessionQuery.observeSession !== "function") {
+    return fail("unavailable", "session_query_unavailable");
+  }
+  let observation = null;
+  try {
+    const opts = {};
+    if (options?.signal !== undefined) opts.signal = options.signal;
+    observation = await sessionQuery.observeSession(parentId, opts);
+    const rows = observation?.projections?.values?.subagentCatalog;
+    // 缺投影 = 能力不可用（官方迁移口径明确要求如此），不能当空目录。
+    if (rows === undefined) return fail("subagentCatalog", "catalog_projection_unavailable");
+    if (!Array.isArray(rows)) return fail("subagentCatalog", "catalog_projection_invalid");
+    return { ok: true, mode: "subagentCatalog", rows, reason: null };
+  } catch (error) {
+    return fail("subagentCatalog", "observe_session_error", error?.message ?? error);
+  } finally {
+    if (observation) {
+      try {
+        if (typeof observation[Symbol.dispose] === "function") observation[Symbol.dispose]();
+        else if (typeof observation.dispose === "function") observation.dispose();
+      } catch { /* 释放失败不改变读取结论（不吞掉已得到的 rows/reason） */ }
+    }
+  }
+}
+
+/**
+ * 请求中断一个刚启动的 child（g-625 唯一收口）。
+ *
+ * 旧宿主（rc.1，`interruptByParent` 在位）：`interruptByParent(childId, parentSessionId, 'continuable')`
+ * —— 逐字保持 v0.24.0 语义。
+ * rc.3：`interruptByParent` 已删除，但**本地服务面**仍是
+ * `subagents.interrupt(targetSessionId, authority: SubagentInterruptAuthority)`，
+ * authority 为 `{ kind: "ancestor", agent: <确切 live 父 Agent> }`（模型/祖先侧中断）或
+ * `{ kind: "user" }`（受信宿主操作）。本收口**只用 ancestor 身份**，因为插件确实持有派发时的
+ * 父 Agent，且 `interrupt` 会校验「该 Agent 是目标的真实祖先」（不拥有 ⇒ 抛 `SubagentError` UNAUTHORIZED）。
+ * 绝不使用 `interruptByUser`：它只是 **Remote face**（Gateway 授权，`{kind:"user"}` 语义），
+ * 拿它冒充本地收敛会绕过归属校验。
+ * 缺 API / 缺确切父 Agent / 调用抛错（含 UNAUTHORIZED）⇒ `requested:false` + 可读 note；
+ * 调用方只能如实上报「未中断/不可确认」，不得虚称已停止。
+ *
+ * @param services `{ subagents? }`
+ * @param params `{ childId?, parentSessionId?, parentAgent? }`（`parentAgent` 必须是派发时的确切 live Agent）
+ * @returns {{ requested: boolean, mode: string, note: string }}
+ */
+export function interruptChildCompat(services, params) {
+  const subagents = services?.subagents ?? null;
+  const rawChild = params?.childId;
+  const childId = rawChild === undefined || rawChild === null || rawChild === "" ? null : String(rawChild);
+  const rawParent = params?.parentSessionId;
+  const parentSessionId = rawParent === undefined || rawParent === null || rawParent === "" ? null : String(rawParent);
+  const parentAgent = params?.parentAgent ?? services?.parentAgent ?? null;
+  if (!childId) return { requested: false, mode: "unavailable", note: "无法中断该 child（缺少 child id）" };
+  const hasOld = !!subagents && typeof subagents.interruptByParent === "function";
+  // 旧宿主优先：`interruptByParent` 在位时按 v0.24.0 原路径，绝不被新 authority 形态替换。
+  if (hasOld) {
+    if (!parentSessionId) {
+      return { requested: false, mode: "interruptByParent", note: "无法中断该 child（缺少 parent session）" };
+    }
+    try {
+      subagents.interruptByParent(childId, parentSessionId, "continuable");
+      return { requested: true, mode: "interruptByParent", note: "已请求中断该 child" };
+    } catch (error) {
+      return { requested: false, mode: "interruptByParent", note: `中断该 child 失败：${error?.message ?? error}` };
+    }
+  }
+  if (subagents && typeof subagents.interrupt === "function") {
+    if (!parentAgent) {
+      // 没有确切父 Agent ⇒ 无法以 ancestor 身份中断；**不**退回 `{kind:"user"}`/`interruptByUser`。
+      return { requested: false, mode: "interrupt", note: "无法中断该 child（缺少确切 live 父 Agent，无法以 ancestor 身份中断）" };
+    }
+    try {
+      subagents.interrupt(childId, { kind: "ancestor", agent: parentAgent });
+      return { requested: true, mode: "interrupt", note: "已请求中断该 child" };
+    } catch (error) {
+      const code = error?.code;
+      // UNAUTHORIZED = 目标不属于该父 Agent（或父 Agent 非确切 live 实例）⇒ 归属不可确认、未中断。
+      const detail = code === "UNAUTHORIZED"
+        ? "归属不可确认（authority 不拥有该目标）"
+        : `中断失败：${error?.message ?? error}`;
+      return { requested: false, mode: "interrupt", note: `无法中断该 child（${detail}）` };
+    }
+  }
+  return {
+    requested: false,
+    mode: "unavailable",
+    note: "无法中断该 child（缺少 parent session / 确切父 Agent，或 subagents.interruptByParent、subagents.interrupt 能力）",
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
 // g-505：主管会话上下文缓存的智能保活（宿主接线；判定真源在 core/keepalive.ts）
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 //
@@ -799,8 +1015,9 @@ export async function startSubagentCompat(subagents, spec) {
 //   · 宿主只负责**采样真实运行态**、**runMaintenance 抢占真 idle**、**公开 prepareCall/stream 调用**。
 //
 // 采样口径（全部来自宿主公开面，绝不猜）：
-//   · `runningChildren`：live Agent 注册表 `list()` + `isOwnedBy(id, supervisor)` 过滤出主管直接
-//     拥有的子代理，再按各自公开 `status === "running"` 计数（**不**用 `Activity`/mtime 冒充运行）。
+//   · `runningChildren`：live Agent 注册表 `list()` + 归属探测（g-625：rc.1 `isOwnedBy` /
+//     rc.3 `subagents.rootOf`，唯一收口 `ownershipProbeOf`）过滤出主管直接拥有的子代理，再按各自
+//     公开 `status === "running"` 计数（**不**用 `Activity`/mtime 冒充运行；不可确认 ⇒ null，不谎称 0）。
 //   · `idle`：主管 Agent 公开 `status === "idle"`。公开 idle 不等于「真 idle」⇒ ping 前仍必须
 //     `runMaintenance()` 同步抢占（忙则同步 throw），并检查 `inbox.nextTurn/nextStep` 为空。
 //   · `lastLlmAt`：**观察到的正常 loop 请求**（`agent/request` + `llm/stream` 关联）时刻；保活
@@ -1105,16 +1322,17 @@ export function createKeepAliveRuntime(options = {}) {
 
   const sampleRunningChildren = (supervisor) => {
     const agents = getService("agents");
-    if (!agents || typeof agents.list !== "function" || typeof agents.isOwnedBy !== "function") return null;
+    const ownership = ownershipProbeOf(agents, getService("subagents"));
+    if (!agents || typeof agents.list !== "function" || !ownership.supported) return null;
     try {
       const all = agents.list();
       if (!Array.isArray(all)) return null;
       let running = 0;
       for (const a of all) {
         if (!a || a === supervisor || a.id === supervisor?.id) continue;
-        let owned = false;
-        try { owned = agents.isOwnedBy(a.id, supervisor) === true; } catch { return null; }
-        if (!owned) continue;
+        const owned = ownership.ownsAgent(a, supervisor);
+        if (owned === "unknown") return null; // 归属不可确认 ⇒ fail-safe（绝不当成 0 个 child）
+        if (owned !== "yes") continue;
         if (a.status === "running") running += 1;
         else if (a.status !== "idle") return null;
       }
@@ -1201,8 +1419,10 @@ export function createKeepAliveRuntime(options = {}) {
   const capabilityOf = (board, agent, cfg = null) => {
     const llm = getService("llm");
     const agents = getService("agents");
+    const ownership = ownershipProbeOf(agents, getService("subagents"));
     const llmOk = !!(llm && typeof llm.prepareCall === "function" && typeof llm.stream === "function");
-    const agentsOk = !!(agents && typeof agents.get === "function" && typeof agents.list === "function" && typeof agents.isOwnedBy === "function");
+    // g-625：归属能力 = rc.1 `isOwnedBy` 或 rc.3 `rootOf`（唯一收口），缺 API 才判不具备。
+    const agentsOk = !!(agents && typeof agents.get === "function" && typeof agents.list === "function" && ownership.supported);
     const statusOk = !!agent && (agent.status === "idle" || agent.status === "running");
     const maintenanceOk = !!agent && typeof agent.runMaintenance === "function";
     const snapProblem = snapshotProblemForBoard(board, agent);
@@ -1807,14 +2027,16 @@ export function createKeepAliveRuntime(options = {}) {
     const snapProblem = board ? snapshotProblemForBoard(board, agent) : "no_supervisor";
     const llm = getService("llm");
     const agents = getService("agents");
+    // g-625：与调度器 capabilityOf 同一收口探测归属能力（rc.1 isOwnedBy / rc.3 rootOf）。
+    const ownership = ownershipProbeOf(agents, getService("subagents"));
     const ttlEntry = cfg?.supervisor?.keep_alive_ttl ?? null;
     const ttlMatched = routeMatchesTtl(ttlEntry, board?.snapshot?.route) ? ttlEntry : null;
     let channel = resolveKeepAliveChannel(
       {
-        // 必须与调度器 capabilityOf 完全同口径（get/list/isOwnedBy + prepareCall/stream），
+        // 必须与调度器 capabilityOf 完全同口径（get/list + 归属探测 + prepareCall/stream），
         // 否则 status 会宣称 capable 而实际调度路径无法枚举/调用。
         llm: !!(llm && typeof llm.prepareCall === "function" && typeof llm.stream === "function"),
-        agents: !!(agents && typeof agents.get === "function" && typeof agents.list === "function" && typeof agents.isOwnedBy === "function"),
+        agents: !!(agents && typeof agents.get === "function" && typeof agents.list === "function" && ownership.supported),
         status: !!agent && (agent.status === "idle" || agent.status === "running"),
         maintenance: !!agent && typeof agent.runMaintenance === "function",
         snapshot: snapProblem === null,
@@ -1890,7 +2112,8 @@ export function createKeepAliveRuntime(options = {}) {
 // 采样口径（全部公开面，绝不猜）：
 //   · 主管：project.yaml 的 supervisor.session → `agents.get(sid)`（**必须**是同一 live Agent）；
 //   · 子代理任务：catalog（board payload 的 attempt_binding）∩ live registry
-//     （`agents.get(child)` + `agents.isOwnedBy(child, supervisor)` + `status === "running"`）；
+//     （g-625：`agents.get(child)` + 归属探测收口 `ownershipProbeOf`（rc.1 `isOwnedBy` / rc.3
+//     `rootOf`）+ `status === "running"`）；归属不可确认一律按 unknown fail-closed。
 //   · **绝不**用 mtime/size、durable 目录、隐藏思维或 `listDescendants.activity` 冒充运行/进展。
 //   · 进展证据只来自**主管**通过窄工具提交的有界证据摘要；`unknown`/未回复不计数。
 //
@@ -2492,21 +2715,21 @@ export function createCareRuntime(options = {}) {
     } catch { return null; }
   };
 
-  /** g-612：按 child 身份定位所属 care entry（root + 主管 ownership 双重校验）。 */
+  /** g-612：按 child 身份定位所属 care entry（root + 主管 ownership 双重校验；g-625 归属探测收口）。 */
   const entryOfChildAgent = (agent) => {
     const childId = agent?.session?.id ?? agent?.id ?? null;
     if (!childId) return null;
     const agents = getService("agents");
-    if (!agents || typeof agents.isOwnedBy !== "function") return null;
+    const ownership = ownershipProbeOf(agents, getService("subagents"));
+    if (!agents || !ownership.supported) return null;
     const root = rootOfAgent(agent);
     if (!root) return null;
     const entry = entries.get(root);
     if (!entry) return null;
     const sup = entry.supervisorAgent ?? supervisorOf(entry.root).agent;
     if (!sup) return null;
-    try {
-      if (agents.isOwnedBy(childId, sup) !== true) return null;
-    } catch { return null; }
+    // 旧 API 错误 ⇒ "unknown"；新旧两版都只接受能**确认**归属的 child（fail-closed）。
+    if (ownership.ownsId(childId, sup) !== "yes") return null;
     if (!entry.supervisorId) entry.supervisorId = sup?.session?.id ?? sup?.id ?? null;
     return entry;
   };
@@ -2741,8 +2964,9 @@ export function createCareRuntime(options = {}) {
    */
   const sampleTasks = (entry, agent) => {
     const agents = getService("agents");
+    const ownership = ownershipProbeOf(agents, getService("subagents"));
     if (!agent || !agents || typeof agents.list !== "function" || typeof agents.get !== "function"
-      || typeof agents.isOwnedBy !== "function") {
+      || !ownership.supported) {
       return { ok: false, reason: "registry_missing", tasks: [] };
     }
     let payload = null;
@@ -2770,9 +2994,9 @@ export function createCareRuntime(options = {}) {
       const childStatus = statusOf(childAgent);
       if (childStatus === null) return { ok: false, reason: "child_status_unknown", tasks: [] };
       if (childStatus !== "running") continue;
-      let owned = false;
-      try { owned = agents.isOwnedBy(childId, agent) === true; } catch { return { ok: false, reason: "ownership_unknown", tasks: [] }; }
-      if (!owned) continue;
+      const owned = ownership.ownsId(childId, agent);
+      if (owned === "unknown") return { ok: false, reason: "ownership_unknown", tasks: [] };
+      if (owned !== "yes") continue;
       if (rootOfAgent(childAgent) !== entry.root) continue;
       const startedRaw = g?.attempt_started_at ? Date.parse(String(g.attempt_started_at)) : NaN;
       const startedAt = Number.isFinite(startedRaw) && startedRaw <= now() ? startedRaw : now();
@@ -3477,6 +3701,8 @@ export function createCareRuntime(options = {}) {
   const capabilitiesOf = (agent, tasks = []) => {
     const agents = getService("agents");
     const subagents = getService("subagents");
+    // g-625：子级枚举/归属能力探测收口（rc.1 `isOwnedBy` / rc.3 `rootOf`），缺 API 才判不具备。
+    const ownership = ownershipProbeOf(agents, subagents);
     // B7：进展读取必须来自**真实子代理 session**（不是主管自己的 session）。
     // 只有当前有可枚举的真实 child 且其 session 暴露消息/工具历史时才算可读。
     let progressRead = false;
@@ -3493,7 +3719,7 @@ export function createCareRuntime(options = {}) {
     const seamResume = !!agent && typeof subagents?.sendMessage === "function";
     const report = assessCareCapabilities({
       idle_probe: !!agent && statusOf(agent) !== null,
-      children_probe: !!(agents && typeof agents.list === "function" && typeof agents.get === "function" && typeof agents.isOwnedBy === "function"),
+      children_probe: !!(agents && typeof agents.list === "function" && typeof agents.get === "function" && ownership.supported),
       progress_read: progressRead,
       // B9：可唤醒必须是**完整投递链路** —— `send` 与 `runMaintenance` 缺一不可。
       // 只有 send 的旧/不完整宿主若被判 capable，会进入 deliverNow 早退且 0ms 反复重排。
@@ -4350,16 +4576,17 @@ export function createCareRuntime(options = {}) {
     // 顺序：registry 可用 → child live/running/owned → canonical workspace → parent session 仍匹配。
     // 任一失败都在写事件/计数之前返回（0 事件/0 计数）。
     const agents = getService("agents");
-    if (!agents || typeof agents.get !== "function" || typeof agents.isOwnedBy !== "function") {
+    const ownership = ownershipProbeOf(agents, getService("subagents"));
+    if (!agents || typeof agents.get !== "function" || !ownership.supported) {
       return { ok: false, code: "registry_unavailable" };
     }
     let childAgent = null;
     try { childAgent = agents.get(String(input.child)); } catch { return { ok: false, code: "registry_unavailable" }; }
     if (!childAgent) return { ok: false, code: "child_not_live" };
     if (statusOf(childAgent) !== "running") return { ok: false, code: "child_not_running" };
-    let ownedNow = false;
-    try { ownedNow = agents.isOwnedBy(String(input.child), sup.agent) === true; } catch { return { ok: false, code: "ownership_unknown" }; }
-    if (!ownedNow) return { ok: false, code: "child_not_owned" };
+    const ownedNow = ownership.ownsId(String(input.child), sup.agent);
+    if (ownedNow === "unknown") return { ok: false, code: "ownership_unknown" };
+    if (ownedNow !== "yes") return { ok: false, code: "child_not_owned" };
     if (rootOfAgent(childAgent) !== root) return { ok: false, code: "wrong_workspace" };
     if (String(binding.parent_session_id ?? "") !== sup.sid) return { ok: false, code: "stale_parent" };
     const digest = createHash("sha256").update(evidence).digest("hex").slice(0, 16);
@@ -7265,14 +7492,10 @@ export function apply(ctx, config) {
       return { agents, agent: null, error: `agents.get 失败：${e?.message ?? e}` };
     }
   };
-  /** 调用者（主管）是否**真的**拥有该 child：只用宿主公开 `isOwnedBy`（不以 child_id 自报为准）。 */
+  /** 调用者（主管）是否**真的**拥有该 child（g-625 收口：rc.1 `isOwnedBy` / rc.3 `rootOf`；不看 child_id 自报）。 */
   const callerOwnsChild = (agents, callerAgent, childId) => {
-    if (!agents || typeof agents.isOwnedBy !== "function" || !callerAgent) return "unknown";
-    try {
-      return agents.isOwnedBy(String(childId), callerAgent) === true ? "yes" : "no";
-    } catch {
-      return "unknown";
-    }
+    if (!callerAgent) return "unknown";
+    return ownershipProbeOf(agents, ctx.get?.("subagents")).ownsId(String(childId), callerAgent);
   };
 
   /**
@@ -7300,10 +7523,10 @@ export function apply(ctx, config) {
         + `请在原会话继续或新建子代理（去掉 child_id 重新派发）`,
       );
     }
-    // ③ 归属：必须属于当前调用者（主管）——只用宿主公开 isOwnedBy，不看 child_id 自报。
+    // ③ 归属：必须属于当前调用者（主管）——只用宿主公开归属能力（g-625 收口，不看 child_id 自报）。
     const owned = callerOwnsChild(live.agents, callerAgent, code);
     if (owned === "unknown") {
-      throw new GraphError(`无法确认 child ${code} 是否属于当前主管（agents.isOwnedBy 不可用或出错）：复用 fail-closed`);
+      throw new GraphError(`无法确认 child ${code} 是否属于当前主管（isOwnedBy / subagents.rootOf 不可用或出错）：复用 fail-closed`);
     }
     if (owned !== "yes") {
       throw new GraphError(`child ${code} 不属于当前主管会话（跨主管复用被拒绝）：不建 attempt、不迁移状态`);
@@ -8006,17 +8229,14 @@ export function apply(ctx, config) {
           // 既有「请求中断」收敛（fire-and-forget，不作为停稳结论）。
           let interruptNote = "";
           if (!(bindErr instanceof GraphConflictError)) {
-            try {
-              const parentSessionIdForInterrupt = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
-              if (parentSessionIdForInterrupt && typeof subagents.interruptByParent === "function") {
-                subagents.interruptByParent(started.childId, parentSessionIdForInterrupt, "continuable");
-                interruptNote = "，已请求中断该 child";
-              } else {
-                interruptNote = "，无法中断该 child（缺少 parent session 或服务能力）";
-              }
-            } catch (interruptErr) {
-              interruptNote = `，中断该 child 失败：${interruptErr?.message ?? interruptErr}`;
-            }
+            // g-625：中断能力收口（rc.1 interruptByParent / rc.3 interruptByUser）；能力缺失如实上报。
+            const parentSessionIdForInterrupt = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
+            const interruptOutcome = interruptChildCompat({ subagents }, {
+              childId: started.childId,
+              parentSessionId: parentSessionIdForInterrupt,
+              parentAgent,
+            });
+            interruptNote = `，${interruptOutcome.note}`;
           } else {
             interruptNote = "，CAS 冲突未自动中断该 child";
           }
@@ -8047,17 +8267,22 @@ export function apply(ctx, config) {
       } catch (e) {
         // g-610 rev-02：
         //  - 已拿到 receipt（child 已真实启动）⇒ 绝不清 dispatch_in_flight；晚到/绑定失败保持阻断。
-        //  - 无 receipt ⇒ 用公开 durable 子代理目录（listChildren + label）判定：确认无 child 才结算；
-        //    目录不可用/查询失败 ⇒ 保持阻断（不按异常文案猜测“未创建 child”）。
+        //  - 无 receipt ⇒ 用公开 durable 子代理目录（g-625 收口：rc.1 `listChildren` /
+        //    rc.3 `sessionQuery.subagentCatalog`）+ label 判定：确认无 child 才结算；
+        //    目录不可用/查询失败/缺 catalog 投影 ⇒ 保持阻断（不按异常文案猜测“未创建 child”）。
         if (spawnReceipt?.childId) {
           process.stderr.write(`[dsh-graph-host] spawn 已返回 child=${spawnReceipt.childId} 但后续失败，保留 dispatch_in_flight：${e?.message ?? e}\n`);
         } else {
           let catalog = "unknown";
-          if (subagents && typeof subagents.listChildren === "function" && parentSessionId) {
-            try {
-              const rows = await subagents.listChildren(parentSessionId);
-              catalog = (rows ?? []).some((r) => String(r?.label ?? "") === `graph:${goal}/${attempt}`) ? "present" : "absent";
-            } catch { catalog = "unknown"; }
+          if (parentSessionId) {
+            let sessionQuery = null;
+            try { sessionQuery = typeof ctx.get === "function" ? ctx.get("sessionQuery") : null; } catch { sessionQuery = null; }
+            const probe = await readChildCatalogCompat({ subagents, sessionQuery }, parentSessionId);
+            if (probe.ok) {
+              catalog = probe.rows.some((r) => String(r?.label ?? "") === `graph:${goal}/${attempt}`) ? "present" : "absent";
+            } else {
+              process.stderr.write(`[dsh-graph-host] 子级目录不可用（${probe.reason}${probe.detail ? `：${probe.detail}` : ""}），保持 dispatch_in_flight：${e?.message ?? e}\n`);
+            }
           }
           if (catalog === "absent") {
             try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: String(e?.message ?? e) }); }
@@ -8394,19 +8619,10 @@ export function apply(ctx, config) {
           mode: effMode,
         });
       } catch (bindErr) {
-        // 绑定失败必须收敛：中断刚启动的 child，并把记录如实结算为 failed。
-        let note = "";
-        try {
-          const psid = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
-          if (psid && typeof subagents.interruptByParent === "function") {
-            subagents.interruptByParent(started.childId, psid, "continuable");
-            note = "，已请求中断该 child";
-          } else {
-            note = "，无法中断该 child（缺少 parent session 或服务能力）";
-          }
-        } catch (ie) {
-          note = `，中断该 child 失败：${ie?.message ?? ie}`;
-        }
+        // 绑定失败必须收敛：中断刚启动的 child（g-625 收口），并把记录如实结算为 failed。
+        const psid = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
+        const interruptOutcome = interruptChildCompat({ subagents }, { childId: started.childId, parentSessionId: psid, parentAgent });
+        const note = `，${interruptOutcome.note}`;
         const msg = `reviewer 绑定失败（child ${started.childId}${note}）：${bindErr?.message ?? bindErr}`;
         failReviewDispatch(root, goal, reviewId, msg, actor);
         return reviewOutcome({ ...base, reviewer_child_id: started.childId, child_error: msg });
@@ -9260,6 +9476,7 @@ export function apply(ctx, config) {
             const bound = bindCollectWithConvergence(r, a.goal, a.card, {
               started,
               parentSessionId: started.parentSessionId ?? ex.agent?.session?.id ?? null,
+              parentAgent: ex.agent,
               actor: actorOf(ex),
               provider: effProvider,
               model: effModel,
@@ -9820,7 +10037,7 @@ export function apply(ctx, config) {
         ...(Object.keys(agentOptions).length ? { agentOptions } : {}),
         signal: ac.signal,
       });
-      return { childId: started.childId, parentSessionId: supervisorId, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
+      return { childId: started.childId, parentSessionId: supervisorId, parent, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
     } catch (e) {
       // g-321：0.1.6 起 startContinuable 有并发槽位上限（默认 8），把 ACTIVATION_LIMIT_REACHED
       // 翻译成可操作提示；其余错误原样透出 message（保留既有可追溯性）。
@@ -9849,7 +10066,7 @@ export function apply(ctx, config) {
   /** spawn 成功后的绑定 + 有限收敛。返回 { child_id, child_error, interrupted }：
    *  成功 → child_id 已绑定、child_error=null；失败 → child_id 始终保留（可追溯），
    *  child_error 说明「已启动但绑定失败」以及中断是否被请求/为何没能中断。 */
-  const bindCollectWithConvergence = (rootForCard, goal, card, { started, parentSessionId, actor, provider, model }) => {
+  const bindCollectWithConvergence = (rootForCard, goal, card, { started, parentSessionId, parentAgent, actor, provider, model }) => {
     const childId = started?.childId ?? null;
     try {
       bindCardChild(rootForCard, goal, card, {
@@ -9861,26 +10078,15 @@ export function apply(ctx, config) {
       });
       return { child_id: childId, child_error: null, interrupted: false };
     } catch (bindErr) {
-      // 与 executor 派发的 g-237 收敛同构：先请求中断刚启动的 child，再抛出携带 child_id 的可追溯错误。
+      // 与 executor 派发的 g-237 收敛同构：先请求中断刚启动的 child（g-625 收口），再抛出携带
+      // child_id 的可追溯错误。中断能力缺失/失败一律如实上报，绝不虚称「已停止」。
       const subagents = ctx.get?.("subagents");
-      let interrupted = false;
-      let interruptNote;
-      try {
-        const pid = parentSessionId ?? started?.parentSessionId ?? null;
-        if (pid && typeof subagents?.interruptByParent === "function") {
-          subagents.interruptByParent(childId, pid, "continuable");
-          interrupted = true;
-          interruptNote = "已请求中断该 child";
-        } else {
-          interruptNote = "无法中断该 child（缺少 parent session 或 subagents.interruptByParent 能力）";
-        }
-      } catch (interruptErr) {
-        interruptNote = `中断该 child 失败：${interruptErr?.message ?? interruptErr}`;
-      }
+      const pid = parentSessionId ?? started?.parentSessionId ?? null;
+      const outcome = interruptChildCompat({ subagents }, { childId, parentSessionId: pid, parentAgent });
       return {
         child_id: childId,
-        child_error: `收集子代理已启动（child ${childId}）但卡片绑定失败：${bindErr?.message ?? bindErr}；${interruptNote}`,
-        interrupted,
+        child_error: `收集子代理已启动（child ${childId}）但卡片绑定失败：${bindErr?.message ?? bindErr}；${outcome.note}`,
+        interrupted: outcome.requested,
       };
     }
   };
@@ -11099,6 +11305,7 @@ export function apply(ctx, config) {
             const bound = bindCollectWithConvergence(rRoot, goal, card, {
               started: { childId: spawned.childId, parentSessionId: spawned.parentSessionId },
               parentSessionId: spawned.parentSessionId,
+              parentAgent: spawned.parent ?? null,
               actor: "human:gui",
               provider: effProvider,
               model: effModel,

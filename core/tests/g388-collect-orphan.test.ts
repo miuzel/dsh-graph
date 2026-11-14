@@ -315,8 +315,18 @@ test("g-388 ⑦负向对照：两入口均为「先准入后 spawn」，收集�
   const convStart = HOST_SRC.indexOf("const bindCollectWithConvergence =");
   const convEnd = HOST_SRC.indexOf("// 枚举派发选项（重新执行选择器用）");
   const convSrc = HOST_SRC.slice(convStart, convEnd > convStart ? convEnd : convStart + 3000);
-  assert.ok(convSrc.includes("interruptByParent"), "收敛策略必须请求中断");
-  assert.ok(convSrc.includes("无法中断该 child"), "中断能力缺失必须如实上报");
-  assert.ok(convSrc.includes("中断该 child 失败"), "中断失败必须如实上报");
+  // g-625：中断原语收口到 interruptChildCompat（rc.1 interruptByParent / rc.3 interruptByUser）——
+  // 收敛策略仍必须请求中断、仍必须如实上报，但**不得**再直连宿主方法（收口收严，不是放宽）。
+  assert.ok(convSrc.includes("interruptChildCompat("), "收敛策略必须经中断收口请求中断");
+  assert.ok(!convSrc.includes("interruptByParent"), "收敛策略不得绕过中断收口直连宿主方法");
+  const interruptHelper = HOST_SRC.slice(
+    HOST_SRC.indexOf("export function interruptChildCompat("),
+    HOST_SRC.indexOf("// g-505：主管会话上下文缓存的智能保活"),
+  );
+  assert.ok(interruptHelper.includes("interruptByParent"), "中断收口必须保留 rc.1 interruptByParent 路径");
+  assert.ok(interruptHelper.includes("subagents.interrupt("), "中断收口必须提供 rc.3 本地 interrupt(ancestor) 路径");
+  assert.ok(!/subagents\.interruptByUser\s*\(/.test(interruptHelper), "不得用 Remote face interruptByUser 冒充本地收敛");
+  assert.ok(interruptHelper.includes("无法中断该 child"), "中断能力缺失必须如实上报");
+  assert.ok(interruptHelper.includes("中断该 child 失败"), "中断失败必须如实上报");
   assert.ok(convSrc.includes("child_id: childId"), "收敛结果必须保留 child_id");
 });

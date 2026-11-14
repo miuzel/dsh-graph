@@ -45,6 +45,11 @@ export interface ReuseChildStub {
   status?: "running" | "idle" | "unknown";
   /** 允许向其发消息的父 Agent id；缺省 = 任意（测试不关心归属时）。 */
   ownedBy?: string[];
+  /**
+   * g-625：rc.3 下把该 child 声明为「未管理/陈旧实例」——`subagents.rootOf(child)` 必须抛
+   * `SubagentError(UNAUTHORIZED)`。插件只能据此判「归属不可确认」，**不得**判「无归属」。
+   */
+  unmanaged?: boolean;
 }
 
 export interface ReuseHarnessOptions {
@@ -56,6 +61,18 @@ export function createHarnessWith(opts: {
   dispatchApi?: HarnessDispatchApi;
   dispatchError?: unknown;
   reuse?: ReuseHarnessOptions;
+  /**
+   * g-625：归属 API 形态（缺省 `legacy` = g-613 以来逐字不变）：
+   *   · `legacy`：`agents.isOwnedBy`（rc.1）；
+   *   · `rootOf`：`agents` **没有** `isOwnedBy`，只有 `subagents.rootOf` + 公开
+   *     `session.header.parentSession`（rc.3）。`rootOf` 对 `unmanaged` child 抛 UNAUTHORIZED。
+   */
+  ownershipApi?: "legacy" | "rootOf";
+  /**
+   * g-625：rc.3 子级目录 provider（只提供 `sessionQuery.observeSession`，**不提供** `listChildren`）。
+   * 返回 `any[]` = catalog 投影；返回 `null` = **缺 catalog 投影**（必须当不可用/unknown）。
+   */
+  childCatalog?: () => any[] | null;
 }) {
   const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "legacy";
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-h-"));
@@ -91,6 +108,7 @@ export function createHarnessWith(opts: {
   }
   const sentMessages: Array<{ parentId: string; targetId: string; content: any[] }> = [];
   const childRegistry = opts.reuse?.childRegistry ?? null;
+  const ownershipApi = opts.ownershipApi ?? "legacy";
   if (childRegistry) {
     service.sendMessage = async (parent: any, targetId: string, content: any[]) => {
       sentMessages.push({ parentId: String(parent?.id ?? ""), targetId: String(targetId), content });
@@ -98,9 +116,64 @@ export function createHarnessWith(opts: {
       return `msg-${sentMessages.length}`;
     };
   }
+  // g-625：rc.3 归属形态的 Agent 对象（**对象身份**必须稳定 —— rootOf 的比较口径是 Agent 对象）。
+  const execAgent: any = { id: "a1", session: { header: { cwd: ws }, id: "sess-exec" } };
+  const supervisorAgent: any = { id: "sess-super", session: { id: "sess-super", header: { cwd: ws } } };
+  const childAgentOf = (id: string) => {
+    const row = childRegistry?.[String(id)];
+    if (!row) return undefined;
+    const base: any = { id, status: row.status ?? "idle" };
+    // 仅 rc.3 形态补公开 session 头（rc.1 桩形状保持逐字不变，避免影响既有进度/能力断言）。
+    return ownershipApi === "rootOf"
+      ? { ...base, session: { id, header: { cwd: ws, parentSession: "sess-exec" } } }
+      : base;
+  };
+  if (ownershipApi === "rootOf") {
+    // rc.3：`rootOf(agent)` 返回**同一 Agent 对象**的树根；未管理/陈旧实例抛 UNAUTHORIZED。
+    service.rootOf = (agent: any) => {
+      const id = String(agent?.id ?? "");
+      const row = childRegistry?.[id];
+      if (row) {
+        if (row.unmanaged) {
+          throw Object.assign(new Error("agent has no active runtime owner"), { code: "UNAUTHORIZED" });
+        }
+        if (!row.ownedBy || row.ownedBy.includes("a1")) return execAgent;
+        return { id: "other-root", session: { id: "other-root" } };
+      }
+      if (id === "a1" || id === "sess-super") return agent;
+      throw Object.assign(new Error("subagent tree access requires the exact live caller"), { code: "UNAUTHORIZED" });
+    };
+  }
+  // g-625：rc.3 子级目录（`sessionQuery.observeSession`）；缺省不提供该服务（既有桩行为不变）。
+  const catalogState = opts.childCatalog ? { observes: 0, disposals: 0 } : null;
+  const sessionQuery = opts.childCatalog
+    ? {
+        observeSession: async () => {
+          catalogState!.observes += 1;
+          const rows = opts.childCatalog!();
+          return {
+            ...(rows === null ? {} : { projections: { values: { subagentCatalog: rows } } }),
+            [Symbol.dispose]() { catalogState!.disposals += 1; },
+          };
+        },
+      }
+    : null;
   const ctx: any = {
     get: (name: string) => {
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      if (name === "sessionQuery" && sessionQuery) return sessionQuery;
+      if (name === "agents" && childRegistry && ownershipApi === "rootOf") {
+        return {
+          // rc.3：没有 isOwnedBy；get/list 返回**稳定身份**的 live Agent。
+          get: (id: string) => {
+            const key = String(id);
+            if (key === "a1") return execAgent;
+            if (key === "sess-super") return supervisorAgent;
+            return childAgentOf(key);
+          },
+          list: () => [execAgent, supervisorAgent, ...Object.keys(childRegistry).map(childAgentOf).filter(Boolean)],
+        };
+      }
       if (name === "agents" && childRegistry) {
         return {
           get: (id: string) => {
@@ -134,7 +207,7 @@ export function createHarnessWith(opts: {
   apply(ctx, { root });
   const toolsByName = new Map(registeredTools.map((t: any) => [t.name, t]));
   const execContext = {
-    agent: { id: "a1", session: { header: { cwd: ws }, id: "sess-exec" } },
+    agent: execAgent,
     signal: new AbortController().signal,
   };
   const call = (name: string, args: any) => {
@@ -152,6 +225,8 @@ export function createHarnessWith(opts: {
     ws, root, toolsByName, routes, call, emit, labels, capturedRequests, capturedVia, execContext, handlers,
     /** g-613：复用路径投递到既有子代理的消息（parent/target/正文）。 */
     sentMessages,
+    /** g-625：rc.3 子级目录观察统计（observe 次数 / dispose 次数；缺省 null = 未提供该服务）。 */
+    catalogState,
   };
 }
 
