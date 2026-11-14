@@ -705,21 +705,71 @@ export const inject = ["tools"];
  *   · 两者皆无 ⇒ **fail-closed**：抛出可追溯、可操作的错误。绝不静默回退到别的路径、
  *     绝不虚构 childId / 返回「无 child」冒充派发成功。
  *
- * `spec` 字段（`provider` / `label` / `request` / `signal` / `childId`）与返回契约（`childId` 必在）
- * 在三个版本上同形——实测证据见 `core/tests/fixtures/g469-host-subagent-api.json`
+ * g-624：收口点**同时**负责构建 `SubagentActivationSpec` 的形态。rc.3 起 spec 的
+ * `request` 嵌套层被移除，本 helper 是唯一知道「哪种形态」的地方；5 个调用点只提交
+ * **扁平 payload**（`provider` / `label` / `signal` + `prompt` / `parent` / 可选执行设置），
+ * 不得各自拼形态。
+ *
+ * 形态判别（可核实的能力探测，不猜版本号）：
+ *   · 嵌套形态（`{ provider, label, request: { prompt, parent, ... }, signal }`）：
+ *     `typeof subagents.list === "function"`，或根本没有 `startActivation`。
+ *     —— rc.3 在同一版删除了 `list()`（rc.3 自带 `docs/upgrade-guide/v0.2.1-rc.2/
+ *     subagent-service-methods`），而所有嵌套形态的宿主（0.2.0-rc.2 / 0.2.1-alpha.1 /
+ *     0.2.2-rc.1）都暴露 `list()`；只有 `startContinuable` 的宿主（≤ 0.2.1-alpha.1）
+ *     全部早于扁平化（g469 夹具两版真实实现的 spec 读取面都只有 `spec.request.*`）。
+ *   · 扁平形态（`{ provider, label, prompt, parent, ..., signal }`）：只剩 `startActivation`
+ *     且无 `list()`（rc.3+）。官方迁移说明：`request: task` 换成 `...task`，label/signal
+ *     保持在 spread 之后（`docs/upgrade-guide/v0.2.1-rc.2/subagent-activation-options`）。
+ *
+ * 两形态都显式传 `delivery: "parent"`：rc.1 与 rc.3 的声明都把 `delivery` 标为必填
+ * （rc.1 未传时 `spec.delivery === "caller"` 恒假、恰好退化成 parent；显式传值把这条
+ * 依赖不再成立），语义仍是「子代理结果通知父代理」，绝不改成 `caller`（不通知）。
+ *
+ * 返回契约（`childId` 必在）见 `core/tests/fixtures/g469-host-subagent-api.json`
  * （由 `core/tests/fixtures/g469-host-subagent-api.mjs` 从真实宿主包提取）。
  *
  * @param subagents 宿主 `ctx.get("subagents")` 服务（可能为 undefined）
- * @param spec 派发描述（原样透传，语义逐字不变）
+ * @param spec 扁平派发 payload（见上；也兼容旧的 `{ request: {...} }` 分组形态）
  * @returns 宿主 receipt（含 `childId`）
  * @throws 两版 API 皆缺时抛错（交由既有 `subagentSpawnErrorText` 映射为可操作文案）
  */
+function buildSubagentActivationSpec(subagents, payload, hasActivation) {
+  const source = payload ?? {};
+  const { provider, label, signal } = source;
+  // 任务字段 = payload 去掉派发控制字段（provider/label/signal）。兼容旧调用方仍按
+  // g-469 的 `request` 分组传入——只作为「任务包」使用，最终形态仍由本 helper 决定。
+  let task;
+  if (source.request !== undefined) {
+    task = source.request;
+  } else {
+    task = {};
+    for (const [key, value] of Object.entries(source)) {
+      if (key === "provider" || key === "label" || key === "signal" || key === "request") continue;
+      if (value !== undefined) task[key] = value;
+    }
+  }
+  const nested = typeof subagents?.list === "function" || !hasActivation;
+  if (nested) return { provider, label, request: task, signal, delivery: "parent" };
+  return { provider, label, ...task, signal, delivery: "parent" };
+}
+
 export async function startSubagentCompat(subagents, spec) {
-  if (subagents && typeof subagents.startActivation === "function") return subagents.startActivation(spec);
-  if (subagents && typeof subagents.startContinuable === "function") return subagents.startContinuable(spec);
+  const hasActivation = subagents && typeof subagents.startActivation === "function";
+  const hasContinuable = subagents && typeof subagents.startContinuable === "function";
+  if (hasActivation) return subagents.startActivation(buildSubagentActivationSpec(subagents, spec, hasActivation));
+  if (hasContinuable) return subagents.startContinuable(buildSubagentActivationSpec(subagents, spec, hasActivation));
   let registered = "未知";
   try {
-    registered = (subagents?.list?.() ?? []).join(",") || "无";
+    if (typeof subagents?.list === "function") {
+      registered = (subagents.list() ?? []).join(",") || "无";
+    } else if (typeof subagents?.getProvider === "function") {
+      const known = ["spawn", "fork"].filter((n) => subagents.getProvider(n) !== undefined);
+      // 注意：这里刻意用字符串拼接而非模板字面量 —— g469 结构守卫用「花括号配平」截取 helper 体，
+      // 嵌套模板里的 `${…}` 会干扰该配平（历史实现只在末尾有一个 `${}`）。
+      registered = known.length
+        ? known.join(",") + "（无枚举 API，仅探测官方默认名）"
+        : "无（无枚举 API，仅探测官方默认名 spawn/fork）";
+    }
   } catch { /* 探测失败不影响 fail-closed 结论 */ }
   throw new Error(
     "subagents 服务缺少派发 API（需 startActivation（DSH ≥ 0.2.1-alpha.2）"
@@ -7026,15 +7076,19 @@ export function apply(ctx, config) {
     const summarizerCapBlock = capabilityBlock(root, { goal, role: "summarizer", mode: opts.mode, agentScope: parent, label: `${SUMMARIZER_LABEL_PREFIX}${goal}` });
     if (summarizerCapBlock) return { childId: null, error: summarizerCapBlock, digest };
     const toolFilter = toolFilterForRole("summarizer", opts.mode, toolCapabilityFor(parent), readModuleSwitchesForRoot(root));
-    const request = { parent, prompt: text(prompt), ...(toolFilter ? { toolFilter } : {}) };
     const agentOptions = {};
     if (eff.provider) agentOptions.provider = eff.provider;
     if (eff.model) agentOptions.model = eff.model;
     if (eff.reasoning_effort) agentOptions.reasoningEffort = eff.reasoning_effort;
-    if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
     try {
       const started = await startSubagentCompat(subagents, {
-        provider, label: `${SUMMARIZER_LABEL_PREFIX}${goal}`, request, signal,
+        provider,
+        label: `${SUMMARIZER_LABEL_PREFIX}${goal}`,
+        parent,
+        prompt: text(prompt),
+        ...(toolFilter ? { toolFilter } : {}),
+        ...(Object.keys(agentOptions).length ? { agentOptions } : {}),
+        signal,
       });
       indexSummarizerChild(started.childId, { kind: "summarizer", root, goal, actor: opts.actor ?? "system:summarizer" });
       return {
@@ -7915,21 +7969,18 @@ export function apply(ctx, config) {
       let spawnReceipt = null;
       try {
         const roleToolFilter = toolFilterForRole("executor", effModeRes.mode, executorToolCap, readModuleSwitchesForRoot(root));
-        const request = {
-          parent: parentAgent,
-          prompt: text(prompt),
-          ...(roleToolFilter ? { toolFilter: roleToolFilter } : {}),
-        };
         const agentOptions = {};
         if (effProvider) agentOptions.provider = effProvider;
         if (effModel) agentOptions.model = effModel;
         if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
-        if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
 
         const started = await startSubagentCompat(subagents, {
           provider: availableProvider,
           label: `graph:${goal}/${attempt}`,
-          request,
+          parent: parentAgent,
+          prompt: text(prompt),
+          ...(roleToolFilter ? { toolFilter: roleToolFilter } : {}),
+          ...(Object.keys(agentOptions).length ? { agentOptions } : {}),
           signal,
         });
         spawnReceipt = started;
@@ -8321,20 +8372,17 @@ export function apply(ctx, config) {
       const { provider: providerName, error: providerError } = probeContinuableProvider(subagents);
       if (!providerName) throw new Error(providerError);
       const toolFilter = toolFilterForRole("reviewer", effMode, reviewerToolCap, readModuleSwitchesForRoot(root));
-      const request = {
-        parent: parentAgent,
-        prompt: text(prompt),
-        ...(toolFilter ? { toolFilter } : {}),
-      };
       const agentOptions = {};
       if (effProvider) agentOptions.provider = effProvider;
       if (effModel) agentOptions.model = effModel;
       if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
-      if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
       const started = await startSubagentCompat(subagents, {
         provider: providerName,
         label: `${REVIEW_LABEL_PREFIX}${goal}/${attempt}/${reviewId}`,
-        request,
+        parent: parentAgent,
+        prompt: text(prompt),
+        ...(toolFilter ? { toolFilter } : {}),
+        ...(Object.keys(agentOptions).length ? { agentOptions } : {}),
         signal,
       });
       try {
@@ -9196,20 +9244,17 @@ export function apply(ctx, config) {
             return result;
           }
           const collectToolFilter = toolFilterForRole("collector", a.mode, toolCapabilityFor(ex.agent), readModuleSwitchesForRoot(r));
-            const request = {
-              parent: ex.agent,
-              prompt: text(fullPrompt),
-              ...(collectToolFilter ? { toolFilter: collectToolFilter } : {}),
-            };
             const agentOptions = {};
             if (effProvider) agentOptions.provider = effProvider;
             if (effModel) agentOptions.model = effModel;
              if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
-            if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
             const started = await startSubagentCompat(subagents, {
               provider,
               label: `graph:collect/${a.goal}/${a.card}`,
-              request,
+              parent: ex.agent,
+              prompt: text(fullPrompt),
+              ...(collectToolFilter ? { toolFilter: collectToolFilter } : {}),
+              ...(Object.keys(agentOptions).length ? { agentOptions } : {}),
               signal: ex.signal,
             });
             const bound = bindCollectWithConvergence(r, a.goal, a.card, {
@@ -9753,11 +9798,6 @@ export function apply(ctx, config) {
       const roleOverrideCapBlock = capabilityBlock(rootForReq, { goal: null, role: effRole, mode: overrides.mode, agentScope: parent, label: `${label}/${effRole}` });
       if (roleOverrideCapBlock) return { childId: null, parentSessionId: null, error: roleOverrideCapBlock };
       const roleToolFilter = toolFilterForRole(effRole, overrides.mode, toolCapabilityFor(parent), readModuleSwitchesForRoot(rootForReq));
-      const request = {
-        parent,
-        prompt: [{ type: "text", text: promptText }],
-        ...(roleToolFilter ? { toolFilter: roleToolFilter } : {}),
-      };
       // g-133：模型路由合成（overrides > project.yaml > profile 全局默认 > 继承），核心逻辑在 core/ops.ts
       const eff = resolveModelRoute(
         { provider: overrides.provider, model: overrides.model, reasoning_effort: overrides.reasoning_effort },
@@ -9771,8 +9811,15 @@ export function apply(ctx, config) {
       if (effProvider) agentOptions.provider = effProvider;
       if (effModel) agentOptions.model = effModel;
              if (effReasoningEffort) agentOptions.reasoningEffort = effReasoningEffort;
-      if (Object.keys(agentOptions).length) request.agentOptions = agentOptions;
-      const started = await startSubagentCompat(subagents, { provider, label, request, signal: ac.signal });
+      const started = await startSubagentCompat(subagents, {
+        provider,
+        label,
+        parent,
+        prompt: [{ type: "text", text: promptText }],
+        ...(roleToolFilter ? { toolFilter: roleToolFilter } : {}),
+        ...(Object.keys(agentOptions).length ? { agentOptions } : {}),
+        signal: ac.signal,
+      });
       return { childId: started.childId, parentSessionId: supervisorId, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
     } catch (e) {
       // g-321：0.1.6 起 startContinuable 有并发槽位上限（默认 8），把 ACTIVATION_LIMIT_REACHED

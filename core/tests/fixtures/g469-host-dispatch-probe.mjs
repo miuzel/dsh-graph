@@ -68,33 +68,29 @@ export function apply(ctx, config) {
   ctx.on("agent/created", async ({ agent, source, signal }) => {
     if (record.dispatch) return;
     const subagents = ctx.get("subagents");
+    const { startSubagentCompat, probeContinuableProvider } = await import(pluginEntry);
     // 派发时刻重新读一次 provider 面（apply 时刻可能早于 provider 插件注册）。
-    const capable = (() => {
-      try { return subagents.list().filter((n) => typeof subagents.getProvider(n)?.prepareContinuable === "function"); }
-      catch (e) { return [`getProvider 抛错: ${e?.message ?? e}`]; }
-    })();
-    const provider = capable[0];
-    const spec = {
+    // g-624：探测统一复用插件的能力探测（rc.3 已删除 `list()`，自行枚举会误报）。
+    const probed = probeContinuableProvider(subagents);
+    const provider = probed.provider;
+    // g-624：调用点只提交**扁平 payload**；`request` 嵌套与否由 helper 按能力探测决定。
+    const payload = {
       provider,
       label: "g469:host-probe",
-      request: {
-        parent: agent,
-        prompt: [{ type: "text", text: "g-469 派发契约探测：无需回复，仅验证子代理能否被真实创建。" }],
-      },
+      parent: agent,
+      prompt: [{ type: "text", text: "g-469 派发契约探测：无需回复，仅验证子代理能否被真实创建。" }],
       signal: signal ?? new AbortController().signal,
     };
     record.dispatch = {
       attempted: true, source, provider,
+      provider_probe_error: probed.error,
       registered_at_dispatch: (() => { try { return subagents.list(); } catch (e) { return String(e?.message ?? e); } })(),
-      prepareContinuable_capable_at_dispatch: capable,
       parent_id: agent?.id ?? null,
-      spec_fields: Object.keys(spec).sort(),
-      request_fields: Object.keys(spec.request).sort(),
+      payload_fields: Object.keys(payload).sort(),
     };
     write();
     try {
-      const { startSubagentCompat } = await import(pluginEntry);
-      const started = await startSubagentCompat(subagents, spec);
+      const started = await startSubagentCompat(subagents, payload);
       record.dispatch.ok = true;
       record.dispatch.childId = started?.childId ?? null;
       record.dispatch.parentSessionId = started?.parentSessionId ?? null;
