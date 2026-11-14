@@ -17,6 +17,24 @@ import { createHash, randomUUID } from "node:crypto";
 import { relative, join, resolve, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+
+// rc.1 exposes enumeration; rc.3 exposes only named provider lookup.
+export function probeContinuableProvider(subagents) {
+  if (typeof subagents?.getProvider !== "function") return { provider: null, error: "无法确认 subagent provider：getProvider API 不可用" };
+  let names;
+  const enumerable = typeof subagents.list === "function";
+  try {
+    names = enumerable ? subagents.list() : ["spawn", "fork"];
+    if (!Array.isArray(names) || names.some((name) => typeof name !== "string")) throw new Error("list 返回非字符串数组");
+    for (const name of names) {
+      if (typeof subagents.getProvider(name)?.prepareContinuable === "function") return { provider: name, error: null };
+    }
+  } catch (error) {
+    return { provider: null, error: `无法确认 subagent provider：查询异常（${String(error?.message ?? error)}）` };
+  }
+  if (!enumerable) return { provider: null, error: "无可用默认 subagent provider（已查询 spawn、fork；自定义 provider 无法枚举）" };
+  return { provider: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${names.join(",") || "无"}）` };
+}
 // g-454：读旧 settings.yaml 的 `dsh-graph` 节。`yaml` 是本包**已声明**的运行时依赖
 // （package.json dependencies；core/ops.ts 早已在加载期 import 它，故非新增第三方依赖）。
 import { parse as parseYaml } from "yaml";
@@ -7002,12 +7020,8 @@ export function apply(ctx, config) {
     );
     const subagents = ctx.get?.("subagents");
     if (!subagents || !parent) return { childId: null, error: "subagents 服务不可用或无调用 agent", digest };
-    const provider = (subagents.list?.() ?? []).find((n) => {
-      try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
-    });
-    if (!provider) {
-      return { childId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`, digest };
-    }
+    const { provider, error: providerError } = probeContinuableProvider(subagents);
+    if (!provider) return { childId: null, error: providerError, digest };
     // g-473：能力自检（缺必需工具则不派发；summarizer 无 shell 槽位，白名单缺 web_* 时静默剔除）
     const summarizerCapBlock = capabilityBlock(root, { goal, role: "summarizer", mode: opts.mode, agentScope: parent, label: `${SUMMARIZER_LABEL_PREFIX}${goal}` });
     if (summarizerCapBlock) return { childId: null, error: summarizerCapBlock, digest };
@@ -7656,12 +7670,7 @@ export function apply(ctx, config) {
     let availableProvider = null;
     let providerError = null;
     if (subagents) {
-      availableProvider = (subagents.list?.() ?? []).find((n) => {
-        try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
-      });
-      if (!availableProvider) {
-        providerError = `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`;
-      }
+      ({ provider: availableProvider, error: providerError } = probeContinuableProvider(subagents));
     }
 
     // 7. Prompt 组装与 Prompt Hash
@@ -7879,10 +7888,10 @@ export function apply(ctx, config) {
 
     // 9. 启动与绑定子代理
     if (providerError) {
-      try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: `无可用 provider：${providerError}` }); }
+      try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: `provider 探测失败：${providerError}` }); }
       catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
       // g-374 F1：child_error 占位（无 provider ⇒ 无子代理 ⇒ 永不产生 subagent/end）。
-      writeChildErrorResults(root, goal, attempt, actor, `无可用 provider：${providerError}`);
+      writeChildErrorResults(root, goal, attempt, actor, `provider 探测失败：${providerError}`);
       return {
         ok: true,
         attempt,
@@ -8309,13 +8318,8 @@ export function apply(ctx, config) {
       return reviewOutcome({ ...base, reviewer_child_id: null, child_error: reviewerCapBlock });
     }
     try {
-      const available = (subagents.list?.() ?? []).filter((n) => {
-        try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
-      });
-      const providerName = available[0];
-      if (!providerName) {
-        throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
-      }
+      const { provider: providerName, error: providerError } = probeContinuableProvider(subagents);
+      if (!providerName) throw new Error(providerError);
       const toolFilter = toolFilterForRole("reviewer", effMode, reviewerToolCap, readModuleSwitchesForRoot(root));
       const request = {
         parent: parentAgent,
@@ -9184,10 +9188,8 @@ export function apply(ctx, config) {
             return result;
           }
           try {
-            const provider = (subagents.list?.() ?? []).find((n) => {
-              try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
-            });
-            if (!provider) throw new Error(`无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）`);
+            const { provider, error: providerError } = probeContinuableProvider(subagents);
+            if (!provider) throw new Error(providerError);
             const collectorCapBlock = capabilityBlock(r, { goal: a.goal, role: "collector", mode: a.mode, agentScope: ex.agent, label: `collector/${a.card}` });
           if (collectorCapBlock) {
             result.child_error = collectorCapBlock;
@@ -9744,13 +9746,8 @@ export function apply(ctx, config) {
     try {
       // subagent provider（spawn/fork）与 LLM provider（模型路由）是两回事：
       // 这里自动挑选带 prepareContinuable 能力的 subagent provider，绝不把用户选的 LLM provider 当 subagent provider。
-      const available = (subagents.list?.() ?? []).filter((n) => {
-        try { return typeof subagents.getProvider(n)?.prepareContinuable === "function"; } catch { return false; }
-      });
-      const provider = available[0];
-      if (!provider) {
-        return { childId: null, parentSessionId: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${(subagents.list?.() ?? []).join(",") || "无"}）` };
-      }
+      const { provider, error: providerError } = probeContinuableProvider(subagents);
+      if (!provider) return { childId: null, parentSessionId: null, error: providerError };
       const effRole = overrides.role ? normalizeSubagentRole(overrides.role) ?? "executor" : "executor";
       // g-473：能力自检（缺必需工具则不派发；error 非空即未派发，与既有 provider 失败同口径）
       const roleOverrideCapBlock = capabilityBlock(rootForReq, { goal: null, role: effRole, mode: overrides.mode, agentScope: parent, label: `${label}/${effRole}` });
