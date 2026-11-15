@@ -1,30 +1,30 @@
-# dsh-cli 使用说明（g-314）
+# dsh-graph 使用说明（g-314）
 
-`dsh-cli` 是 dsh-graph 的**轻量命令行**（除 `sync`、`claim` 外全部只读）：直接读写工作区里的 `.dsh-graph/` 资产，
+`dsh-graph` 是 dsh-graph 的**轻量命令行**（除 `sync`、`claim` 外全部只读）：直接读写工作区里的 `.dsh-graph/` 资产，
 不起常驻服务、不联网、不引入任何第三方 CLI 框架。面向单兵 CLI 工具（Claude Code、Codex、
 OpenCode 等）里「看一眼看板」的场景：一条命令、毫秒级返回。
 
 ## 安装与运行形态
 
-两种形态共用同一入口源码 `bin/dsh-cli.mjs`：
+两种形态共用同一入口源码 `bin/dsh-graph.mjs`：
 
 | 形态 | 入口 | 加载的核心 |
 | --- | --- | --- |
-| 发布形态（全局/项目本地安装） | 包内 `dist/bin/dsh-cli.mjs` | 同目录上层 `dist/core/cli/*.js`（编译产物） |
-| 源码形态（本仓库开发） | 仓库根 `bin/dsh-cli.mjs` | `core/cli/main.ts`（Node ≥ 22.6 原生 type-stripping） |
+| 发布形态（全局/项目本地安装） | 包内 `dist/bin/dsh-graph.mjs` | 同目录上层 `dist/core/cli/*.js`（编译产物） |
+| 源码形态（本仓库开发） | 仓库根 `bin/dsh-graph.mjs` | `core/cli/main.ts`（Node ≥ 22.6 原生 type-stripping） |
 
-`dsh-graph-host/package.json` 的 `bin` 字段注册了 `dsh-cli`，因此：
+`dsh-graph-host/package.json` 的 `bin` 字段注册了 `dsh-graph`，因此：
 
 ```bash
 # 全局
-npm i -g dsh-graph && dsh-cli info
+npm i -g dsh-graph && dsh-graph info
 # 项目本地（package.json devDependencies）
-npm i -D dsh-graph && npx dsh-cli info      # 或 ./node_modules/.bin/dsh-cli info
+npm i -D dsh-graph && npx dsh-graph info      # 或 ./node_modules/.bin/dsh-graph info
 # 不预先安装的一次性用法（临时拉包后执行其 bin）
-npx --package dsh-graph dsh-cli info
+npx --package dsh-graph dsh-graph info
 # 本仓库开发（先构建）
 bash scripts/build.sh
-node dist/bin/dsh-cli.mjs info
+node dist/bin/dsh-graph.mjs info
 ```
 
 > **平台**：本 CLI 的实测平台是 **Linux / WSL2**；**Windows / macOS 未验证** —— 未做真机兼容性
@@ -33,14 +33,14 @@ node dist/bin/dsh-cli.mjs info
 ## 命令
 
 ```text
-dsh-cli info             环境自检：Node 版本、graph root、初始化状态、关键文件可读性
-dsh-cli status           看板状态：目标数、事件数、最近事件、规则库版本、问题列表
-dsh-cli goal list        列出目标（默认不含归档；--all 含归档）
-dsh-cli goal show <id>   显示单个目标（元信息 + 正文）
-dsh-cli sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（g-315）
-dsh-cli claim <goal-id>  认领目标：推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）（g-316）
-dsh-cli version          显示版本
-dsh-cli help             显示帮助
+dsh-graph info             环境自检：Node 版本、graph root、初始化状态、关键文件可读性
+dsh-graph status           看板状态：目标数、事件数、最近事件、规则库版本、问题列表
+dsh-graph goal list        列出目标（默认不含归档；--all 含归档）
+dsh-graph goal show <id>   显示单个目标（元信息 + 正文）
+dsh-graph sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（g-315）
+dsh-graph claim <goal-id>  认领目标：推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）（g-316）
+dsh-graph version          显示版本
+dsh-graph help             显示帮助
 ```
 
 选项：`--root <path>`（显式指定 graph root）、`--json`（机器可读输出）、
@@ -68,22 +68,22 @@ dsh-cli help             显示帮助
 - 向上查找**只认 `.dsh-graph` 目录本体**，到根仍没有即报「非工作区」，
   **不会**回落到用户全局配置 —— 隔离项目不会误用 `~/.dsh` 下的东西。
 
-`--root` 接受兄弟目录写法（`cd src && dsh-cli --root ../.dsh-graph`），这是最常见的用法。
+`--root` 接受兄弟目录写法（`cd src && dsh-graph --root ../.dsh-graph`），这是最常见的用法。
 最终 root 一律经 core 的 `resolveCanonicalRoot` 归一（Git linked worktree 归一、scratch 边界、
 symlink 拒收），CLI 不重写这套语义。
 
-## `dsh-cli sync`：上下文投影（g-315）
+## `dsh-graph sync`：上下文投影（g-315）
 
 把 `.dsh-graph` 里的**常驻硬性事实**与**版本目标概览**投影成 `.claude/CLAUDE.md` 与 `AGENTS.md`
 里的受控区段，供 Claude Code / Codex 等单兵工具作为稳定前缀。设计目的只有一个：让前缀**尽量不变**，
 从而吃到 Prompt 缓存（缓存按前缀匹配，前缀一变整段失效）。
 
 ```bash
-dsh-cli sync                        # 写两个文档
-dsh-cli sync --target AGENTS.md     # 只写其中一个
-dsh-cli sync --full                 # 不折叠目标列表（默认单次最多列 40 个）
-dsh-cli sync --active-only          # 跳过终态目标（delivered）
-dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sha256/problems
+dsh-graph sync                        # 写两个文档
+dsh-graph sync --target AGENTS.md     # 只写其中一个
+dsh-graph sync --full                 # 不折叠目标列表（默认单次最多列 40 个）
+dsh-graph sync --active-only          # 跳过终态目标（delivered）
+dsh-graph sync --json                 # 机器可读：written/unchanged/prefix_sha256/problems
 ```
 
 ### 写入位置
@@ -97,7 +97,7 @@ dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sh
 **在主树的 tracked 子目录**（如 `core/`、`docs/`）里运行时，写入位置解析到这里所属的工作树根
 （即主树根），**不是**那个子目录；在 linked worktree 的子目录里运行同理，写到该 worktree 根。
 
-> 为什么不直接取「看板根的父目录」：在 Git **linked worktree** 里，任何 dsh-cli 命令的看板根都会被
+> 为什么不直接取「看板根的父目录」：在 Git **linked worktree** 里，任何 dsh-graph 命令的看板根都会被
 > core 归一到**主树**（`mode: "canonicalized"`）。若按看板根反推写入位置，在 worktree 里 sync 就会
 > 悄悄改写**主树**的 `AGENTS.md`，而 worktree 自己的文件纹丝不动。g-315 实测复现过这个坑，
 > 现在的实现按「调用方工作树」独立解析写入位置（`resolveWorkspaceForSync`），
@@ -158,17 +158,17 @@ dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sh
   （`delivered` / `blocked` 也是真实状态，静默过滤会让投影看起来比看板干净）。需要只看在做的
   事项时用 `--active-only`。
 - 折叠：B 段单次最多列 40 个目标（按状态优先级 + id 排序），其余折叠成一行计数；
-  `--full` 展开。完整清单仍用 `dsh-cli goal list`。
+  `--full` 展开。完整清单仍用 `dsh-graph goal list`。
 - 只读资产：sync **不写 `.dsh-graph` 的任何字节**（测试用整树快照 + mtime/inode 断言）。
 
-## `dsh-cli claim <goal-id>`：认领目标 + 判据注入（g-316）
+## `dsh-graph claim <goal-id>`：认领目标 + 判据注入（g-316）
 
 单兵工具写代码快，但容易「需求走偏」或「遗漏非功能约束」。`claim` 在动手前把目标与判据摊在
 终端上，并把看板状态推进到 `in_progress`，让「先看判据再改代码」成为默认动作。
 
 ```bash
-dsh-cli claim g-42            # 人类可读任务单
-dsh-cli claim g-42 --json     # 结构化（供脚本/Agent 读取）
+dsh-graph claim g-42            # 人类可读任务单
+dsh-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
 ```
 
 输出（示例）：
@@ -224,7 +224,7 @@ dsh-cli claim g-42 --json     # 结构化（供脚本/Agent 读取）
 | 场景 | 退出码 | 行为 / 原因 |
 | --- | --- | --- |
 | 成功（含幂等命中） | `0` | 输出任务单 |
-| 缺目标 ID / 多参 / 未知选项 | `2` | 用法错误 + 「运行 dsh-cli help 查看用法」 |
+| 缺目标 ID / 多参 / 未知选项 | `2` | 用法错误 + 「运行 dsh-graph help 查看用法」 |
 | 目标不存在 | `1` | `目标不存在：<id>` |
 | **目标文件损坏** | `1` | 点名损坏文件（`goal-file-corrupt`），**不**伪装成「不存在」 |
 | 已归档 | `1` | `goal-archived` |
@@ -247,7 +247,7 @@ dsh-cli claim g-42 --json     # 结构化（供脚本/Agent 读取）
 - **复用 core**：`project.yaml` 走 `readProjectConfig`（含 `*_malformed` fail-closed 标志）、
   事件流走 `readEvents`、目标文件走 `listGoalFiles`/`loadGoal`/`findGoalFile`、
   frontmatter 与状态机全部来自 `core/domain/*`。CLI 不复制 frontmatter 解析、事件解析、
-  状态机或锁逻辑（由 `core/tests/g314-dsh-cli.test.ts` 的可执行代码静态扫描守卫）。
+  状态机或锁逻辑（由 `core/tests/g314-dsh-graph.test.ts` 的可执行代码静态扫描守卫）。
 - **写命令只有两个**：`sync`（写 workspace 根的受控区段，不碰 `.dsh-graph`）与 `claim`
   （经 core 的锁 + 事件先行写看板状态）。其余命令不写任何文件。
   `claim` 的迁移一律经 core 的 `transition`（CLI 不拼事件行、不自己写目标文件）；
@@ -260,7 +260,7 @@ dsh-cli claim g-42 --json     # 结构化（供脚本/Agent 读取）
 口径：同机 `spawnSync(node, [entry, ...cmd])` **全进程**耗时（含 Node 启动、模块加载、
 命令执行与退出），每条命令重复 30 次取 **best / median**。
 机器：WSL2（Arch Linux，内核含 `microsoft-standard-WSL2`）；Node `v26.7.0`；
-基线 `node -e 0` ≈ **20ms**（纯启动开销）。入口：`dist/bin/dsh-cli.mjs`（发布形态）。
+基线 `node -e 0` ≈ **20ms**（纯启动开销）。入口：`dist/bin/dsh-graph.mjs`（发布形态）。
 
 ### 典型小型看板（12 目标 / 1 事件）
 
@@ -302,8 +302,8 @@ dsh-cli claim g-42 --json     # 结构化（供脚本/Agent 读取）
 后续若需在超大看板上达标，可选路径（本次未做，留给后续目标）：
 为 `events.jsonl` 建增量索引（apex count + 末事件指针），使 `status` 不再线性扫全量事件流。
 
-> 复现：`node --test core/tests/g314-dsh-cli.test.ts`；手工粗测
-> `for i in $(seq 1 30); do /usr/bin/time -f %e node dist/bin/dsh-cli.mjs status >/dev/null; done`
+> 复现：`node --test core/tests/g314-dsh-graph.test.ts`；手工粗测
+> `for i in $(seq 1 30); do /usr/bin/time -f %e node dist/bin/dsh-graph.mjs status >/dev/null; done`
 
 **为什么 `info`/`version` 快**：入口只静态依赖 node 内置模块与 `core/root.ts`；
 `info` 走轻量 `core/cli/health.ts`（stat 级探针 + 只读 1 字节确认），
@@ -312,7 +312,7 @@ dsh-cli claim g-42 --json     # 结构化（供脚本/Agent 读取）
 ## 测试
 
 ```bash
-node --test core/tests/g314-dsh-cli.test.ts   # g-314 专项：21 条用例
+node --test core/tests/g314-dsh-graph.test.ts   # g-314 专项：21 条用例
 node --test core/tests/g315-sync-projection.test.ts  # g-315 专项
 node --test core/tests/g316-claim.test.ts     # g-316 专项：22 条用例（含 4 条真源码副本反向变异）
 node scripts/run-tests.mjs                     # 整套件自证闸门
@@ -325,7 +325,7 @@ node scripts/run-tests.mjs                     # 整套件自证闸门
 
 **反向变异对照（判据 7）据实分三类，共 4 条**：
 
-- **真源码副本变异（2 条）**：把 `core/` 与入口 `bin/dsh-cli.mjs` 复制进 `tmp/` 沙箱，就地改坏关键行后用
+- **真源码副本变异（2 条）**：把 `core/` 与入口 `bin/dsh-graph.mjs` 复制进 `tmp/` 沙箱，就地改坏关键行后用
   真进程实测 —— ①拆掉危险路径守卫（`$DSH_HOME` 子目录）后「必须拒绝」的断言变红；②把 `failure()`
   的退出码吞成 `0` 后「运行期失败必须退出 1」的断言变红。两条都先断言**未变异副本**与仓内实现一致，
   且变异锚点**恰好命中 1 处**，避免「失败其实来自别的原因」的假阳性。

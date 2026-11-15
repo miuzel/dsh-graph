@@ -1,5 +1,5 @@
 /**
- * dsh-cli 只读诊断（g-314 判据 6）：只报告事实，**不写任何文件**。
+ * dsh-graph 只读诊断（g-314 判据 6）：只报告事实，**不写任何文件**。
  *
  * 复用约束（判据 3）：project.yaml 走 `readProjectConfig`、事件流走 `readEvents`、
  * 目标文件走 `listGoalFiles` / `loadGoal` / `findGoalFile`、frontmatter 与状态机全部来自 core。

@@ -1,5 +1,5 @@
 /**
- * dsh-cli 参数解析（g-314）：手写最小解析器，零第三方 CLI 框架、零网络。
+ * dsh-graph 参数解析（g-314）：手写最小解析器，零第三方 CLI 框架、零网络。
  *
  * 设计原则：
  * - **纯函数**：不读文件、不读环境（除了调用方显式注入的值），可在单测里穷举边界。
@@ -70,7 +70,7 @@ function err(code: ArgError["code"], message: string): ParseResult {
  * 解析 argv（不含 `node` 与脚本路径）。
  *
  * 选项语法：`--flag`、`--opt value`、`--opt=value`；短选项 `-h` / `-V` / `-a`。
- * 选项可出现在命令前后（`dsh-cli --root x goal list` 与 `dsh-cli goal list --root x` 等价）。
+ * 选项可出现在命令前后（`dsh-graph --root x goal list` 与 `dsh-graph goal list --root x` 等价）。
  */
 export function parseArgs(argv: readonly string[]): ParseResult {
   const positionals: string[] = [];
@@ -149,7 +149,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
 
   const [commandRaw, ...rest] = positionals;
 
-  // 仅 `--version` / `--help` 而无命令：仍合法（`dsh-cli --version`）。
+  // 仅 `--version` / `--help` 而无命令：仍合法（`dsh-graph --version`）。
   if (commandRaw === undefined) {
     if (version || help) {
       return {
@@ -169,7 +169,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
         error: null,
       };
     }
-    return err("missing-command", `缺少命令（可用：${TOP_LEVEL_COMMANDS.join(" / ")}；运行 dsh-cli help 查看说明）`);
+    return err("missing-command", `缺少命令（可用：${TOP_LEVEL_COMMANDS.join(" / ")}；运行 dsh-graph help 查看说明）`);
   }
 
   if (!(TOP_LEVEL_COMMANDS as readonly string[]).includes(commandRaw)) {
@@ -182,7 +182,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   if (command === "goal") {
     const sub = rest[0];
     if (sub === undefined) {
-      // `dsh-cli goal` 无子命令但有 --help 时展示该组帮助，否则报缺参。
+      // `dsh-graph goal` 无子命令但有 --help 时展示该组帮助，否则报缺参。
       if (help) {
         subcommand = null;
         tail = [];
@@ -216,11 +216,11 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     );
   }
   if (command === "goal" && subcommand === "show" && tail.length === 0) {
-    return err("missing-argument", "命令 goal show 需要一个目标 ID（用法：dsh-cli goal show <id>）");
+    return err("missing-argument", "命令 goal show 需要一个目标 ID（用法：dsh-graph goal show <id>）");
   }
   // claim（g-316）：唯一写命令之一，必须显式给出目标 ID（不做任何「自动挑目标」的猜测）。
   if (command === "claim" && tail.length === 0) {
-    return err("missing-argument", "命令 claim 需要一个目标 ID（用法：dsh-cli claim <goal-id>）");
+    return err("missing-argument", "命令 claim 需要一个目标 ID（用法：dsh-graph claim <goal-id>）");
   }
 
   return {

@@ -51,28 +51,28 @@ dsh plugin --profile <name> add dsh-graph
 
 需要 Node ≥ 22。依赖说明、宿主兼容范围（`engines.dsh` 声明与实测宿主）、侧边栏用法、数据目录等完整内容，见 **[dsh-graph-host/README.md](dsh-graph-host/README.md)**（即 npm 包内 README）。升级宿主后若 Web 看板半边不激活（`web boot: … did not activate`），见该 README 的「[升级残留自检与清理](dsh-graph-host/README.md#升级残留自检与清理)」。
 
-## 命令行（dsh-cli）
+## 命令行（dsh-graph）
 
 包内提供轻量 CLI（不依赖常驻服务、网络或第三方 CLI 框架），可直接读写工作区的 `.dsh-graph/`：
 
 ```sh
-npx --package dsh-graph dsh-cli info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
-npx --package dsh-graph dsh-cli status        # 目标数、事件数、最近事件、规则库版本
-npx --package dsh-graph dsh-cli goal list     # 列出目标（--all 含归档）
-npx --package dsh-graph dsh-cli goal show g-1 # 单个目标（元信息 + 正文）
-npx --package dsh-graph dsh-cli claim g-1     # 认领目标：推进到 in_progress 并输出「目标 + 判据 + 边界」任务单
+npx --package dsh-graph dsh-graph info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
+npx --package dsh-graph dsh-graph status        # 目标数、事件数、最近事件、规则库版本
+npx --package dsh-graph dsh-graph goal list     # 列出目标（--all 含归档）
+npx --package dsh-graph dsh-graph goal show g-1 # 单个目标（元信息 + 正文）
+npx --package dsh-graph dsh-graph claim g-1     # 认领目标：推进到 in_progress 并输出「目标 + 判据 + 边界」任务单
 ```
 
 > 除 `sync`（投影上下文）与 `claim`（认领目标）外，其余命令全部只读。`claim` 是**唯一会写看板**的命令：
 > 它经 core 状态机把 `planning`/`collecting`/`ready` 推进到 `in_progress`（事件先行），
 > 然后把轻量任务单打到 stdout；已是 `in_progress` 时幂等成功（不写事件）。
 
-> `npx --package dsh-graph dsh-cli …` 是**不预先安装**的写法（临时拉包后执行其 `bin` 条目）；
-> 已装进 `devDependencies` 时直接用 `npx dsh-cli …` 或 `./node_modules/.bin/dsh-cli …`。
+> `npx --package dsh-graph dsh-graph …` 是**不预先安装**的写法（临时拉包后执行其 `bin` 条目）；
+> 已装进 `devDependencies` 时直接用 `npx dsh-graph …` 或 `./node_modules/.bin/dsh-graph …`。
 > 本 CLI 的实测平台为 **Linux / WSL2**；**Windows / macOS 未验证**（未做真机兼容性测试，
 > 尤其未经 Windows 上 `npx` 与路径分隔符链路验证）。
 
-用法、退出码、路径定位规则与冷启动实测口径见 **[docs/dsh-cli-guide.md](docs/dsh-cli-guide.md)**。
+用法、退出码、路径定位规则与冷启动实测口径见 **[docs/dsh-graph-guide.md](docs/dsh-graph-guide.md)**。
 
 ## 核心概念
 

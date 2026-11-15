@@ -1,5 +1,5 @@
 /**
- * g-314：dsh-cli 核心引擎测试（参数解析 / 路径定位 / 环境容错 / 错误退出码 / 零副作用）。
+ * g-314：dsh-graph 核心引擎测试（参数解析 / 路径定位 / 环境容错 / 错误退出码 / 零副作用）。
  *
  * 覆盖判据：
  * - 判据 1：bin 入口在 package.json 注册、可执行、无第三方 CLI 框架/网络/常驻服务依赖；
@@ -14,7 +14,7 @@
  *
  * 反向变异口径（att-002 收口，按独立评审注记）：危险路径守卫与退出码这两条**不用本地闭包**
  * 伪造（闭包变异是**同义反复**——生产代码被改坏时它们照样通过），而是把**真实源码**（`core/cli/*.ts`
- * + 入口 `bin/dsh-cli.mjs`）复制进 `tmp/` 沙箱、就地改坏关键行，再用该副本的真进程执行断言。
+ * + 入口 `bin/dsh-graph.mjs`）复制进 `tmp/` 沙箱、就地改坏关键行，再用该副本的真进程执行断言。
  * 零副作用（内容哈希快照）与入口缺失两条原本即真变异，保留。
  */
 import { test } from "node:test";
@@ -45,8 +45,8 @@ import { init } from "../ops.ts";
 
 const repoRoot = join(import.meta.dirname, "../..");
 const tmpRoot = join(repoRoot, "tmp");
-const cliSourceEntry = join(repoRoot, "bin", "dsh-cli.mjs");
-const cliDistEntry = join(repoRoot, "dist", "bin", "dsh-cli.mjs");
+const cliSourceEntry = join(repoRoot, "bin", "dsh-graph.mjs");
+const cliDistEntry = join(repoRoot, "dist", "bin", "dsh-graph.mjs");
 
 /** 在仓库 tmp/ 下建一个用后即删的私有目录。 */
 function makeSandbox(prefix: string): { dir: string; cleanup: () => void } {
@@ -154,7 +154,7 @@ function runCliProcessEnv(entry: string, argv: string[], cwd: string, env: NodeJ
 }
 
 /**
- * 在沙箱里铺一份**真实源码副本**（`core/` 全量 + 入口 `bin/dsh-cli.mjs`）。
+ * 在沙箱里铺一份**真实源码副本**（`core/` 全量 + 入口 `bin/dsh-graph.mjs`）。
  *
  * 为什么整套复制 `core`：CLI 的模块图是 `core/cli/{args,locate,health,diagnostics,main}.ts`，再经
  * `../root.ts` / `../ops.ts` / `../events.ts` / `../domain/*` 等**相对导入**展开成整个 core 模块图。
@@ -162,8 +162,8 @@ function runCliProcessEnv(entry: string, argv: string[], cwd: string, env: NodeJ
  * `Cannot find module '…/core/root.ts'`）。复制整棵 `core/`（tests 除外，体积大且无关）后，
  * 相对导入在沙箱内自洽，且**被测行为仍来自真实生产源码**（仅变异行不同）。
  *
- * 入口按 `bin/dsh-cli.mjs` 的候选顺序（`../core/cli/main.js` → `../core/cli/main.ts`）加载，
- * 故沙箱布局必须是 `<sandbox>/bin/dsh-cli.mjs` + `<sandbox>/core/cli/*.ts`。
+ * 入口按 `bin/dsh-graph.mjs` 的候选顺序（`../core/cli/main.js` → `../core/cli/main.ts`）加载，
+ * 故沙箱布局必须是 `<sandbox>/bin/dsh-graph.mjs` + `<sandbox>/core/cli/*.ts`。
  */
 function makeMutationSandbox(sb: { dir: string }) {
   const binDir = join(sb.dir, "bin");
@@ -172,9 +172,9 @@ function makeMutationSandbox(sb: { dir: string }) {
     recursive: true,
     filter: (src) => !src.startsWith(join(repoRoot, "core", "tests")),
   });
-  cpSync(cliSourceEntry, join(binDir, "dsh-cli.mjs"));
+  cpSync(cliSourceEntry, join(binDir, "dsh-graph.mjs"));
   return {
-    entry: join(binDir, "dsh-cli.mjs"),
+    entry: join(binDir, "dsh-graph.mjs"),
     file(rel: string): string {
       return join(sb.dir, "core", "cli", rel);
     },
@@ -199,13 +199,13 @@ function mutateSource(file: string, from: string, to: string): void {
 // ---------------------------------------------------------------------------
 
 test("g-314 判据 1：bin 入口源码存在，dist 形态由 build.sh 复制且 package.json 注册 bin", async () => {
-  assert.ok(existsSync(cliSourceEntry), "仓库根 bin/dsh-cli.mjs 必须存在（源码形态入口）");
+  assert.ok(existsSync(cliSourceEntry), "仓库根 bin/dsh-graph.mjs 必须存在（源码形态入口）");
   const buildScript = readFileSync(join(repoRoot, "scripts", "build.sh"), "utf8");
   // 入口的发布形态必须由构建脚本生成（dist/ 是生成物，禁止手改）。
   assert.match(
     buildScript,
-    /^cp bin\/dsh-cli\.mjs dist\/bin\/dsh-cli\.mjs$/m,
-    "build.sh 必须把 bin/dsh-cli.mjs 复制到 dist/bin/dsh-cli.mjs（仓库相对字面形态，供 dist-freshness 逐字对账）",
+    /^cp bin\/dsh-graph\.mjs dist\/bin\/dsh-graph\.mjs$/m,
+    "build.sh 必须把 bin/dsh-graph.mjs 复制到 dist/bin/dsh-graph.mjs（仓库相对字面形态，供 dist-freshness 逐字对账）",
   );
   assert.match(
     buildScript,
@@ -214,13 +214,13 @@ test("g-314 判据 1：bin 入口源码存在，dist 形态由 build.sh 复制�
   );
   // bin 字段由**源** dsh-graph-host/package.json 提供（build 只复制入口文件，不新增顶层键）。
   const hostPkg = JSON.parse(readFileSync(join(repoRoot, "dsh-graph-host", "package.json"), "utf8"));
-  assert.deepEqual(hostPkg.bin, { "dsh-cli": "./bin/dsh-cli.mjs" }, "源 dsh-graph-host/package.json 必须声明 bin.dsh-cli");
+  assert.deepEqual(hostPkg.bin, { "dsh-graph": "./bin/dsh-graph.mjs" }, "源 dsh-graph-host/package.json 必须声明 bin.dsh-graph");
 
   const distPkgPath = join(repoRoot, "dist", "package.json");
   assert.ok(existsSync(distPkgPath), "请先运行 bash scripts/build.sh");
   const distPkg = JSON.parse(readFileSync(distPkgPath, "utf8"));
-  assert.deepEqual(distPkg.bin, { "dsh-cli": "./bin/dsh-cli.mjs" }, "dist/package.json 必须注册 bin.dsh-cli");
-  assert.ok(existsSync(cliDistEntry), "dist/bin/dsh-cli.mjs 必须由构建产出");
+  assert.deepEqual(distPkg.bin, { "dsh-graph": "./bin/dsh-graph.mjs" }, "dist/package.json 必须注册 bin.dsh-graph");
+  assert.ok(existsSync(cliDistEntry), "dist/bin/dsh-graph.mjs 必须由构建产出");
 
   // 入口不得引入任何第三方 CLI 框架：只允许 node 内置 + 本仓 core。
   const entrySrcRaw = readFileSync(cliSourceEntry, "utf8");
@@ -250,7 +250,7 @@ test("g-314 判据 1：dist 入口真进程可执行（version / help 退出 0�
   try {
     const v = runCliProcess(cliDistEntry, ["version"], sb.dir);
     assert.equal(v.code, EXIT_OK, `version 应退出 0，实际 ${v.code}；stderr=${v.stderr}`);
-    assert.match(v.stdout, /^dsh-cli \d+\.\d+\.\d+/, "version 输出应含版本号");
+    assert.match(v.stdout, /^dsh-graph \d+\.\d+\.\d+/, "version 输出应含版本号");
     const h = runCliProcess(cliDistEntry, ["help"], sb.dir);
     assert.equal(h.code, EXIT_OK);
     assert.match(h.stdout, /用法：/);
@@ -332,7 +332,7 @@ test("g-314 判据 5：--root 支持相对与绝对路径；相对以 cwd 为基
     // 从 workspace 内的子目录用相对路径指回 .dsh-graph
     const sub = join(workspace, "a");
     mkdirSync(sub, { recursive: true });
-    // `cd <ws>/a && dsh-cli --root ../.dsh-graph`：`.dsh-graph` 是 cwd 的**兄弟**，属典型合法用法
+    // `cd <ws>/a && dsh-graph --root ../.dsh-graph`：`.dsh-graph` 是 cwd 的**兄弟**，属典型合法用法
     // （过度设计的「必须包含关系」判据会把它误杀 —— 真实单测当场报红过，故这里是回归锚点）。
     const rel = locateGraphRoot({ cwd: sub, root: "../.dsh-graph" });
     assert.equal(rel.root, abs.root, "相对 --root 必须以 cwd 为基准解析（兄弟目录写法必须被接受）");
@@ -787,8 +787,8 @@ test("g-314 判据 7（反向变异·真源码副本）：退出码被吞成 0 �
 
     mutateSource(
       mutation.file("main.ts"),
-      "return { exitCode: EXIT_FAILURE, stdout: \"\", stderr: `dsh-cli: ${message}\\n` };",
-      "return { exitCode: EXIT_OK, stdout: \"\", stderr: `dsh-cli: ${message}\\n` };",
+      "return { exitCode: EXIT_FAILURE, stdout: \"\", stderr: `dsh-graph: ${message}\\n` };",
+      "return { exitCode: EXIT_OK, stdout: \"\", stderr: `dsh-graph: ${message}\\n` };",
     );
     const mutatedUsage = runCliProcessEnv(mutation.entry, ["bogus"], workspace, {});
     const mutatedFail = runCliProcessEnv(mutation.entry, ["goal", "show", "g-999"], workspace, {});
@@ -827,7 +827,7 @@ test("g-314 判据 7（反向变异·真源码副本）：入口缺失时入口�
   try {
     const orphanDir = join(sb.dir, "bin");
     mkdirSync(orphanDir, { recursive: true });
-    const orphan = join(orphanDir, "dsh-cli.mjs");
+    const orphan = join(orphanDir, "dsh-graph.mjs");
     writeFileSync(orphan, readFileSync(cliSourceEntry, "utf8"), "utf8");
     chmodSync(orphan, 0o755);
     const r = runCliProcess(orphan, ["version"], sb.dir);

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * dsh-cli 可执行入口（g-314）。
+ * dsh-graph 可执行入口（g-314）。
  *
  * 两个入口形态（判据 1：全局 + 项目本地，零常驻服务、零网络、零第三方 CLI 框架）：
  *
- * 1. **发布形态**：`dist/bin/dsh-cli.mjs` —— 由 build.sh 从本文件复制，`package.json` 的
- *    `bin.dsh-cli` 指向它；它加载同目录的编译产物 `../core/cli/main.js`（纯 JS，无需 type-strip）。
- * 2. **源码形态**：仓库根 `bin/dsh-cli.mjs` —— 直接 `node bin/dsh-cli.mjs`，加载 `core/cli/main.ts`
+ * 1. **发布形态**：`dist/bin/dsh-graph.mjs` —— 由 build.sh 从本文件复制，`package.json` 的
+ *    `bin.dsh-graph` 指向它；它加载同目录的编译产物 `../core/cli/main.js`（纯 JS，无需 type-strip）。
+ * 2. **源码形态**：仓库根 `bin/dsh-graph.mjs` —— 直接 `node bin/dsh-graph.mjs`，加载 `core/cli/main.ts`
  *    （Node ≥ 22.6 原生 type-stripping；node_modules 之外的 .ts 可加载）。
  *
  * 解析顺序：先找同目录 `../core/cli/main.js`（发布形态），再退回 `../core/cli/main.ts`（源码形态）。
@@ -42,9 +42,9 @@ async function main() {
   if (!mod) {
     const hint = lastError ? `（加载失败：${lastError.message}）` : "";
     process.stderr.write(
-      `dsh-cli: 找不到可执行核心模块${hint}\n` +
+      `dsh-graph: 找不到可执行核心模块${hint}\n` +
         `  期望其一存在：${CANDIDATES.join(" 或 ")}\n` +
-        `  发布形态请先运行 bash scripts/build.sh；源码形态请在仓库根运行 node bin/dsh-cli.mjs\n`,
+        `  发布形态请先运行 bash scripts/build.sh；源码形态请在仓库根运行 node bin/dsh-graph.mjs\n`,
     );
     process.exitCode = 1;
     return;

@@ -342,8 +342,8 @@ test("g-312 判据 4：逐字复制族（build.sh 的 cp 清单）dist 与源逐
   assert.deepEqual(
     copyPlan.files.map((pair) => pair.source).sort(),
     [
-      // g-314：dsh-cli 可执行入口（源码 bin/dsh-cli.mjs → dist/bin/dsh-cli.mjs）。
-      "bin/dsh-cli.mjs",
+      // g-314：dsh-graph 可执行入口（源码 bin/dsh-graph.mjs → dist/bin/dsh-graph.mjs）。
+      "bin/dsh-graph.mjs",
       "dsh-graph-host/LICENSE",
       "dsh-graph-host/README.md",
       "dsh-graph-host/cordis.patch.yml",

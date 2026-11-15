@@ -7,7 +7,7 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "dsh-cli": "./bin/dsh-cli.mjs"
+    "dsh-graph": "./bin/dsh-graph.mjs"
   },
   "exports": {
     ".": "./index.js",

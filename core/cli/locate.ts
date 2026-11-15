@@ -1,5 +1,5 @@
 /**
- * dsh-cli 路径定位（g-314 判据 5）：默认从 cwd 向上查找 `.dsh-graph`；`--root` 支持绝对/相对；
+ * dsh-graph 路径定位（g-314 判据 5）：默认从 cwd 向上查找 `.dsh-graph`；`--root` 支持绝对/相对；
  * 拒绝越界与危险路径；隔离项目不误用用户全局配置。
  *
  * **复用**：最终 root 一律经 `core/root.ts` 的 `resolveCanonicalRoot` 收口（linked worktree
@@ -87,7 +87,7 @@ export function findGraphWorkspace(start: string): string | null {
  * 拒绝「危险路径」（判据 5）。
  *
  * 注意：**不能**用「必须位于 cwd 之内/祖先」这种包含关系来判定越界 —— 它是过度设计且会
- * 误伤正常用法：`cd src && dsh-cli --root ../.dsh-graph` 里的 `.dsh-graph` 是 `cwd` 的
+ * 误伤正常用法：`cd src && dsh-graph --root ../.dsh-graph` 里的 `.dsh-graph` 是 `cwd` 的
  * **兄弟**，正是最典型的合法写法（真实单测当场报红）。危险边界只取两类**客观红线**：
  *
  * 1. 文件系统根 `/` 与各级家目录根本身（`/`、`~`、`$HOME`）——把整机/整个家目录当看板根

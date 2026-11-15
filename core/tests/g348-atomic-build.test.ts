@@ -227,11 +227,11 @@ function makeSandbox(): Sandbox {
   // g-496：提示词资产的**公共层**在仓库根 `prompts/`（构建合并两层的源之一）。
   // 沙箱是「与真实仓库同构」的构建环境，必须一并镜像，否则 build.sh 会 fail-closed 报层目录缺失。
   cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
-  // g-314：dsh-cli 入口源码根 `bin/`（build.sh 复制到 dist/bin/），沙箱须同构镜像。
+  // g-314：dsh-graph 入口源码根 `bin/`（build.sh 复制到 dist/bin/），沙箱须同构镜像。
   cpSync(join(repoRoot, "bin"), join(repo, "bin"), { recursive: true });
   // core 顶层入口及其纯域依赖参与构建，测试文件不参与构建
   cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
-  // g-314：dsh-cli 核心子目录（core/cli/*.ts → dist/core/cli/*.js）。
+  // g-314：dsh-graph 核心子目录（core/cli/*.ts → dist/core/cli/*.js）。
   cpSync(join(repoRoot, "core", "cli"), join(repo, "core", "cli"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {

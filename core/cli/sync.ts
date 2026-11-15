@@ -1,5 +1,5 @@
 /**
- * dsh-cli sync（g-315）：把 `.dsh-graph` 的**只读投影**写入 `.claude/CLAUDE.md` 与 `AGENTS.md`
+ * dsh-graph sync（g-315）：把 `.dsh-graph` 的**只读投影**写入 `.claude/CLAUDE.md` 与 `AGENTS.md`
  * 的受控标记区段，供 Claude Code / Codex 等单兵 CLI 工具作稳定前缀（Prompt Cache 命中）。
  *
  * 严格分层（判据 2）：
@@ -142,7 +142,7 @@ export function loadSyncInputs(root: string): SyncInputs {
   const problems: SyncError[] = [];
   // 目标可解析性预检须**先于**任何载入：`boardProjection` 对坏目标文件是 `catch { /* 坏目标文件跳过 */ }`
   // （core 有意如此，见 ops.ts / version-lane.ts），若只靠它，「一个合法目标 + 一个损坏目标」的看板会
-  // **静默成功**且把坏目标从投影里丢掉 —— 而同样场景 `dsh-cli goal list` 报「目标文件不可解析」并非零退出。
+  // **静默成功**且把坏目标从投影里丢掉 —— 而同样场景 `dsh-graph goal list` 报「目标文件不可解析」并非零退出。
   // sync 投影的是「当前在做什么」，静默少一个目标等于投影撒谎；故有坏目标即整体失败、零写入。
   const corruptGoals = goalParseProblems(root);
   problems.push(...corruptGoals);
@@ -158,7 +158,7 @@ export function loadSyncInputs(root: string): SyncInputs {
  * 目标文件**可解析性预检**（只读，零写）。
  *
  * 复用 core 既有诊断入口 `listGoals`（= `listGoalFiles` 枚举 + `loadGoal` 解析），**不手写第二套
- * frontmatter 解析**；其 `problems` 文案与 `dsh-cli goal list` 完全同源（含 core `loadGoal` 给出的
+ * frontmatter 解析**；其 `problems` 文案与 `dsh-graph goal list` 完全同源（含 core `loadGoal` 给出的
  * 具体原因，如「frontmatter 不是合法 JSON」），因此两个命令对同一份损坏数据给出同一结论。
  *
  * 范围与 sync 的输入面严格对齐：`boardProjection`（版本内 / 独立 / backlog）与 `buildGoalIndex`
@@ -180,7 +180,7 @@ function goalParseProblems(root: string): SyncError[] {
       "goal-file-corrupt",
       `发现 ${problems.length} 个无法解析的目标文件：${head}${more}。` +
         `core 的看板投影会静默跳过这些文件（目标会从投影里无声消失），故 sync 整体失败、不写任何文件；` +
-        `请先修复上述文件（或用 dsh-cli goal list 复核）再 sync`,
+        `请先修复上述文件（或用 dsh-graph goal list 复核）再 sync`,
     ),
   ];
 }
@@ -370,7 +370,7 @@ export function renderStablePrefix(standing: readonly StandingFact[]): string {
   lines.push("### A. 硬性事实（稳定前缀，勿手改）");
   lines.push("");
   lines.push(
-    "以下由 `dsh-cli sync` 从 `.dsh-graph/memory/` 的**常驻（standing）记忆**投影而来，是项目不可违背的硬性与环境约束。",
+    "以下由 `dsh-graph sync` 从 `.dsh-graph/memory/` 的**常驻（standing）记忆**投影而来，是项目不可违背的硬性与环境约束。",
   );
   lines.push("本区段是**稳定前缀**：不含计数、时间与任何派生状态 —— 记忆不变则逐字节不变，便于 Prompt 缓存命中。");
   lines.push("");
@@ -458,7 +458,7 @@ export function renderDynamicSection(versions: readonly VersionFact[], opts: Dyn
   if (folded.length > 0) {
     lines.push("");
     lines.push(
-      `- （其余 ${folded.length} 个目标已折叠：单次最多列 ${max} 个，用 \`dsh-cli sync --full\` 展开；完整清单用 \`dsh-cli goal list\`）`,
+      `- （其余 ${folded.length} 个目标已折叠：单次最多列 ${max} 个，用 \`dsh-graph sync --full\` 展开；完整清单用 \`dsh-graph goal list\`）`,
     );
   }
   return lines.join("\n");
@@ -473,7 +473,7 @@ export function renderSyncBlock(
   return [
     SYNC_MARKERS.begin,
     "",
-    "<!-- 本区段由 `dsh-cli sync`（g-315）自动生成，禁止手改：手改会在下次 sync 时被覆盖。 -->",
+    "<!-- 本区段由 `dsh-graph sync`（g-315）自动生成，禁止手改：手改会在下次 sync 时被覆盖。 -->",
     "<!-- 区段之外的内容由你维护，sync 永不触碰。投影来源：.dsh-graph 的常驻记忆与版本目标。 -->",
     "",
     renderStablePrefix(standing),
@@ -589,7 +589,7 @@ export interface SyncTargetPlan {
  * 写入位置 = **发起调用的 workspace 根**。
  *
  * 为什么不能直接取 `dirname(graph root)`（这是最容易踩的坑）：在 Git **linked worktree**
- * 里跑任何 dsh-cli 命令时，core 的 `resolveCanonicalRoot` 会把看板根**归一到主树**
+ * 里跑任何 dsh-graph 命令时，core 的 `resolveCanonicalRoot` 会把看板根**归一到主树**
  * （`mode: "canonicalized"`，见 `core/root.ts`）——由 `dirname(root)` 推出的 workspace 会是
  * **主树**，于是「在 worktree 里 sync」会静默改写主树的 AGENTS.md，而 worktree 自己的
  * AGENTS.md 纹丝不动（g-315 实测复现：从 worktree 根 sync 后 `git status` 干净，主树文件却变了）。

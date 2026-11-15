@@ -453,7 +453,7 @@ test("g-335 判据 4：tsconfig 仍只含 core 层、仍排除 core/tests，且�
     exclude?: string[];
   };
 
-  // g-314：`core/cli/*.ts`（dsh-cli 核心）仍是 **core 层**，不是被否决的「core/tests 或全仓」。
+  // g-314：`core/cli/*.ts`（dsh-graph 核心）仍是 **core 层**，不是被否决的「core/tests 或全仓」。
   // 这里用精确枚举而非通配：任何进一步扩张（如 `core/**`、`dsh-graph-host/**`）照旧判红。
   assert.deepEqual(
     tsconfig.include,

@@ -1,5 +1,5 @@
 /**
- * g-315：`dsh-cli sync` 上下文投影（稳定前缀 + 动态概览，受控区段替换 / 追加，原子写）测试。
+ * g-315：`dsh-graph sync` 上下文投影（稳定前缀 + 动态概览，受控区段替换 / 追加，原子写）测试。
  *
  * 覆盖判据（与目标 g-315 一一对应）：
  * - 判据 1：`sync` 命令生成/更新 `.claude/CLAUDE.md` 与 `AGENTS.md`，默认只读 `.dsh-graph` 资产；
@@ -55,7 +55,7 @@ import {
 
 const repoRoot = join(import.meta.dirname, "../..");
 const tmpRoot = join(repoRoot, "tmp");
-const cliSourceEntry = join(repoRoot, "bin", "dsh-cli.mjs");
+const cliSourceEntry = join(repoRoot, "bin", "dsh-graph.mjs");
 
 // ---------------------------------------------------------------------------
 // 夹具
@@ -169,7 +169,7 @@ function runCliProcess(entry: string, argv: string[], cwd: string) {
 }
 
 /**
- * 真源码副本沙箱：`core/` 全量（tests 除外）+ 入口 `bin/dsh-cli.mjs`。
+ * 真源码副本沙箱：`core/` 全量（tests 除外）+ 入口 `bin/dsh-graph.mjs`。
  * 相对导入在沙箱内自洽 ⇒ 变异体是**真实生产代码**，只有被变异的那一行不同。
  */
 function makeMutationSandbox(sb: { dir: string }) {
@@ -182,9 +182,9 @@ function makeMutationSandbox(sb: { dir: string }) {
   // `core/ops.ts` 在**模块加载期**就会读取 `prompts/` 下的资产（subagent-mode.*.md 等），
   // 缺了它副本会在 import 阶段直接崩（报 "prompt asset missing"），变异体根本不是可运行程序。
   cpSync(join(repoRoot, "prompts"), join(sb.dir, "prompts"), { recursive: true });
-  cpSync(cliSourceEntry, join(binDir, "dsh-cli.mjs"));
+  cpSync(cliSourceEntry, join(binDir, "dsh-graph.mjs"));
   return {
-    entry: join(binDir, "dsh-cli.mjs"),
+    entry: join(binDir, "dsh-graph.mjs"),
     file(rel: string): string {
       return join(sb.dir, "core", "cli", rel);
     },
@@ -481,8 +481,8 @@ test("g-315 判据4：无标记时按文档化规则追加（绝不覆盖）；�
   assert.match(APPEND_RULE, /追加到文件末尾/);
 
   // 判据 9：使用说明必须记录写入位置与受控区段规则（否则用户无从判断「我的文件被改了什么」）
-  const guide = read(join(repoRoot, "docs", "dsh-cli-guide.md"));
-  for (const needed of ["dsh-cli sync", "写入位置", "受控区段", "稳定前缀", "无变更不写", "原子写", "dsh-graph:sync:begin"]) {
+  const guide = read(join(repoRoot, "docs", "dsh-graph-guide.md"));
+  for (const needed of ["dsh-graph sync", "写入位置", "受控区段", "稳定前缀", "无变更不写", "原子写", "dsh-graph:sync:begin"]) {
     assert.ok(guide.includes(needed), `使用说明必须记录 sync 的：${needed}`);
   }
 });

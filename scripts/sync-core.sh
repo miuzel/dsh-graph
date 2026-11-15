@@ -32,7 +32,7 @@ dest="$DEST_DIR/core"
 rm -rf "$dest"
 mkdir -p "$dest"
 cp "$CORE_DIST"/*.js "$dest"/
-# 子目录必须存在：缺了会导致产物静默残缺（dist/core/cli 缺失 ⇒ dsh-cli 无法启动），
+# 子目录必须存在：缺了会导致产物静默残缺（dist/core/cli 缺失 ⇒ dsh-graph 无法启动），
 # 故在复制前显式断言，而不是等运行时才暴露。
 for sub in domain cli; do
   if [ ! -d "$CORE_DIST/$sub" ]; then
@@ -40,7 +40,7 @@ for sub in domain cli; do
     exit 1
   fi
   # g-393: compatibility entries import the internal hostless domain modules.
-  # g-314: dsh-cli 核心（core/cli/*.ts → dist/core/cli/*.js），由 dist/bin/dsh-cli.mjs 加载。
+  # g-314: dsh-graph 核心（core/cli/*.ts → dist/core/cli/*.js），由 dist/bin/dsh-graph.mjs 加载。
   cp -r "$CORE_DIST/$sub" "$dest"/
 done
 synced_total=$(find "$dest" -name '*.js' | wc -l)

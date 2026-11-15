@@ -80,11 +80,11 @@ function makeSandbox(opts: { withFreshnessSuite?: boolean } = {}): Sandbox {
   cpSync(join(repoRoot, "dsh-graph-host"), join(repo, "dsh-graph-host"), { recursive: true });
   // g-496：公共层提示词资产在仓库根 `prompts/`（构建合并两层的源之一），沙箱须同构镜像。
   cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
-  // g-314：dsh-cli 入口源码根 `bin/`（build.sh 复制到 dist/bin/），沙箱须同构镜像。
+  // g-314：dsh-graph 入口源码根 `bin/`（build.sh 复制到 dist/bin/），沙箱须同构镜像。
   cpSync(join(repoRoot, "bin"), join(repo, "bin"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
   cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
-  // g-314：dsh-cli 核心子目录（core/cli/*.ts → dist/core/cli/*.js）。
+  // g-314：dsh-graph 核心子目录（core/cli/*.ts → dist/core/cli/*.js）。
   cpSync(join(repoRoot, "core", "cli"), join(repo, "core", "cli"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));

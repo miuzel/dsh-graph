@@ -1,5 +1,5 @@
 /**
- * dsh-cli claim（g-316）：认领一个目标 + 把质量判据内联注入到当前工作上下文。
+ * dsh-graph claim（g-316）：认领一个目标 + 把质量判据内联注入到当前工作上下文。
  *
  * 价值：单兵工具写代码快但容易「需求走偏 / 遗漏非功能约束」。claim 在动手前把目标与判据
  * 摊在终端上，并把看板状态推进到 `in_progress`，让「先看判据再改代码」成为默认路径。
@@ -232,7 +232,7 @@ export function claimGoal(params: { root: string; id: string; actor: string }): 
         throw new ClaimError(
           "goal-file-corrupt",
           `目标文件损坏（frontmatter 或结构不可解析）无法认领：${shown}` +
-            `${corrupt.length > 3 ? ` 等 ${corrupt.length} 个` : ""} —— 请先修复该 goal.md（dsh-cli status 可看细节）`,
+            `${corrupt.length > 3 ? ` 等 ${corrupt.length} 个` : ""} —— 请先修复该 goal.md（dsh-graph status 可看细节）`,
         );
       }
       throw new ClaimError("goal-not-found", (e as Error).message);

@@ -1,5 +1,5 @@
 /**
- * dsh-cli 命令分派（g-314 / g-315）：把已解析的参数映射到命令执行，并把结果写成人类可读或 JSON。
+ * dsh-graph 命令分派（g-314 / g-315）：把已解析的参数映射到命令执行，并把结果写成人类可读或 JSON。
  *
  * 退出码约定（判据 4）：
  * - `0` 成功；
@@ -44,10 +44,10 @@ export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 
-const HELP_TEXT = `dsh-cli — 轻量 dsh-graph 看板命令行（默认只读；写命令只有 sync 与 claim）
+const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读；写命令只有 sync 与 claim）
 
 用法：
-  dsh-cli <命令> [选项]
+  dsh-graph <命令> [选项]
 
 命令：
   info             环境自检：Node 版本、graph root、初始化状态、关键文件可读性
@@ -56,7 +56,7 @@ const HELP_TEXT = `dsh-cli — 轻量 dsh-graph 看板命令行（默认只读�
   goal show <id>   显示单个目标（含正文）
   sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段
   claim <goal-id>  认领目标：把状态推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）
-  version          显示 dsh-cli 版本
+  version          显示 dsh-graph 版本
   help             显示本帮助
 
 选项：
@@ -98,12 +98,12 @@ function usageError(message: string): RunResult {
   return {
     exitCode: EXIT_USAGE,
     stdout: "",
-    stderr: `dsh-cli: ${message}\n运行 dsh-cli help 查看用法。\n`,
+    stderr: `dsh-graph: ${message}\n运行 dsh-graph help 查看用法。\n`,
   };
 }
 
 function failure(message: string): RunResult {
-  return { exitCode: EXIT_FAILURE, stdout: "", stderr: `dsh-cli: ${message}\n` };
+  return { exitCode: EXIT_FAILURE, stdout: "", stderr: `dsh-graph: ${message}\n` };
 }
 
 function jsonOut(value: unknown): string {
@@ -128,7 +128,7 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
     if (args.json) {
       return { exitCode: EXIT_OK, stdout: jsonOut({ version: ctx.version, node: process.version }), stderr: "" };
     }
-    return { exitCode: EXIT_OK, stdout: `dsh-cli ${ctx.version} (node ${process.version})\n`, stderr: "" };
+    return { exitCode: EXIT_OK, stdout: `dsh-graph ${ctx.version} (node ${process.version})\n`, stderr: "" };
   }
 
   // 其余命令都需要定位 graph root。
@@ -254,7 +254,7 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
 }
 
 /**
- * `dsh-cli sync`（g-315）：把 `.dsh-graph` 投影写入 workspace 根的两个受控区段。
+ * `dsh-graph sync`（g-315）：把 `.dsh-graph` 投影写入 workspace 根的两个受控区段。
  *
  * 输出口径：
  * - 每个目标一行状态：`written`（已更新）/ `unchanged`（无变更、未写，mtime 不变）/ `error`；
@@ -327,7 +327,7 @@ async function runSyncCommand(
 }
 
 /**
- * `dsh-cli claim <goal-id>`（g-316）：认领目标 + 输出轻量任务单。
+ * `dsh-graph claim <goal-id>`（g-316）：认领目标 + 输出轻量任务单。
  *
  * 输出口径：
  * - 成功（含 in_progress 幂等命中）⇒ exit 0；人类可读任务单写 stdout，`--json` 给结构化版本；
@@ -368,7 +368,7 @@ async function runClaimCommand(
 }
 
 /** claim 写入事件时的 actor 标识（与看板其它 CLI 动作一致：显式标明来源是可审计的前提）。 */
-const CLAIM_ACTOR = "cli:dsh-cli claim";
+const CLAIM_ACTOR = "cli:dsh-graph claim";
 
 /** 写入结果并返回退出码（供可执行入口复用；单测直接用 runCli 的返回值）。 */
 export async function runAndPrint(argv: readonly string[], ctx: CliContext): Promise<number> {
