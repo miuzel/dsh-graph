@@ -1,6 +1,6 @@
 # dsh-cli 使用说明（g-314）
 
-`dsh-cli` 是 dsh-graph 的**轻量只读命令行**：直接读写工作区里的 `.dsh-graph/` 资产，
+`dsh-cli` 是 dsh-graph 的**轻量命令行**（除 `sync`、`claim` 外全部只读）：直接读写工作区里的 `.dsh-graph/` 资产，
 不起常驻服务、不联网、不引入任何第三方 CLI 框架。面向单兵 CLI 工具（Claude Code、Codex、
 OpenCode 等）里「看一眼看板」的场景：一条命令、毫秒级返回。
 
@@ -38,6 +38,7 @@ dsh-cli status           看板状态：目标数、事件数、最近事件、�
 dsh-cli goal list        列出目标（默认不含归档；--all 含归档）
 dsh-cli goal show <id>   显示单个目标（元信息 + 正文）
 dsh-cli sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（g-315）
+dsh-cli claim <goal-id>  认领目标：推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）（g-316）
 dsh-cli version          显示版本
 dsh-cli help             显示帮助
 ```
@@ -51,7 +52,7 @@ dsh-cli help             显示帮助
 | 码 | 含义 |
 | --- | --- |
 | `0` | 成功 |
-| `1` | 运行期失败：非工作区、未初始化、目标不存在、损坏配置/事件流、非法路径 |
+| `1` | 运行期失败：非工作区、未初始化、目标不存在、损坏配置/事件流、非法路径、claim 的可判定拒绝 |
 | `2` | 用法错误：未知命令/子命令/选项、缺参、多余参数 |
 
 失败一律给出**中文可读原因**，且**零副作用**（不 init、不记事件、不建目录）。
@@ -160,13 +161,97 @@ dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sh
   `--full` 展开。完整清单仍用 `dsh-cli goal list`。
 - 只读资产：sync **不写 `.dsh-graph` 的任何字节**（测试用整树快照 + mtime/inode 断言）。
 
+## `dsh-cli claim <goal-id>`：认领目标 + 判据注入（g-316）
+
+单兵工具写代码快，但容易「需求走偏」或「遗漏非功能约束」。`claim` 在动手前把目标与判据摊在
+终端上，并把看板状态推进到 `in_progress`，让「先看判据再改代码」成为默认动作。
+
+```bash
+dsh-cli claim g-42            # 人类可读任务单
+dsh-cli claim g-42 --json     # 结构化（供脚本/Agent 读取）
+```
+
+输出（示例）：
+
+```text
+已认领 g-42：实现 xxx
+类型：feature @v1.0.0	状态：planning → in_progress
+
+质量判据（3 项，逐条自检后再声明完成）：
+  · 1. 命令必须精确解析描述与判据
+  √ 2. 状态迁移复用 core 状态机（已验）
+  · 3. 重复 claim 幂等
+
+边界提示：
+  - 状态：planning → in_progress（已写入一条 goal.transition 事件，事件先于文件）
+  - 本次只做状态认领 + 任务单：不派发子代理、不建 attempt 目录、不改任何代码。
+  - 看板根：/path/to/ws/.dsh-graph（本次写操作只落此目录）
+```
+
+行首 `·`/`√` 标记该判据是否已带「已验」标记（判定复用 core 的 `isCriterionVerified`）。
+
+### 它能做什么 / 不做什么
+
+| | 说明 |
+| --- | --- |
+| ✅ 读 | 目标元信息（id/标题/类型/版本/状态）、「质量判据」小节逐条判据 |
+| ✅ 写 | **只**把状态推进到 `in_progress`（经 core `transition`：状态机校验 → 事件先行 → 写目标文件） |
+| ❌ 不做 | 不派发子代理、不建 attempt 目录、不改代码、不写 `.claude/` 或 `AGENTS.md` |
+| ❌ 不做 | 不对已有判据做任何修改（判据是质量红线，claim 只读不写） |
+
+### 状态迁移与幂等
+
+- 合法入边：`planning` / `collecting` / `ready` → `in_progress`（core 状态机 `machine.ts` 的定义，
+  CLI 不复制也不放宽）。进入 `in_progress` 的前置条件由 core 强制：判据小节非空、`rules_snapshot`
+  已记录、存在 `criteria.confirmed` 事件。
+- **已是 `in_progress` ⇒ 幂等成功**（退出 `0`，`--json` 的 `changed=false`）：**不写任何事件**、
+  不改任何字节，仍输出完整任务单（可直接重复执行）。
+- **并发**：同一目标的 claim 经 core 的 `withLocalLock(.lock.claim-<id>)` 串行化；后到者在锁内
+  重读到 `in_progress` 即走幂等路径 ⇒ 并发 N 路只产生**一条** `goal.transition`。若锁被另一活进程
+  持有超过 1.5s，则明确拒绝（`claim-lock-busy`）而不是无限等待。
+
+### 事件先行（判据 3）
+
+写路径唯一，且顺序由 core 的 `commitPrepared` 决定：**先** `appendEvent`（`events.jsonl`）**再**
+`saveGoal`（目标文件）。
+
+- 事件阶段失败 ⇒ 目标文件**逐字节未变**，报「事件阶段」并注明「目标文件未改动」；
+- 持久化阶段失败 ⇒ 事件**已落盘**、目标文件未更新；core 补记 `tx.persist_failed`，CLI 报
+  「事件已落盘、重试同一命令即可收敛」（`--json`/stderr 均如实标注，不假装零写入）。
+
+### 边界与退出码
+
+| 场景 | 退出码 | 行为 / 原因 |
+| --- | --- | --- |
+| 成功（含幂等命中） | `0` | 输出任务单 |
+| 缺目标 ID / 多参 / 未知选项 | `2` | 用法错误 + 「运行 dsh-cli help 查看用法」 |
+| 目标不存在 | `1` | `目标不存在：<id>` |
+| **目标文件损坏** | `1` | 点名损坏文件（`goal-file-corrupt`），**不**伪装成「不存在」 |
+| 已归档 | `1` | `goal-archived` |
+| 无判据 / 空判据（只有模板占位） | `1` | `criteria-missing`，并提示用 `graph_set_criteria` 登记 |
+| 判据未确认（无 `criteria.confirmed`） | `1` | `criteria-unconfirmed` |
+| 缺 `rules_snapshot` | `1` | `rules-version-missing` |
+| 状态不允许（`review`/`delivered`/`blocked`/`draft`） | `1` | `state-not-allowed`，并列出可认领的入边 |
+| 非 dsh-graph 工作区 | `1` | 提示在项目根运行或 `--root`；**不**初始化、不回落全局配置 |
+| 看板未初始化（缺 `events.jsonl`） | `1` | 提示先初始化 |
+| 只读看板目录 | `1` | `board-unwritable`；预检在**取锁之前** ⇒ 连锁文件都不建 |
+| 并发认领（锁被占用） | `1` | `claim-lock-busy` |
+| 事件阶段失败 | `1` | 目标文件零改动 |
+| 持久化阶段失败 | `1` | 事件已落盘，如实标注 |
+
+**除「持久化阶段失败」（事件先行的固有余量）外，所有拒绝路径都是零副作用**：判定全部发生在
+任何写入之前；测试用「整树内容哈希 + inode + mtime」快照逐字节比对。
+
 ## 复用与安全边界
 
 - **复用 core**：`project.yaml` 走 `readProjectConfig`（含 `*_malformed` fail-closed 标志）、
   事件流走 `readEvents`、目标文件走 `listGoalFiles`/`loadGoal`/`findGoalFile`、
   frontmatter 与状态机全部来自 `core/domain/*`。CLI 不复制 frontmatter 解析、事件解析、
   状态机或锁逻辑（由 `core/tests/g314-dsh-cli.test.ts` 的可执行代码静态扫描守卫）。
-- **只读**：当前命令集不写任何文件。写操作留待后续目标，且须遵守 core 的锁与 CAS。
+- **写命令只有两个**：`sync`（写 workspace 根的受控区段，不碰 `.dsh-graph`）与 `claim`
+  （经 core 的锁 + 事件先行写看板状态）。其余命令不写任何文件。
+  `claim` 的迁移一律经 core 的 `transition`（CLI 不拼事件行、不自己写目标文件）；
+  由 `core/tests/g316-claim.test.ts` 的可执行代码静态扫描守卫。
 - **不读凭据、不联网**：源码不含 `node:http/https/net/dns/tls` 或 `fetch`。
 - **隔离**：不触碰用户全局配置，不写其他项目数据。
 
@@ -227,7 +312,9 @@ dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sh
 ## 测试
 
 ```bash
-node --test core/tests/g314-dsh-cli.test.ts   # 本目标专项：21 条用例
+node --test core/tests/g314-dsh-cli.test.ts   # g-314 专项：21 条用例
+node --test core/tests/g315-sync-projection.test.ts  # g-315 专项
+node --test core/tests/g316-claim.test.ts     # g-316 专项：22 条用例（含 4 条真源码副本反向变异）
 node scripts/run-tests.mjs                     # 整套件自证闸门
 ./node_modules/.bin/tsc --noEmit -p tsconfig.json
 ```

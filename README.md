@@ -53,14 +53,19 @@ dsh plugin --profile <name> add dsh-graph
 
 ## 命令行（dsh-cli）
 
-包内提供轻量只读 CLI（不依赖常驻服务、网络或第三方 CLI 框架），可直接读工作区的 `.dsh-graph/`：
+包内提供轻量 CLI（不依赖常驻服务、网络或第三方 CLI 框架），可直接读写工作区的 `.dsh-graph/`：
 
 ```sh
 npx --package dsh-graph dsh-cli info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
 npx --package dsh-graph dsh-cli status        # 目标数、事件数、最近事件、规则库版本
 npx --package dsh-graph dsh-cli goal list     # 列出目标（--all 含归档）
 npx --package dsh-graph dsh-cli goal show g-1 # 单个目标（元信息 + 正文）
+npx --package dsh-graph dsh-cli claim g-1     # 认领目标：推进到 in_progress 并输出「目标 + 判据 + 边界」任务单
 ```
+
+> 除 `sync`（投影上下文）与 `claim`（认领目标）外，其余命令全部只读。`claim` 是**唯一会写看板**的命令：
+> 它经 core 状态机把 `planning`/`collecting`/`ready` 推进到 `in_progress`（事件先行），
+> 然后把轻量任务单打到 stdout；已是 `in_progress` 时幂等成功（不写事件）。
 
 > `npx --package dsh-graph dsh-cli …` 是**不预先安装**的写法（临时拉包后执行其 `bin` 条目）；
 > 已装进 `devDependencies` 时直接用 `npx dsh-cli …` 或 `./node_modules/.bin/dsh-cli …`。

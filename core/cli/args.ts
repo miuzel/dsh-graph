@@ -46,7 +46,7 @@ export interface ParseResult {
 }
 
 /** 已知顶层命令（`goal` 为多子命令容器）。 */
-export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "help"] as const;
+export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "claim", "help"] as const;
 /** `goal` 的已知子命令。 */
 export const GOAL_SUBCOMMANDS = ["list", "show"] as const;
 
@@ -56,6 +56,7 @@ const MAX_POSITIONALS: Record<string, number> = {
   status: 0,
   version: 0,
   sync: 0,
+  claim: 1,
   help: 0,
   "goal list": 0,
   "goal show": 1,
@@ -216,6 +217,10 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   }
   if (command === "goal" && subcommand === "show" && tail.length === 0) {
     return err("missing-argument", "命令 goal show 需要一个目标 ID（用法：dsh-cli goal show <id>）");
+  }
+  // claim（g-316）：唯一写命令之一，必须显式给出目标 ID（不做任何「自动挑目标」的猜测）。
+  if (command === "claim" && tail.length === 0) {
+    return err("missing-argument", "命令 claim 需要一个目标 ID（用法：dsh-cli claim <goal-id>）");
   }
 
   return {
