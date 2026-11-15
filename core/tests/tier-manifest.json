@@ -518,30 +518,52 @@
   "uncertain": [
     {
       "file": "g355-mock-seed-shared-card.test.ts",
-      "why": "共享池定位 + 真实等待，保守归 integration。"
+      "tier": "full",
+      "labels": [
+        "perf"
+      ],
+      "why": "共享池定位 + 真实等待，保守归 full（重且低风险，与 microTests 无关）。"
     },
     {
       "file": "g613-reuse-idle-child.test.ts",
-      "why": "真实 child 复用 + 负向对照，归 integration。"
+      "tier": "full",
+      "labels": [
+        "variant"
+      ],
+      "why": "真实 child 复用 + 负向对照，成本高，归 full。"
     },
     {
       "file": "g507-evidence-collect.test.ts",
+      "tier": "shakedown",
+      "labels": [
+        "perf"
+      ],
       "why": "token 起点/脱敏含真实等待；按安全家族硬约束留日常层（shakedown），成本中。"
     },
     {
       "file": "g618-care-wake-compact.test.ts",
-      "why": "既有测试以 60s waitFor 上限等待 300s 冷却，实测 61s；不改测试，归 integration + perf。"
+      "tier": "full",
+      "labels": [
+        "perf"
+      ],
+      "why": "既有测试以 60s waitFor 上限等待 300s 冷却，实测 61s；不改测试，归 full + perf。"
     },
     {
       "file": "g353-build-chain-boundaries.test.ts",
+      "tier": "integration",
+      "labels": [],
       "why": "构建链嵌套 runner，实测 24.6s；归 integration。"
     },
     {
       "file": "g289-workspace-cleanliness.test.ts",
+      "tier": "shakedown",
+      "labels": [],
       "why": "隔离家族硬约束留日常层，但依赖 git 沙箱，成本中。"
     },
     {
       "file": "prompt-newline-escape-g331.test.ts",
+      "tier": "integration",
+      "labels": [],
       "why": "断言数 6 看似可下放，但读 dist/core/ops.js（构建产物依赖）并写 tmp/ ⇒ 属 integration 依赖面，**不**入 microTests。"
     }
   ]

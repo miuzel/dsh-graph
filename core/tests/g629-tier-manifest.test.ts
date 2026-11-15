@@ -103,10 +103,30 @@ function expandDeclared(manifest, tier, chain = [], problems = []) {
   return set;
 }
 
+/**
+ * 每条登记**真正声明的层**（红因点名用）：先找 `files` 里直接写了它的层；
+ * 都不写（forward include 情形）再退回到「展开集合含它」的层。
+ */
+function declaringTiers(manifest, file) {
+  const direct = Object.keys(manifest.tiers ?? {}).filter((t) =>
+    (manifest.tiers[t].files ?? []).includes(file),
+  );
+  if (direct.length > 0) return direct;
+  const inherited = Object.keys(manifest.tiers ?? {}).filter((t) =>
+    expandDeclared(manifest, t).has(file),
+  );
+  return inherited.length > 0 ? inherited : ["（无层声明）"];
+}
+
 /** 全部定位集合：日常梯度 + everything（磁盘端）+ microTests + focused 各专题。 */
 function buildSets(manifest, diskFileList, problems = []) {
   const tiers = {};
-  for (const tier of TIER_ORDER) tiers[tier] = expandDeclared(manifest, tier, [], problems);
+  // 未知层级也展开（fail-closed 点名，不让结构错误把守卫打崩）：`tiers.focused` 之类的误登记
+  // 必须能被「每层非空 / 层内缺失」这类判据看到，而不是只靠一个特判。
+  for (const tier of new Set([...TIER_ORDER, ...Object.keys(manifest.tiers ?? {})])) {
+    if (tier === "everything") continue;
+    tiers[tier] = expandDeclared(manifest, tier, [], problems);
+  }
   tiers.everything = new Set(diskFileList);
   const micro = new Set((manifest.microTests?.files ?? []).map((e) => e.file));
   const topics = {};
@@ -124,13 +144,31 @@ function manifestProblems(manifest, diskFileList) {
   const diskSet = new Set(diskFileList);
   const { tiers, micro, topics } = buildSets(manifest, diskFileList, problems);
 
+  // ── ⓞ 登记成员必须真实存在（**先于**未分类判定）──────────────────────────
+  // 删掉某层的登记条目会让该文件**同时**表现为「层内缺失」与「磁盘未分类」。若先报未分类，
+  // 真实红因就被掩盖了（评审实测：变异① 过去红的是「未分类」而「层内缺失」判据从未被验证）。
+  // 故「层内缺失」必须是**专属且排在最前**的红因，并点名真正声明它的层。
+  const unionAll = new Set();
+  for (const tier of Object.keys(manifest.tiers ?? {})) {
+    for (const file of manifest.tiers[tier].files ?? []) unionAll.add(file);
+  }
+  for (const entry of manifest.microTests?.files ?? []) if (entry?.file) unionAll.add(entry.file);
+  const phantomAll = list(unionAll).filter((f) => !diskSet.has(f));
+  if (phantomAll.length > 0) {
+    for (const file of phantomAll) {
+      problems.push(`层级「${declaringTiers(manifest, file).join("、")}」登记了磁盘上不存在的文件：${file}`);
+    }
+  }
+
   // ── ③ focused 不是层级 ────────────────────────────────────────────────────
   if (manifest.tiers?.focused) {
     problems.push("focused 出现在 tiers 里 ⇒ focused 是专题集合、不是层级，判红");
   }
-  for (const tier of TIER_ORDER) {
-    if ((manifest.tiers?.[tier]?.include ?? []).includes("focused")) {
-      problems.push(`层级「${tier}」include 了 focused ⇒ 专题集合不得作日常层底座，判红`);
+  for (const [tier, def] of Object.entries(manifest.tiers ?? {})) {
+    for (const parent of def?.include ?? []) {
+      if (parent === "focused" || String(parent).startsWith("focused")) {
+        problems.push(`层级「${tier}」include 了 focused ⇒ 专题集合不得作日常层底座，判红`);
+      }
     }
   }
   const topicEntries = Object.entries(manifest.focused?.topics ?? {});
@@ -160,10 +198,7 @@ function manifestProblems(manifest, diskFileList) {
   if (unclassified.length > 0) {
     problems.push(`磁盘有未分类测试文件（既不在 full 也不在 microTests）⇒ fail-closed 判红：${unclassified.join("、")}`);
   }
-  const phantom = list(unionFiles).filter((f) => !diskSet.has(f));
-  if (phantom.length > 0) {
-    problems.push(`manifest 登记了磁盘上不存在的文件（幽灵项）⇒ 判红：${phantom.join("、")}`);
-  }
+  // 幽灵项（登记了磁盘上不存在的文件）已由上面的 ⓞ 块**专属点名**，此处不重复报。
   for (const [name, entry] of (manifest.microTests?.files ?? []).entries()) {
     if (!entry.file || typeof entry.file !== "string") problems.push(`microTests[${name}] 缺少 file ⇒ 判红`);
     if (!entry.why || String(entry.why).trim().length < 20) {
@@ -222,6 +257,39 @@ function manifestProblems(manifest, diskFileList) {
     if (new Set(files).size !== files.length) problems.push(`标签「${label}」含重复文件 ⇒ 判红`);
     const ghost = files.filter((f) => !diskSet.has(f));
     if (ghost.length > 0) problems.push(`标签「${label}」含磁盘上不存在的文件 ⇒ 判红：${ghost.join("、")}`);
+  }
+
+  // ── ⑤ uncertain：层声明必须是**机械可核**的字段，而不是自由文本 ────────────
+  // 自由文本（"归 integration"）会与真实层级漂移且无人核（评审实测 4 条声明层与实际不符）。
+  // 故每条必须给 `tier` ∈ {shakedown, integration, full, everything}，且与文件**实际所在层**
+  // （小写层名精确相等）一致；`uncertain` 里不允许出现已下放 microTests 的文件。
+  for (const [index, entry] of (manifest.uncertain ?? []).entries()) {
+    const label = `uncertain[${index}]（${entry?.file ?? "缺 file"}）`;
+    if (!entry?.file || typeof entry.file !== "string") {
+      problems.push(`${label} 缺少 file ⇒ 判红`);
+      continue;
+    }
+    if (!diskSet.has(entry.file)) {
+      problems.push(`${label} 指向磁盘上不存在的文件 ⇒ 判红`);
+      continue;
+    }
+    if (typeof entry.why !== "string" || entry.why.trim().length < 10) {
+      problems.push(`${label} 缺少理由 why ⇒ 判红`);
+    }
+    if (micro.has(entry.file)) {
+      problems.push(`${label} 属 microTests ⇒ uncertain 只登记层级内的待核验项（microTests 由全文单列核验）`);
+      continue;
+    }
+    if (!TIER_ORDER.includes(entry.tier) && entry.tier !== "everything") {
+      problems.push(`${label} 的 tier 字段「${entry.tier}」不是合法层名（须为 ${[...TIER_ORDER, "everything"].join(" / ")}）`);
+      continue;
+    }
+    const actual = [...TIER_ORDER, "everything"].filter((t) => tiers[t].has(entry.file));
+    if (!actual.includes(entry.tier)) {
+      problems.push(
+        `${label} 声明的 tier「${entry.tier}」与文件实际所在层「${actual.join("、") || "无"}」不一致 ⇒ 判红`,
+      );
+    }
   }
 
   // 专题文件**可以**与层级重叠（这是有意的：专题是按需验证脚本，层级是回归梯度），
@@ -329,37 +397,69 @@ test("g-629 正向：专题内容允许与层级重叠，但每个专题可独�
 
 // ── ⑤ 反向变异：每类都必须让**同一套判据**报错 ────────────────────────────
 
-/** 变异前先断言正向全绿（保证「红」不是恒红，而是变异造成的）。 */
-function fresh(g, mutate) {
+/**
+ * 反向变异骨架：**真数据 + 真读磁盘**，唯一变异是 `mutate(ctx)`。
+ * 变异前先断言正向全绿 —— 否则「红」不是变异造成的，对照就没有意义。
+ * （形参只有 `mutate`：旧版首参从未被使用 = 死参数，评审点名，已删。）
+ */
+function fresh(mutate) {
   const manifest = readManifest();
   const files = diskFiles();
   assert.deepEqual(manifestProblems(manifest, files), [], "变异前正向必须全绿，否则变异对照无意义");
-  const cloned = structuredClone(manifest);
-  const disk = [...files];
-  const ctx = { manifest: cloned, disk };
-  mutate?.(ctx);
-  return { manifest: ctx.manifest, disk: ctx.disk, problems: manifestProblems(ctx.manifest, ctx.disk) };
+  const ctx = { manifest: structuredClone(manifest), disk: [...files] };
+  mutate(ctx);
+  return {
+    manifest: ctx.manifest,
+    disk: ctx.disk,
+    problems: manifestProblems(ctx.manifest, ctx.disk),
+  };
 }
 
-test("g-629 反向变异①：删掉某层的一个文件 ⇒ 判红并点名", () => {
-  const victim = "memory.test.ts";
-  const { problems } = fresh(null, ({ manifest }) => {
-    manifest.tiers.shakedown.files = manifest.tiers.shakedown.files.filter((f) => f !== victim);
+/** 判据给「专属红因」而不是靠子串巧合：命中则返回该条，便于断言**不是**别的红因。 */
+const findProblem = (problems, predicate) => problems.find(predicate);
+
+test("g-629 反向变异①：删掉某层的登记条目 ⇒ 红因是**专属**的「层级「X」登记了磁盘上不存在的文件」", () => {
+  // 选**磁盘上已不存在**的文件做受害项：这才是「登记了不存在的文件」的本义。
+  // （若改用「磁盘有、manifest 漏登记」，那会**同时**触发「未分类」，红因不专属 —— 评审变异① 的歧义正在这里。）
+  const victim = "g629-mutant-ghost.test.ts";
+  const { problems, disk } = fresh(({ manifest, disk: d }) => {
+    assert.ok(!d.includes(victim), `前置：${victim} 不在磁盘上（否则不是「不存在」的登记）`);
+    manifest.tiers.shakedown.files = [...manifest.tiers.shakedown.files, victim];
   });
+  assert.ok(!disk.includes(victim), "磁盘集合未变");
+  const hit = findProblem(problems, (p) => p.includes(`登记了磁盘上不存在的文件：${victim}`));
+  assert.ok(hit, `必须报专属红因「层内缺失」（不是只出现文件名），实际：${JSON.stringify(problems)}`);
+  assert.match(hit, /^层级「shakedown」登记了磁盘上不存在的文件：/, "红因必须点名真正声明它的层");
+  // 该文件同时会变成「未分类」，但**专属红因必须先出现**且排在未分类之前（否则真实原因被掩盖）。
+  const missingIndex = problems.indexOf(hit);
+  const unclassifiedIndex = problems.findIndex((p) => p.includes("未分类") && p.includes(victim));
+  assert.ok(missingIndex >= 0, "层内缺失必须被报告");
   assert.ok(
-    problems.some((p) => p.includes(victim)),
-    `删掉 shakedown 的 ${victim} 必须判红并点名，实际：${JSON.stringify(problems)}`,
+    unclassifiedIndex === -1 || missingIndex < unclassifiedIndex,
+    `层内缺失必须先于未分类判定，实际顺序：${JSON.stringify(problems)}`,
   );
 });
 
-test("g-629 反向变异②：把上层改成与下层相等 ⇒ 不是真子集必红", () => {
-  const { problems } = fresh(null, ({ manifest }) => {
-    // 清空 integration 的本层新增 ⇒ integration ≡ shakedown
-    manifest.tiers.integration.files = [];
+test("g-629 反向变异②：上层等于下层 ⇒ 红因是**专属**的「文件数相等（…）⇒ 不是真子集」", () => {
+  const { problems } = fresh(({ manifest }) => {
+    // 让 integration 的本层新增 = shakedown 本层新增的**一份副本** ⇒ integration ≡ shakedown（文件数相等），
+    // 且 full 的本层新增照旧保留 ⇒ **没有**任何层为空、也没有「反向子集」噪声；红因只剩「文件数相等」这条。
+    // （旧变异清空 integration.files：integration 仍真包含 shakedown，且红的是「真子集」字样巧合，评审点名。）
+    manifest.tiers.integration.files = [...manifest.tiers.shakedown.files];
   });
+  const hit = findProblem(problems, (p) => p.includes("文件数相等"));
+  assert.ok(hit, `integration ≡ shakedown 必须报专属红因「文件数相等」，实际：${JSON.stringify(problems)}`);
+  assert.match(hit, /^「shakedown」与「integration」文件数相等（\d+）⇒ 不是真子集，层级失去意义$/);
+  // **不是**「层为空」冒充：该变异下没有任何层为空。
+  assert.equal(
+    problems.find((p) => p.includes("为空")),
+    undefined,
+    `该变异不得触发「层为空」（否则红因是空的、不是相等）：${JSON.stringify(problems)}`,
+  );
+  // **不是**「不是子集」单腿：integration 仍真包含 shakedown，反向子集判据不得命中。
   assert.ok(
-    problems.some((p) => p.includes("shakedown") && p.includes("integration") && p.includes("真子集")),
-    `integration ≡ shakedown 必须判红「不是真子集」，实际：${JSON.stringify(problems)}`,
+    !problems.some((p) => p.includes("不是「integration」的子集") || p.includes("不是「full」的子集")),
+    `不得出现「不是子集」红因（否则红因来自别的判据）：${JSON.stringify(problems)}`,
   );
 });
 
@@ -374,7 +474,7 @@ test("g-629 反向变异③：磁盘新增未分类测试文件 ⇒ fail-closed 
     writeFileSync(join(dir, TESTS_DIR_REL, mutantName), "// g-629 变异对照用的未分类占位文件\n", "utf8");
     const readBack = readdirSync(join(dir, TESTS_DIR_REL)).filter((n) => n.endsWith(TEST_SUFFIX));
     assert.deepEqual(readBack, [mutantName], "变异目录必须真被读取（禁止写了不读的死代码）");
-    const { problems } = fresh(null, (ctx) => {
+    const { problems } = fresh((ctx) => {
       ctx.disk = [...ctx.disk, mutantName].sort();
     });
     assert.ok(
@@ -388,7 +488,7 @@ test("g-629 反向变异③：磁盘新增未分类测试文件 ⇒ fail-closed 
 
 test("g-629 反向变异④：把家族文件移出日常层 ⇒ 判红并点名", () => {
   const victim = "g415-gate-hardening.test.ts";
-  const { problems } = fresh(null, ({ manifest }) => {
+  const { problems } = fresh(({ manifest }) => {
     // 把它从 shakedown 挪到 full 的「本层新增」（日常层不再覆盖门禁家族）
     manifest.tiers.shakedown.files = manifest.tiers.shakedown.files.filter((f) => f !== victim);
     manifest.tiers.full.files = [...manifest.tiers.full.files, victim];
@@ -400,14 +500,14 @@ test("g-629 反向变异④：把家族文件移出日常层 ⇒ 判红并点名
 });
 
 test("g-629 反向变异⑤：专题集合为空 ⇒ 判红", () => {
-  const emptyAll = fresh(null, ({ manifest }) => {
+  const emptyAll = fresh(({ manifest }) => {
     manifest.focused.topics = {};
   });
   assert.ok(
     emptyAll.problems.some((p) => p.includes("专题集合为空")),
     `专题集合为空必须判红，实际：${JSON.stringify(emptyAll.problems)}`,
   );
-  const emptyOne = fresh(null, ({ manifest }) => {
+  const emptyOne = fresh(({ manifest }) => {
     manifest.focused.topics["gate-integrity"].files = [];
   });
   assert.ok(
@@ -417,14 +517,14 @@ test("g-629 反向变异⑤：专题集合为空 ⇒ 判红", () => {
 });
 
 test("g-629 反向变异⑥：把 focused 当层级用（层级 include focused / 放进 tiers）⇒ 判红", () => {
-  const asInclude = fresh(null, ({ manifest }) => {
+  const asInclude = fresh(({ manifest }) => {
     manifest.tiers.shakedown.include = ["focused"];
   });
   assert.ok(
     asInclude.problems.some((p) => p.includes("include 了 focused")),
     `层级 include focused 必须判红，实际：${JSON.stringify(asInclude.problems)}`,
   );
-  const asTier = fresh(null, ({ manifest }) => {
+  const asTier = fresh(({ manifest }) => {
     manifest.tiers.focused = { description: "把专题误做成层级", include: [], files: [] };
   });
   assert.ok(
@@ -433,15 +533,54 @@ test("g-629 反向变异⑥：把 focused 当层级用（层级 include focused 
   );
 });
 
-test("g-629 反向变异⑦：把家族文件下放到 microTests ⇒ 判红", () => {
+test("g-629 反向变异⑦：把家族文件下放到 microTests ⇒ 红因必须是**家族规则**，不是 why 长度", () => {
   const victim = "g507-http-auth-guard.test.ts";
-  const { problems } = fresh(null, ({ manifest }) => {
+  const { problems } = fresh(({ manifest }) => {
     manifest.tiers.shakedown.files = manifest.tiers.shakedown.files.filter((f) => f !== victim);
-    manifest.microTests.files = [...manifest.microTests.files, { file: victim, why: "变异对照：把安全家族下放" }];
+    manifest.microTests.files = [
+      ...manifest.microTests.files,
+      {
+        file: victim,
+        // why 必须**合法**（≥20 字符）：否则红因会变成「缺少代码证据 why」，家族规则根本没被执行
+        // —— 评审实测此处过去正是被 why 长度（<20）判红冒充的。
+        why: "变异对照用：故意把安全家族文件下放 microTests，why 字段本身合法，只为触发家族规则。",
+        guard: "变异对照（不带真负向对照）。",
+      },
+    ];
   });
   assert.ok(
-    problems.some((p) => p.includes(victim) && (p.includes("microTests") || p.includes("日常层"))),
-    `安全家族下放 microTests 必须判红并点名，实际：${JSON.stringify(problems)}`,
+    problems.every((p) => !p.includes("缺少代码证据 why")),
+    `why 已给足长度 ⇒ 不得出现「why 长度」红因（否则家族规则未被真正执行）：${JSON.stringify(problems)}`,
+  );
+  const family = findProblem(problems, (p) => p.includes("被下放到 microTests") && p.includes(victim));
+  assert.ok(family, `必须报**家族**规则红因「被下放到 microTests」，实际：${JSON.stringify(problems)}`);
+  assert.match(family, /^家族「安全\/鉴权」有文件被下放到 microTests/, "红因必须点名「安全/鉴权」家族");
+  // 「不在日常层」也是家族规则的另一条腿（同一变异必然同时命中），两条都要点名受害文件。
+  assert.ok(
+    findProblem(problems, (p) => p.includes("不在日常层") && p.includes(victim)),
+    `必须同时报「有文件不在日常层」：${JSON.stringify(problems)}`,
+  );
+});
+
+test("g-629 反向变异⑧：uncertain 的 tier 声明与实际层不符 ⇒ 判红（自由文本改机械核验）", () => {
+  const entry = readManifest().uncertain[0];
+  assert.ok(entry?.tier, "前置：uncertain 必须带结构化 tier 字段（否则本变异无意义）");
+  const wrongTier = entry.tier === "shakedown" ? "full" : "shakedown";
+  const mismatch = fresh(({ manifest }) => {
+    manifest.uncertain[0].tier = wrongTier;
+  });
+  assert.ok(
+    mismatch.problems.some(
+      (p) => p.includes(entry.file) && p.includes(`声明的 tier「${wrongTier}」`) && p.includes("不一致"),
+    ),
+    `tier 声明与真实层不符必须判红并点名，实际：${JSON.stringify(mismatch.problems)}`,
+  );
+  const bogus = fresh(({ manifest }) => {
+    manifest.uncertain[0].tier = "focused";
+  });
+  assert.ok(
+    bogus.problems.some((p) => p.includes(entry.file) && p.includes("不是合法层名")),
+    `tier 必须是合法层名（focused 不是层）⇒ 判红，实际：${JSON.stringify(bogus.problems)}`,
   );
 });
 
@@ -476,6 +615,87 @@ test("g-629 入口/闸门契约：分层入口只展开集合、不改闸门 glo
   assert.match(entry, /files\.length === 0/, "入口必须自己判空集失败");
   // ④ 入口必须支持专题选择与全专题选择
   assert.match(entry, /FOCUSED_PREFIX/, "入口必须支持 focused/<专题> 选择");
+});
+
+/**
+ * 真进程跑**入口本身**：把变异 manifest 写到 gitignored 的 `tmp/` 私有目录，经
+ * `TEST_TIER_MANIFEST` 指过去（只换清单路径，不改任何选择/判定语义），断言入口 exit≠0 且点名原因。
+ * 用 `--list` 以避免真的启动 run-tests.mjs（fail-closed 判定发生在选择展开**之前**）。
+ */
+function runEntryWithManifestArg(mutant, args = ["everything", "--list"]) {
+  const base = join(repoRoot, "tmp");
+  mkdirSync(base, { recursive: true });
+  const dir = mkdtempSync(join(base, "g629-entry-mutant-"));
+  try {
+    const path = join(dir, "tier-manifest.json");
+    writeFileSync(path, JSON.stringify(mutant, null, 2), "utf8");
+    const res = spawnSync(process.execPath, [join(repoRoot, ENTRY_REL), ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, TEST_TIER_MANIFEST: path },
+    });
+    return { status: res.status, stdout: res.stdout, stderr: res.stderr, path };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** 入口对**合法** manifest 必须照样判绿（保证下面每一条「红」都是变异造成的，不是恒红）。 */
+test("g-629 入口正向对照：合法 manifest ⇒ 入口 exit 0（变异红的参照）", () => {
+  const ok = runEntryWithManifestArg(readManifest());
+  assert.equal(ok.status, 0, `合法清单必须 exit 0，实际 ${ok.status}：${ok.stderr}`);
+  // 入口收到 `everything --list` ⇒ 打印该集合的规模与文件清单（前缀断言，不依赖缩进细节）。
+  assert.match(ok.stdout, /集合：everything → \d+ 个文件/, "必须真的打印选中集合与文件数");
+});
+
+test("g-629 入口反向变异（最重要）：manifest 新增 tiers.focused / 层 include focused ⇒ 入口真进程 exit≠0", () => {
+  const asTier = structuredClone(readManifest());
+  asTier.tiers.focused = { description: "把专题误当层级", include: [], files: [] };
+  const r1 = runEntryWithManifestArg(asTier);
+  assert.notEqual(r1.status, 0, `tiers.focused 必须被入口直接判红（不得当普通层跑绿），实际 exit ${r1.status}`);
+  assert.match(r1.stderr, /tiers\.focused 存在/, "必须点名 tiers.focused，而不是靠「未知层级/层为空」巧合拒绝");
+
+  const asInclude = structuredClone(readManifest());
+  asInclude.tiers.shakedown.include = ["focused"];
+  const r2 = runEntryWithManifestArg(asInclude);
+  assert.notEqual(r2.status, 0, `层级 include focused 必须判红，实际 exit ${r2.status}`);
+  assert.match(r2.stderr, /include 含「focused」/, "必须点名 include focused");
+
+  const asTopicPrefix = structuredClone(readManifest());
+  asTopicPrefix.tiers.full.include = ["focused/gate-integrity"];
+  const r3 = runEntryWithManifestArg(asTopicPrefix);
+  assert.notEqual(r3.status, 0, `include 以 focused 开头的成员同样必须判红，实际 exit ${r3.status}`);
+  assert.match(r3.stderr, /focused\/gate-integrity/, "必须点名违规的 focused/… 成员");
+});
+
+test("g-629 入口反向变异：层内登记了磁盘不存在的文件 ⇒ 专属红因、先于未分类（真进程）", () => {
+  const ghost = "g629-ghost-missing.test.ts";
+  const mutant = structuredClone(readManifest());
+  mutant.tiers.shakedown.files = [...mutant.tiers.shakedown.files, ghost];
+  const res = runEntryWithManifestArg(mutant, ["everything", "--list"]);
+  assert.notEqual(res.status, 0, `登记不存在的文件必须让入口判红，实际 exit ${res.status}`);
+  assert.match(res.stderr, /层级「shakedown」登记了磁盘上不存在的文件：/, "入口必须报专属红因「层内缺失」");
+  // 入口按固定优先级输出：先「层内缺失」，再（若有）「未分类」。
+  const missingAt = res.stderr.indexOf("登记了磁盘上不存在的文件");
+  const unclassifiedAt = res.stderr.indexOf("未分类");
+  assert.ok(missingAt >= 0, "缺失红因缺失");
+  assert.ok(unclassifiedAt === -1 || missingAt < unclassifiedAt, "层内缺失必须先于未分类判定");
+});
+
+test("g-629 入口反向变异：磁盘新增未分类文件 ⇒ 入口 fail-closed exit≠0 并点名（真进程）", () => {
+  // 语义等价形态：manifest **少登记**一个真实存在的文件 ⇒ 该文件在任何层里都查不到 = 磁盘未分类。
+  const victim = "memory.test.ts";
+  assert.ok(diskFiles().includes(victim), `前置：${victim} 必须真的在磁盘上`);
+  const mutant = structuredClone(readManifest());
+  for (const tier of Object.keys(mutant.tiers)) {
+    mutant.tiers[tier].files = mutant.tiers[tier].files.filter((f) => f !== victim);
+  }
+  const declared = Object.values(mutant.tiers).flatMap((d) => d.files ?? []);
+  assert.ok(!declared.includes(victim), "前置：变异后该文件不在任何层的登记里（= 未分类）");
+  const res = runEntryWithManifestArg(mutant, [victim, "--list"]);
+  assert.notEqual(res.status, 0, `未分类文件必须让入口判红，实际 exit ${res.status}`);
+  assert.match(res.stderr, /未分类测试文件/, "必须报「未分类」红因");
+  assert.match(res.stderr, new RegExp(victim.replace(/\./g, "\\.")), "必须点名该文件");
 });
 
 test("g-629 入口负向对照：未知层 / 未知专题 ⇒ 真实进程 exit 2（不跑任何判定）", () => {

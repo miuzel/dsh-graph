@@ -41,7 +41,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -53,7 +53,11 @@ process.stdout.on("error", (e) => {
 });
 
 const MANIFEST_REL = "core/tests/tier-manifest.json";
-const MANIFEST_PATH = join(repoRoot, MANIFEST_REL);
+// 守卫测试要用**真实进程**跑入口跑变异副本（不能只测函数）：`TEST_TIER_MANIFEST` 只换清单路径，
+// 不改变任何选择/判定语义；缺省就是仓库里那份唯一真源。
+const MANIFEST_PATH = process.env.TEST_TIER_MANIFEST
+  ? resolve(process.env.TEST_TIER_MANIFEST)
+  : join(repoRoot, MANIFEST_REL);
 const TESTS_DIR = "core/tests";
 const GATE = join(repoRoot, "scripts", "run-tests.mjs");
 const FOCUSED_PREFIX = "focused/";
@@ -75,7 +79,85 @@ function loadManifest() {
   const raw = readFileSync(MANIFEST_PATH, "utf8");
   const manifest = JSON.parse(raw);
   const hash = createHash("sha256").update(raw).digest("hex").slice(0, 12);
+  const problems = focusedMisuse(manifest);
+  if (problems.length > 0) {
+    throw new Error(`manifest 违规（focused 被当成层级/层成分）⇒ fail-closed：\n  - ${problems.join("\n  - ")}`);
+  }
   return { manifest, hash };
+}
+
+/**
+ * 入口侧的**清单完整性**自检（与守卫测试 `manifestProblems` 同口径、但**独立实现** —— 入口必须能自证，
+ * 不能只靠守卫文件跑绿）。问题顺序固定为「层内登记了磁盘不存在的文件 → 磁盘未分类 → 层为空」：
+ *
+ *  - **层内缺失**优先于**未分类**：删掉某层的登记会让该文件**同时**变成「未分类」与「层内缺失」，
+ *    若先报未分类，真实红因会被「未分类」掩盖（评审实测：变异①被误判成未分类）。
+ *  - 只核 `tiers`（登记成员必须是磁盘上真实存在的测试文件）；专题与标签的成员存在性由守卫核。
+ */
+function tierIntegrityProblems(manifest, disk) {
+  const diskSet = new Set(disk);
+  const missing = [];
+  const empty = [];
+  for (const [tier, def] of Object.entries(manifest.tiers ?? {})) {
+    const declared = [...new Set((def?.files ?? []).map(asPath))].sort();
+    for (const file of declared) {
+      if (!diskSet.has(file)) missing.push(`层级「${tier}」登记了磁盘上不存在的文件：${file.split("/").pop()}`);
+    }
+    if (tier !== "everything" && declared.length === 0) empty.push(tier);
+  }
+  const registered = new Set(
+    Object.values(manifest.tiers ?? {}).flatMap((def) => (def?.files ?? []).map(asPath)),
+  );
+  const micro = (manifest.microTests?.files ?? []).map((e) => asPath(e?.file ?? ""));
+  for (const file of micro) {
+    if (!diskSet.has(file)) missing.push(`microTests 登记了磁盘上不存在的文件：${file.split("/").pop()}`);
+  }
+  const unclassified = disk.filter((f) => !registered.has(f) && !micro.includes(f));
+  return { missing, unclassified, empty };
+}
+
+/** manifest 把文件名归一成 `core/tests/<name>` 路径（专题/标签/层级三种成员共用）。 */
+function asPath(name) {
+  return name.startsWith(`${TESTS_DIR}/`) ? name : `${TESTS_DIR}/${name}`;
+}
+
+/**
+ * `focused` 是**专题集合**，不是层级 —— 入口侧 fail-closed 自检（守卫测试另有同款判据，
+ * 两者**互相独立**：manifest 被改成「focused 当层」时，入口必须自己判红，而不是靠后续
+ * 「未知层级 / 层为空」之类的巧合拒绝 ⇒ 否则 tiers.focused 会被当普通层跑绿）。
+ *
+ * 判红条件（逐条点名）：
+ *  ① `manifest.tiers.focused` 存在（把专题误登记成日常层）；
+ *  ② 任一层（含 `everything` 与未知层名）的 `include` 里出现 `focused` 或以 `focused` 开头；
+ *  ③ 任一层 / 任一张专题的 `files` 里出现 `focused` 或以 `focused` 开头的**成员名**
+ *     （专题只有 `focused.topics` 一个真源，不得被别的集合 include）。
+ */
+function focusedMisuse(manifest) {
+  const problems = [];
+  if (manifest.tiers && Object.hasOwn(manifest.tiers, "focused")) {
+    problems.push("manifest.tiers.focused 存在 ⇒ focused 是专题集合、不是层级，不得登记为日常层");
+  }
+  for (const [tier, def] of Object.entries(manifest.tiers ?? {})) {
+    for (const parent of def?.include ?? []) {
+      if (typeof parent === "string" && (parent === "focused" || parent.startsWith("focused"))) {
+        problems.push(`层级「${tier}」的 include 含「${parent}」⇒ focused 专题不得作任何层的成分`);
+      }
+    }
+    for (const member of def?.files ?? []) {
+      const name = typeof member === "string" ? member : member?.file;
+      if (typeof name === "string" && (name === "focused" || name.startsWith(FOCUSED_PREFIX))) {
+        problems.push(`层级「${tier}」的 files 含专题成员「${name}」⇒ 专题与层级是正交两轴`);
+      }
+    }
+  }
+  for (const [topic, def] of Object.entries(manifest.focused?.topics ?? {})) {
+    for (const member of def?.files ?? []) {
+      if (typeof member === "string" && (member === "focused" || member.startsWith(FOCUSED_PREFIX))) {
+        problems.push(`专题「focused/${topic}」的 files 含「${member}」⇒ 专题成员必须是测试文件路径`);
+      }
+    }
+  }
+  return problems;
 }
 
 function diskFiles() {
@@ -83,11 +165,6 @@ function diskFiles() {
     .filter((name) => name.endsWith(DISK_GLOB_SUFFIX))
     .sort()
     .map((name) => `${TESTS_DIR}/${name}`);
-}
-
-/** 把 manifest 里的**文件名**归一成 `core/tests/<name>` 路径。 */
-function asPath(name) {
-  return name.startsWith(`${TESTS_DIR}/`) ? name : `${TESTS_DIR}/${name}`;
 }
 
 /**
@@ -264,7 +341,24 @@ async function main() {
   try {
     ({ manifest, hash } = loadManifest());
   } catch (e) {
-    return fail(`无法读取/解析分层清单 ${MANIFEST_REL}：${e.message}`);
+    return fail(`分层清单 ${MANIFEST_REL} 不可用 ⇒ fail-closed：${e.message}`);
+  }
+
+  // ── 入口自身的清单完整性（不依赖下游、也不依赖守卫文件是否被选中）────────────
+  // 顺序即优先级：层内缺失 → 磁盘未分类 → 层为空。绝不静默少跑（fail-closed）。
+  const integrity = tierIntegrityProblems(manifest, diskFiles());
+  if (integrity.missing.length > 0) {
+    return fail(
+      `清单登记了磁盘上不存在的文件（层内缺失）⇒ fail-closed，不得静默少跑：\n  - ${integrity.missing.join("\n  - ")}`,
+    );
+  }
+  if (integrity.unclassified.length > 0) {
+    return fail(
+      `磁盘有未分类测试文件（不在任何 tiers 层、也不在 microTests）⇒ fail-closed 判红：\n  - ${integrity.unclassified.join("\n  - ")}`,
+    );
+  }
+  if (integrity.empty.length > 0) {
+    return fail(`层级为空（${integrity.empty.join("、")}）⇒ fail-closed 判红`);
   }
 
   if (parsed.list) {

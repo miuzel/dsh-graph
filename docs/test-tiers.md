@@ -94,7 +94,12 @@ shakedown  ⊊  integration  ⊊  full          everything = full ∪ microTests
 | `focused/care-budget` | 27 | g-346/g-506/g-610/g-612/g-616/g-628：关照触发把预算/锁/子代理状态弄坏 |
 
 **专题内容与层级文件重叠是正常的、有意的**：同一文件既可能在 `shakedown`（日常回归梯度的一部分），
-也可能属于某个专题（按需调用的验证脚本）。两者是不同维度的东西，不是重复登记。6 个专题全部与日常层重叠。
+也可能属于某个专题（按需调用的验证脚本）。两者是不同维度的东西，不是重复登记。
+
+按入口实测（`node scripts/test-tier.mjs --list` 的集合比对）：6 个专题的**成员**共 78 个，按层内各专题的
+重叠数逐项核为 `10/10、15/17、12/12、6/6、6/6、27/27`；**去重后 78 个专题文件中 76 个（≈ 97%）落日常层**，
+不重叠的 2 个只挂 `full`（`g613-reuse-idle-child.test.ts`、`g613-reuse-idle-child-real-host.test.ts`，都在
+`focused/reuse-baseline` 里）。即「专题**可以**与层级重叠，但**不要求**且事实上**不是**全部重叠」。
 
 ```bash
 node scripts/test-tier.mjs focused                  # 跑**全部**专题（并集）
@@ -137,22 +142,43 @@ node scripts/test-tier.mjs --list                 # 只打印规模，不运行
 入口**不复制**上述任何逻辑（守卫断言入口源码里不存在 `parseEventChannel` / `coverageProblems` /
 `cleanTestEnv` 等判定符号），并**自行**判空集（不依赖下游）与**原样透传**下游退出码。
 
+入口自身另有一道 **fail-closed 清单自检**（在展开集合之前，不依赖下游、也不依赖守卫文件是否被选中），
+优先级固定、逐条点名：
+
+1. **focused 不得是层级**：`manifest.tiers.focused` 存在、或任一层 `include` 含 `focused` / 以 `focused` 开头
+   ⇒ 立即判红（否则会被当普通层跑绿 —— 这是本轮的返工重点）；
+2. **层内缺失**：某层/`microTests` 登记了磁盘上不存在的文件 ⇒「层级「X」登记了磁盘上不存在的文件：<名>」；
+3. **未分类**：磁盘有文件不属于任何层也不属 `microTests` ⇒ 判红；
+4. **层为空**：登记的层没有任何文件 ⇒ 判红。
+
+（前三条的**顺序**是有意的：删掉一条登记会让文件同时表现为「缺失」与「未分类」，若先报未分类，真实原因就被掩盖。）
+守卫测试用 `TEST_TIER_MANIFEST=<变异副本>` 让**真实进程**跑入口逐条验证（含合法清单的正向对照）。
+
 ## 6. 一致性守卫
 
-`core/tests/g629-tier-manifest.test.ts`（14 个用例）守这些事：
+`core/tests/g629-tier-manifest.test.ts`（19 个用例）守这些事：
 
-1. 日常梯度**严格真子集链** `shakedown ⊊ integration ⊊ full`（相邻层相等即判红）+ 层间不重复登记；
+1. 日常梯度**严格真子集链** `shakedown ⊊ integration ⊊ full`（相邻层**文件数相等**即判红，红因固定措辞
+   「文件数相等（n）⇒ 不是真子集」）+ 层间不重复登记；
 2. `everything = full ∪ microTests = 磁盘`：full 与 microTests **不相交**、并集与磁盘**双向相等**；
-   磁盘出现未分类新文件 ⇒ fail-closed 判红并**点名**；幽灵项 ⇒ 判红；
+   磁盘出现未分类新文件 ⇒ fail-closed 判红并**点名**；**登记了磁盘上不存在的文件** ⇒ **专属**红因
+   「层级「X」登记了磁盘上不存在的文件：<名>」，且**排在「未分类」之前**（否则删登记的真正原因被掩盖）；
 3. `focused` **不是层级**：不得出现在 `tiers`、不得被任何层 include；专题非空、有目的说明、文件真实存在；
 4. **三大家族必须有日常覆盖**：全部文件位于 `shakedown` 或 `integration`（清单在测试里**显式枚举**），
    且不得下放到 `microTests`；
 5. `microTests` **逐项复算代码证据**：断言数 ≤8、非家族、不 `import …/dist/…`、确实被排除在 full 外；
-6. **反向变异必红**（对**同一套**判据函数 `manifestProblems` 施加变异）：
-   ①删掉某层文件 ②上层改成与下层相等 ③新增未分类文件（真写进 `tmp/` 再真 `readdir` 读回）
-   ④把家族文件移出日常层 ⑤专题集合为空 ⑥把 focused 当层级 include ⑦把家族文件下放到 microTests；
-7. 入口/闸门契约：`TEST_GLOB` 字面量逐字不变、入口只 spawn 显式文件、不出现判定符号；
-   真实进程负向对照：未知层 / 未知专题 ⇒ `exit 2`。
+6. **反向变异必红**（对**同一套**判据函数 `manifestProblems` 施加变异；每条都断言**专属红因原文**，
+   并显式断言**不是**别的红因冒充 —— 例如变异⑦ 先把下放项的 `why` 给足长度，确保红因是**家族规则**而不是
+   「why 长度」；变异② 断言红因是「文件数相等」，并断言该变异**不得**触发「层为空」）：
+   ①登记了磁盘上不存在的文件 ②上层等于下层 ③新增未分类文件（真写进 `tmp/` 再真 `readdir` 读回）
+   ④把家族文件移出日常层 ⑤专题集合为空 ⑥把 focused 当层级 include / 放进 `tiers`
+   ⑦把家族文件下放到 microTests ⑧`uncertain[].tier` 与实际层不符 / 用了非层名；
+7. **结构化的 `uncertain`**：每条必须给 `tier` 字段（`shakedown`/`integration`/`full`/`everything`），
+   且与该文件**实际所在层**精确一致 —— 自由文本的层声明不再被接受（此前 4 条声明与实际不符）；
+8. 入口/闸门契约：`TEST_GLOB` 字面量逐字不变、入口只 spawn 显式文件、不出现判定符号；
+   **真进程**负向对照：未知层 / 未知专题 ⇒ `exit 2`；**入口自身**的 fail-closed —— 用
+   `TEST_TIER_MANIFEST=<变异副本>` 让入口跑 `tiers.focused` / `include: ["focused"]` / 缺失文件 / 未分类文件，
+   全部必须 `exit≠0` 并点名原因（合法清单作正向对照必须 `exit 0`）。
 
 **新增测试文件时**：把它登记进 `core/tests/tier-manifest.json` 的某一层 `files`（并考虑 `labels`、
 是否属于某个 `focused` 专题），否则下一次跑该守卫就会 fail-closed 判红并点名。
@@ -163,20 +189,22 @@ node scripts/test-tier.mjs --list                 # 只打印规模，不运行
 
 | 集合 | 文件数 | 测试数 | 墙钟 |
 | --- | --- | --- | --- |
-| `shakedown`（**日常推荐**） | 207 | 2488 | 48.4 s |
-| `integration` | 252 | 3069 | 58.7 s |
-| `full` | 259 | 3138 | 97.8 s |
-| `everything` | 261 | 3144 | 104.2 s |
-| `focused/gate-integrity`（按需专题） | 12 | 161 | 8.8 s |
-| `node scripts/run-tests.mjs`（发布门禁） | 261 | 3144 | 100.5 s |
+| `shakedown`（**日常推荐**） | 206 | 2493 | 46.9 s |
+| `integration` | 251 | 3074 | 57.2 s |
+| `full` | 258 | 3143 | 94.7 s |
+| `everything` | 261 | 3149 | 94.3 s |
+| `focused/gate-integrity`（按需专题） | 12 | 166 | 2.8 s |
+| `node scripts/run-tests.mjs`（发布门禁） | 261 | 3149 | 96.4 s |
 
-**shakedown 相对全量 ≈ 2.08×**（100.5 s ÷ 48.4 s）—— 这才是日常开发用的层。
-加速不来自「少跑测试」（83% 的测试仍在其中），而来自**把真实等待/构建链/真实宿主那批最贵的文件移出日常层**；
+**shakedown 相对全量 ≈ 2.06×**（96.4 s ÷ 46.9 s）—— 这才是日常开发用的层。
+加速不来自「少跑测试」（2493 / 3149 ≈ **79%** 的测试仍在其中），而来自**把真实等待/构建链/真实宿主那批最贵的文件移出日常层**；
 同机单次采样抖动约 ±10%，故加速比合理区间约 **1.9×–2.3×**。
 
 ## 8. 不确定项与已知限制
 
-- 待核验清单见 manifest 的 `uncertain` 字段（保守放在更靠前的层）。
+- 待核验清单见 manifest 的 `uncertain` 字段：每条必须带结构化 `tier`（`shakedown`/`integration`/`full`/`everything`）
+  与可选 `labels`，守卫**机械校验**它与文件实际所在层一致 —— 自由文本的层声明（"归 integration"）不再被接受，
+  因为它会与真实层级漂移且无人核（本轮修正了 4 条声明与实际不符的条目）。
 - `g618-care-wake-compact.test.ts` 实测 61s：既有测试以 60s `waitFor` 上限等待 300s 冷却（等不到即超时再继续），
   **未修改该测试**，只归入 `full` + `perf`。要真正降它需要改测试语义 —— 超出本目标范围。
 - 真实等待集中在少数文件上（`perf` 标签即「按需单独跑」的通道），这是 `shakedown` 能保持快的根本原因；
