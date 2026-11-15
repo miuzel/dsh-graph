@@ -71,6 +71,7 @@ test.after(() => {
 
 // ───────────────────────────── 真实宿主栈 + fake adapter（与 g506-bootstrap 同口径） ─────────────────────────────
 import { initServiceInstances } from "./_host-stack.ts";
+import { installRc3SubagentOwnership } from "./_rc3-subagents-stub.ts";
 
 async function resolveHostScope(): Promise<string> {
   const env = process.env.G505_HOST_STACK_DIR || process.env.G507_HOST_STACK_DIR;
@@ -154,7 +155,9 @@ async function makeRealHost() {
   llmRuntime.registerAdapter(["observed"], adapter);
   new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
   await initServiceInstances([reg, hostCtx.get("agentLoop")]);
-  return { hostCtx, llm: llmMod, llmRuntime, reg, adapter };
+  // g-626：补 rc.3 归属面（真实宿主由 dsh-subagent 的 rootOf 提供；轻量夹具未装载它）。
+  const subagents = installRc3SubagentOwnership(hostCtx, reg);
+  return { hostCtx, llm: llmMod, llmRuntime, reg, adapter, subagents };
 }
 
 // ───────────────────────────── 假时钟 / 假定时器（与 g506 同口径） ─────────────────────────────
@@ -251,7 +254,7 @@ function makeRuntime(host: any, opts: {
   const runtime = createCareRuntime({
     ctx: {
       on: (name: string, handler: any) => host.hostCtx.on(name, handler),
-      get: (name: string) => (name === "agents" ? host.reg : undefined),
+      get: (name: string) => (name === "agents" ? host.reg : name === "subagents" ? host.subagents : undefined),
     },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),

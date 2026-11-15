@@ -49,7 +49,9 @@ const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 // ============================================================================
 
 test("g-469 A① 派发 helper：新 API（startActivation）可用时走新名，且不触碰旧名", async () => {
-  const spec = { provider: "spawn", label: "graph:g-1/att-01", request: { parent: {}, prompt: [] }, signal: new AbortController().signal };
+  // g-624：调用点只提交**扁平 payload**；`request` 嵌套与否由 helper 按能力探测决定。
+  const parent = {};
+  const payload = { provider: "spawn", label: "graph:g-1/att-01", parent, prompt: [], signal: new AbortController().signal };
   const seen: any[] = [];
   const receipt = { childId: "child-new-1", result: {}, dispose: () => {} };
   const svc = {
@@ -57,18 +59,26 @@ test("g-469 A① 派发 helper：新 API（startActivation）可用时走新名�
     // 旧名刻意也在位（新宿主不会同时有，但若 helper 选错名这条会暴露）
     startContinuable: async (s: any) => { seen.push(["startContinuable", s]); return { childId: "child-old-1" }; },
   };
-  const got = await startSubagentCompat(svc, spec);
+  const got = await startSubagentCompat(svc, payload);
   assert.deepEqual(seen.map((x) => x[0]), ["startActivation"], "必须走新名，且不得同时调用旧名");
-  assert.equal(seen[0][1], spec, "spec 必须**原样**（同一对象引用）透传，语义逐字不变");
+  // 无 list() 且仅有 startActivation ⇒ rc.3 扁平形态：任务字段必须上提到顶层，且显式 delivery=parent
+  assert.deepEqual(seen[0][1], {
+    provider: payload.provider, label: payload.label, parent, prompt: [], signal: payload.signal, delivery: "parent",
+  }, "扁平形态：顶层 provider/label/parent/prompt/signal + delivery=parent，不得带 request 嵌套");
   assert.equal(got, receipt, "receipt 必须原样透出（childId 可读）");
 });
 
 test("g-469 A② 派发 helper：仅旧 API（startContinuable）可用时走旧名（0.2.0 系 / 0.2.1-alpha.1 回归）", async () => {
-  const spec = { provider: "spawn", label: "graph:collect/g-1/c-1", request: { parent: {}, prompt: [] }, signal: new AbortController().signal };
+  // 只有 startContinuable 的宿主全部早于 rc.3 扁平化 ⇒ 仍必须是嵌套 request 形态。
+  const parent = {};
+  const payload = { provider: "spawn", label: "graph:collect/g-1/c-1", parent, prompt: [], signal: new AbortController().signal };
   const seen: any[] = [];
   const svc = { startContinuable: async (s: any) => { seen.push(s); return { childId: "child-old", messageId: "m-1" }; } };
-  const got = await startSubagentCompat(svc, spec);
-  assert.deepEqual(seen, [spec], "必须走旧名且 spec 原样透传");
+  const got = await startSubagentCompat(svc, payload);
+  assert.deepEqual(seen, [{
+    provider: payload.provider, label: payload.label, request: { parent, prompt: [] }, signal: payload.signal, delivery: "parent",
+  }], "必须走旧名且保持嵌套 request 形态（+显式 delivery=parent）");
+  assert.equal(seen[0].request.parent, parent, "原 parent 引用不得被替换");
   assert.equal(got.childId, "child-old");
   assert.equal(got.parentSessionId ?? null, null, "旧宿主 receipt 无 parentSessionId ⇒ ?? null 兜底为 null，不崩");
 });
@@ -394,7 +404,9 @@ test("g-469 E① 真实宿主契约：方法名边界两版互斥，且与冻结
 test("g-469 E② 真实宿主契约：我方 spec 字段与 receipt 读取被两版真实实现覆盖（parentSessionId 兜底必需）", () => {
   const fx = readFixture();
   const ours: string[] = fx.probe_contract.call_spec_fields;
-  assert.deepEqual(ours, ["provider", "label", "request", "signal"], "我方 5 处调用传入的 spec 字段（逐字）");
+  // g-624：这里是 g-469 时代的**嵌套形态基线字段**；两形态现在都额外显式传 delivery=parent，
+  // 扁平形态（rc.3+）把 prompt/parent 上提到顶层 —— 形态断言见 g624-activation-spec-compat.test.ts。
+  assert.deepEqual(ours, ["provider", "label", "request", "signal"], "g-469 嵌套形态的基线 spec 字段（逐字）");
   const specUnion = new Set<string>();
   for (const v of fx.versions) {
     for (const field of ours) {
@@ -449,7 +461,8 @@ test("g-469 E③ 真实宿主契约（声明层）：.d.ts 声明的 spec/receip
     assert.ok(!receiptFields.some((d) => d.name === "parentSessionId"),
       `${v.host_version}/${receiptName}：声明里没有 parentSessionId ⇒ 我方 ?? null 兜底是必需契约`);
 
-    // 新版的必填 `delivery` 在运行时默认成 'parent' ⇒ 我方沿用旧调用形态（不传该字段）仍是建目录 child
+    // 新版声明必填 `delivery`，其运行时默认值恰为 'parent'；g-624 起我们**显式**传 'parent'
+    // （不再依赖该默认值），断言默认值仍为 parent 以便旧宿主/漏传时同样落到「通知父代理」。
     if (v.optional_field_defaults.delivery !== null) {
       assert.equal(v.optional_field_defaults.delivery, "parent",
         `${v.host_version}：声明必填的 delivery 必须有 'parent' 运行时默认，否则不传该字段会改变交付语义`);

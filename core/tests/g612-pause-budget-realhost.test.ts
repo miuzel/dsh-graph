@@ -17,6 +17,7 @@ import {
 import { appendEvent } from "../events.ts";
 import { invalidateBoardCache } from "../cache.ts";
 import { initServiceInstances } from "./_host-stack.ts";
+import { installRc3SubagentOwnership } from "./_rc3-subagents-stub.ts";
 
 const TMP_BASE = realpathSync((() => { const p = join(process.cwd(), "tmp"); mkdirSync(p, { recursive: true }); return p; })());
 const OWNED: string[] = [];
@@ -86,7 +87,9 @@ async function makeRealHost() {
   new AgentLoop(hostCtx, { agents: [], maxParallelToolCalls: 10 });
   // g-617：驱动直构服务的 `[Service.init]`（cordis 只在 ctx.plugin() 装载时自动调用）。
   await initServiceInstances([reg, hostCtx.get("agentLoop")]);
-  return { hostCtx, llm, llmRuntime, reg, adapter };
+  // g-626：补 rc.3 归属面（真实宿主由 dsh-subagent 的 rootOf 提供；轻量夹具未装载它）。
+  const subagents = installRc3SubagentOwnership(hostCtx, reg);
+  return { hostCtx, llm, llmRuntime, reg, adapter, subagents };
 }
 function fakeClock(start = 1_000_000) { let t = start; return { now: () => t, advance: (ms: number) => { t += ms; }, set: (v: number) => { t = v; } }; }
 function fakeScheduler(clock: ReturnType<typeof fakeClock>) {
@@ -123,7 +126,7 @@ function makeRuntime(host: any, opts: any) {
   const events: any[] = [];
   const { createCareRuntime } = opts;
   const runtime = createCareRuntime({
-    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : undefined) },
+    ctx: { on: (n: string, h: any) => host.hostCtx.on(n, h), get: (n: string) => (n === "agents" ? host.reg : n === "subagents" ? host.subagents : undefined) },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),
     defaultWorkspace: () => null,

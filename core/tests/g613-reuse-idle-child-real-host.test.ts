@@ -102,6 +102,7 @@ test("g-613 真实宿主 E2E ①：child 空闲 ⇒ attempt 建立+绑定+in_pro
   const h = await makeRealHost({ sessionQuery: true });
   try {
     const goal = dispatchableGoal(h, "e2e reuse idle", "task");
+    const registryBefore = new Set(h.reg.list().map((a: any) => String(a.id)));
     const seen: string[] = [];
     const d = makeIdleDispatcher(h, goal, { task_type: "fix" }, "承接 E2E 场景一", seen);
     const started = await h.startChild("expert");
@@ -129,7 +130,8 @@ test("g-613 真实宿主 E2E ①：child 空闲 ⇒ attempt 建立+绑定+in_pro
     assert.equal(seen.length, 1, "恰好向该 child 投递一次任务");
     assert.match(seen[0], /承接 E2E 场景一/, "child 收到的就是本次 attempt 的任务（含本次 brief）");
     assert.equal(h.childLive(started.childId), "running", "复用后 child 进入新一轮");
-    assert.equal(h.subagents.list().length, 1, "未新建第二个 child（provider 数不变）");
+    assert.deepEqual(new Set(h.reg.list().map((a: any) => String(a.id))),
+      new Set([...registryBefore, String(started.childId)]), "完整 registry 仅增加目标 child，未新建其他 agent");
   } finally {
     h.fake.releaseAll();
     await h.shutdown();

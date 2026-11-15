@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { init, createGoal, setCriteria, goalDetail, CRITERIA_VERIFIED_MARK } from "../ops.ts";
-import { apply } from "../../dist/index.js";
+import { apply, startSubagentCompat } from "../../dist/index.js";
 import { loadServicePlugin } from "./_http-auth-harness.ts";
 import { initServiceInstances, loadHostStack } from "./_host-stack.ts";
 
@@ -120,6 +120,7 @@ export async function makeRealHost(opts: {
   sessionQuery?: boolean;
   workspace?: string;
   sessionId?: string;
+  skipApply?: boolean;
 } = {}) {
   const P = await loadHostPackages();
   const wsBase = join(process.cwd(), "tmp", "g610");
@@ -227,7 +228,7 @@ export async function makeRealHost(opts: {
   const registered: any[] = [];
   const orig = ctx.tools.register.bind(ctx.tools);
   ctx.tools.register = (d: any) => { registered.push(d); return orig(d); };
-  apply(ctx, opts.relativeRoot ? {} : { root });
+  if (!opts.skipApply) apply(ctx, opts.relativeRoot ? {} : { root });
 
   const tool = (name: string) => registered.find((t) => t.name === name);
   const exec = { agent: parent, signal: new AbortController().signal };
@@ -274,10 +275,14 @@ export async function makeRealHost(opts: {
     tools: { get: tool },
     dispatch: async (goal: string, brief = "real host dispatch", extra: any = {}) =>
       tool("graph_start_attempt").execute({ goal, attempt_brief: brief, worktree: false, ...extra }, exec),
-    startChild: async (label = "fixture") => subagents.startActivation({
+    // g-626：rc.3 的 `startActivation` spec 是**扁平** `{ provider, parent, prompt }`
+    // （rc.1 的 `request: { parent, prompt }` 分组已不再被接受：`spec.parent` 会是 undefined）。
+    // 统一走产品同源的 compat helper，夹具不另立一套派发形态。
+    startChild: async (label = "fixture") => startSubagentCompat(subagents, {
       provider: "spawn",
       label,
-      request: { parent, prompt: [{ type: "text", text: "fixture child" }] },
+      parent,
+      prompt: [{ type: "text", text: "fixture child" }],
       signal: new AbortController().signal,
     }),
     childLive: (childId: string) => {
