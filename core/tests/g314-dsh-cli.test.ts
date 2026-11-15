@@ -11,19 +11,27 @@
  *
  * 全部夹具建在仓库 `tmp/` 下的**私有 mkdtemp 目录**（AGENTS.md 规定的临时区），
  * 用后清理；绝不触碰真实看板数据。
+ *
+ * 反向变异口径（att-002 收口，按独立评审注记）：危险路径守卫与退出码这两条**不用本地闭包**
+ * 伪造（闭包变异是**同义反复**——生产代码被改坏时它们照样通过），而是把**真实源码**（`core/cli/*.ts`
+ * + 入口 `bin/dsh-cli.mjs`）复制进 `tmp/` 沙箱、就地改坏关键行，再用该副本的真进程执行断言。
+ * 零副作用（内容哈希快照）与入口缺失两条原本即真变异，保留。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -130,6 +138,60 @@ const cli = runCliInProcess;
 function runCliProcess(entry: string, argv: string[], cwd: string) {
   const res = spawnSync(process.execPath, [entry, ...argv], { cwd, encoding: "utf8", timeout: 60_000 });
   return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+/** 变异体真进程执行：额外注入 env（用于 HOME / DSH_HOME 场景），并剔除测试继承的注入变量。 */
+function runCliProcessEnv(entry: string, argv: string[], cwd: string, env: NodeJS.ProcessEnv) {
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of ["NODE_TEST_CONTEXT", "NODE_TEST_WORKER_ID", "NODE_OPTIONS"]) delete childEnv[name];
+  const res = spawnSync(process.execPath, [entry, ...argv], {
+    cwd,
+    encoding: "utf8",
+    timeout: 60_000,
+    env: { ...childEnv, ...env },
+  });
+  return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+/**
+ * 在沙箱里铺一份**真实源码副本**（`core/` 全量 + 入口 `bin/dsh-cli.mjs`）。
+ *
+ * 为什么整套复制 `core`：CLI 的模块图是 `core/cli/{args,locate,health,diagnostics,main}.ts`，再经
+ * `../root.ts` / `../ops.ts` / `../events.ts` / `../domain/*` 等**相对导入**展开成整个 core 模块图。
+ * 只复制被变异的那一个文件会缺兄弟导入 —— 变异体根本不是可运行程序，结论无意义（实测报
+ * `Cannot find module '…/core/root.ts'`）。复制整棵 `core/`（tests 除外，体积大且无关）后，
+ * 相对导入在沙箱内自洽，且**被测行为仍来自真实生产源码**（仅变异行不同）。
+ *
+ * 入口按 `bin/dsh-cli.mjs` 的候选顺序（`../core/cli/main.js` → `../core/cli/main.ts`）加载，
+ * 故沙箱布局必须是 `<sandbox>/bin/dsh-cli.mjs` + `<sandbox>/core/cli/*.ts`。
+ */
+function makeMutationSandbox(sb: { dir: string }) {
+  const binDir = join(sb.dir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  cpSync(join(repoRoot, "core"), join(sb.dir, "core"), {
+    recursive: true,
+    filter: (src) => !src.startsWith(join(repoRoot, "core", "tests")),
+  });
+  cpSync(cliSourceEntry, join(binDir, "dsh-cli.mjs"));
+  return {
+    entry: join(binDir, "dsh-cli.mjs"),
+    file(rel: string): string {
+      return join(sb.dir, "core", "cli", rel);
+    },
+  };
+}
+
+/**
+ * 把 `file` 中的 `from` **就地**替换成 `to`，并断言**恰好命中一处**。
+ *
+ * 命中数必须为 1：否则「变异」可能落在注释/无关分支上，或干脆没生效 —— 那样失败可能是别的原因
+ * 造成的（假阳性对照）。
+ */
+function mutateSource(file: string, from: string, to: string): void {
+  const src = readFileSync(file, "utf8");
+  const hits = src.split(from).length - 1;
+  assert.equal(hits, 1, `变异锚点必须恰命中 1 处（${file} ← ${JSON.stringify(from)}），实际命中 ${hits}`);
+  writeFileSync(file, src.replace(from, to), "utf8");
 }
 
 // ---------------------------------------------------------------------------
@@ -309,21 +371,58 @@ test("g-314 判据 5（负向）：越界 / 不存在 / 非目录 / 空值 一�
     assert.equal(sysRoot?.code, "root-forbidden");
     assert.match(sysRoot.message, /系统根|家目录/);
 
-    const homeRoot = (() => {
-      const saved = process.env.HOME;
+    // 家目录：必须**真的改** process.env.HOME（att-002 前的用例只存不取，等于空转）。
+    // 天然 HOME（沙箱内）与「HOME 指向 workspace」两种取值都要覆盖，且 finally 恢复原值。
+    for (const label of ["沙箱内 artificial HOME", "HOME 指向 workspace（家目录即该目录）"] as const) {
+      const homeDir = label.startsWith("HOME 指向") ? workspace : join(sb.dir, "home", "alice");
+      mkdirSync(homeDir, { recursive: true });
+      const savedHome = process.env.HOME;
+      process.env.HOME = homeDir;
       try {
-        return forbid(workspace); // HOME 指向 workspace 时它即「家目录根本身」
+        assert.equal(process.env.HOME, homeDir, "必须真的改到 process.env.HOME（否则用例是空转）");
+        const e = forbid(homeDir);
+        assert.equal(e?.code, "root-forbidden", `${label}：家目录本身必须被拒绝，实际 ${e?.code}`);
+        assert.match(e?.message ?? "", /家目录/, `${label}：错误文案必须点名家目录`);
       } finally {
-        if (saved === undefined) delete process.env.HOME;
-        else process.env.HOME = saved;
+        if (savedHome === undefined) delete process.env.HOME;
+        else process.env.HOME = savedHome;
+      }
+    }
+    assert.notEqual(process.env.HOME, join(sb.dir, "home", "alice"), "HOME 必须在 finally 中恢复");
+
+    // $DSH_HOME 全局配置目录（及其**子目录**）一律不得作为看板根 —— 子目录也要真建出来，
+    // 否则会被 root-not-found 抢先命中（不是「被危险路径守卫拒绝」，断言就失真）。
+    const cfgHome = join(workspace, "global-home");
+    const cfgSub = join(cfgHome, "workspaces", "proj");
+    mkdirSync(cfgSub, { recursive: true });
+    for (const [label, target] of [
+      ["$DSH_HOME 本身", cfgHome],
+      ["$DSH_HOME 子目录", cfgSub],
+    ] as const) {
+      const e = forbid(target);
+      assert.equal(e?.code, "root-forbidden", `${label} 必须被拒绝，实际 ${e?.code}`);
+      assert.match(e?.message ?? "", /全局配置/, `${label} 的文案必须点名全局配置目录`);
+      assert.ok(e?.message.includes(cfgHome), `${label} 的文案必须点名具体的 $DSH_HOME 路径`);
+    }
+
+    // 符号链接根：**运行期**断言（不只靠源码里那段 lstat）。指向该沙箱内的真实空目录，
+    // 无论 fn 名是 `target/..` 两个分量，还是会解析成 `target`，空目录都不可能被当成合法看板。
+    const symTarget = join(sb.dir, "sym-target");
+    mkdirSync(symTarget, { recursive: true });
+    const symPath = join(sb.dir, "sym-root");
+    symlinkSync(symTarget, symPath, "dir");
+    assert.ok(lstatSync(symPath).isSymbolicLink(), "夹具前置：sym-root 必须是符号链接");
+    const symLinked = (() => {
+      try {
+        locateGraphRoot({ cwd: workspace, root: symPath });
+        return null;
+      } catch (e) {
+        return e as LocateError;
       }
     })();
-    assert.equal(homeRoot?.code, "root-forbidden", "家目录根本身必须被拒绝");
-
-    // $DSH_HOME 全局配置目录（及其子目录）一律不得作为看板根
-    const globalCfg = forbid(join(workspace, "global-home"));
-    assert.equal(globalCfg?.code, "root-forbidden");
-    assert.match(globalCfg.message, /全局配置/);
+    assert.ok(symLinked instanceof LocateError, `符号链接根必须被拒绝，实际被接受`);
+    assert.equal(symLinked.code, "root-symlink", `符号链接根必须报 root-symlink，实际 ${symLinked.code}`);
+    assert.match(symLinked.message, /符号链接/);
 
     const notFound = (() => {
       try {
@@ -632,47 +731,80 @@ test("g-314 判据 3：frontmatter 与事件流语义由 core 决定（CLI 只�
 // 判据 7：反向变异（把关键守卫改坏 ⇒ 断言必红）
 // ---------------------------------------------------------------------------
 
-test("g-314 判据 7（反向变异）：危险路径守卫若被移除，本套件的拒绝断言会失败", async () => {
-  // 变异体：去掉 assertSafeRoot 的「系统根 / 家目录 / $DSH_HOME」红线（等价于删除守卫）。
-  // 真实实现拒绝；变异体放行 ⇒ 上面「危险路径一律 LocateError」的断言必然报红。
-  const sb = makeSandbox("g314-mut");
-  try {
-    const { workspace, root } = makeBoard(sb.dir);
-    let realRejected = false;
-    try {
-      locateGraphRoot({ cwd: workspace, root: "/" });
-    } catch (e) {
-      realRejected = (e as LocateError).code === "root-forbidden";
-    }
-    assert.equal(realRejected, true, "真实实现必须拒绝系统根");
-
-    // 变异后的守卫（恒放行）：直接返回 core 的 canonical root 用于该路径 —— 会成功落地。
-    const mutatedGuardAccepts = (target: string): boolean => {
-      const forbidden: boolean = false; // ← 变异：红线失效
-      return !forbidden && isPathWithin(target, target);
-    };
-    assert.equal(mutatedGuardAccepts("/"), true, "变异体应放行系统根（否则本对照无意义）");
-    assert.ok(root.length > 0);
-  } finally {
-    sb.cleanup();
-  }
-});
-
-test("g-314 判据 7（反向变异）：取消失败退出码后，退出码分层断言会失败", async () => {
-  // 变异体：把所有错误都统一成 0（「静默成功」是最危险的退化）。
-  const mutateExit = (code: number): number => 0 * code;
-  const sb = makeSandbox("g314-mut2");
+test("g-314 判据 7（反向变异·真源码副本）：拆掉危险路径守卫后，同一拒绝断言在变异体上实测变红", async () => {
+  // 旧版是本地闭包 `mutatedGuardAccepts` 伪变异（同义反复：生产代码改坏照样通过）。现改为
+  // **真实源码副本变异**：把 core/cli 拷进沙箱、就地删掉 assertSafeRoot 里的红线分支，
+  // 再用真进程跑同一组断言。红 ⇒ 该断言确实能抓住「守卫被移除」。
+  //
+  // 变异手法：把 `isPathWithin(resolvedDshHome, abs) || isPathWithin(abs, resolvedDshHome)` 改成
+  // `(false && …) || (false && …)` —— 保留 assertNotSymlinkedGraphRoot 与类型形状，只让红线上失效。
+  // DSH_HOME 设为真实存在的 `~/.dsh`（非 main-tree）是为了**避免越界**：该值一旦在桩目录下，
+  // worktree 归一可能把它改写成主树里真实存在的 `<repo>/.dsh-graph`，变异体就会「成功落地」在真实看板上。
+  const sb = makeSandbox("g314-mut-danger");
   try {
     const { workspace } = makeBoard(sb.dir);
-    const real = await runCliInProcess(["bogus"], workspace);
-    assert.equal(real.exitCode, EXIT_USAGE, "真实实现：未知命令退出 2");
-    assert.equal(mutateExit(real.exitCode), EXIT_OK, "变异体：未知命令会被报成成功 ⇒ 上面的断言必然失败");
+    const fakeHome = join(sb.dir, "home", "alice");
+    mkdirSync(fakeHome, { recursive: true });
+    // 真实 DSH_HOME 子目录：注入值必须「存在」才可能在变异体上成功落地。
+    const realDshHome = join(fakeHome, ".dsh");
+    const realDshSub = join(realDshHome, "workspaces", "proj");
+    mkdirSync(realDshSub, { recursive: true });
+    const env = { HOME: fakeHome, DSH_HOME: realDshHome };
+
+    const mutation = makeMutationSandbox(sb);
+    // 前置：未变异的副本必须与仓库实现逐字一致地拒绝（否则变异对照无意义）。
+    const pristine = runCliProcessEnv(mutation.entry, ["--root", realDshSub, "info"], workspace, env);
+    assert.equal(pristine.code, EXIT_FAILURE, `副本未变异时必须拒绝 $DSH_HOME 子目录；stderr=${pristine.stderr}`);
+    assert.match(pristine.stderr, /全局配置/, "副本未变异时必须给出「全局配置」拒绝原因");
+
+    mutateSource(
+      mutation.file("locate.ts"),
+      "if (isPathWithin(resolvedDshHome, abs) || isPathWithin(abs, resolvedDshHome)) {",
+      "if ((false && isPathWithin(resolvedDshHome, abs)) || (false && isPathWithin(abs, resolvedDshHome))) {",
+    );
+    const mutated = runCliProcessEnv(mutation.entry, ["--root", realDshSub, "info"], workspace, env);
+    assert.notEqual(mutated.code, EXIT_FAILURE, `变异体必须放行 $DSH_HOME 子目录（否则本对照不成立）；stderr=${mutated.stderr}`);
+    assert.equal(mutated.code, EXIT_OK, `变异体应把该路径当合法看板；stderr=${mutated.stderr}`);
+    // ⇒ 上面「$DSH_HOME 子目录必须 root-forbidden」的断言在变异体上必然失败。
   } finally {
     sb.cleanup();
   }
 });
 
-test("g-314 判据 7（反向变异）：零副作用守卫若失效（命令写文件），快照断言会失败", async () => {
+test("g-314 判据 7（反向变异·真源码副本）：退出码被吞成 0 后，分层断言在变异体上实测变红", async () => {
+  // 旧版是本地闭包 `mutateExit = (code) => 0 * code`（同义反复）。现改为改坏真实源码：
+  // 把 `failure()` 的退出码 1 改成 0（「静默成功」是最危险的退化），再跑真进程。
+  const sb = makeSandbox("g314-mut-exit");
+  try {
+    const { workspace } = makeBoard(sb.dir);
+    const mutation = makeMutationSandbox(sb);
+
+    // 前置：未变异副本的退出码分层与仓库实现一致（用法错误 2 / 运行期失败 1）。
+    const pristineUsage = runCliProcessEnv(mutation.entry, ["bogus"], workspace, {});
+    const pristineFail = runCliProcessEnv(mutation.entry, ["goal", "show", "g-999"], workspace, {});
+    assert.equal(pristineUsage.code, EXIT_USAGE, "副本未变异时用法错误必须退出 2");
+    assert.equal(pristineFail.code, EXIT_FAILURE, "副本未变异时运行期失败必须退出 1");
+
+    mutateSource(
+      mutation.file("main.ts"),
+      "return { exitCode: EXIT_FAILURE, stdout: \"\", stderr: `dsh-cli: ${message}\\n` };",
+      "return { exitCode: EXIT_OK, stdout: \"\", stderr: `dsh-cli: ${message}\\n` };",
+    );
+    const mutatedUsage = runCliProcessEnv(mutation.entry, ["bogus"], workspace, {});
+    const mutatedFail = runCliProcessEnv(mutation.entry, ["goal", "show", "g-999"], workspace, {});
+    assert.equal(mutatedUsage.code, EXIT_USAGE, "`bogus` 走用法错误分支（EXIT_USAGE），本变异不动它");
+    assert.equal(mutatedFail.code, EXIT_OK, `变异体必须把运行期失败吞成 0（否则本对照不成立）；stderr=${mutatedFail.stderr}`);
+    assert.ok(mutatedFail.stderr.length > 0, "变异体仍产出可读 stderr（只是退出码被吞）");
+    // ⇒ 上面「运行期失败必须退出 1」的断言在变异体上必然失败。
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("g-314 判据 7（敏感性对照）：看板树被写入时，零副作用快照断言必红", async () => {
+  // **口径如实**：这不是源码变异，而是「快照断言的敏感性」对照 —— 它在测试索引一个额外写入后，
+  // 证明 snapshotTree（内容哈希 + inode + mtime）确实能抓住写入副作用。零副作用守卫（真实命令不写）
+  // 由上面的「所有失败路径与只读命令都不修改看板目录树」用例承担。保留本对照，不做删弱。
   const sb = makeSandbox("g314-mut3");
   try {
     const { root } = makeBoard(sb.dir);
@@ -681,22 +813,21 @@ test("g-314 判据 7（反向变异）：零副作用守卫若失效（命令写
     const { workspace } = { workspace: join(sb.dir, "ws") };
     await runCliInProcess(["status"], workspace);
     assert.equal(snapshotTree(root), before, "真实实现零副作用");
-    // 变异体：写一个文件（模拟「读命令顺手 init/记事件」的退化）
+    // 写入一个文件（模拟「读命令顺手 init/记事件」的退化）⇒ 快照必须抓到
     writeFileSync(join(root, "index.json"), "{}\n", "utf8");
-    assert.notEqual(snapshotTree(root), before, "变异体必须被快照抓到 ⇒ 上面的零副作用断言会失败");
+    assert.notEqual(snapshotTree(root), before, "写入必须被快照抓到 ⇒ 零副作用断言会失败");
   } finally {
     sb.cleanup();
   }
 });
 
-test("g-314 判据 7（反向变异）：入口缺失时入口报错而非静默成功", async () => {
-  // 变异对照：把入口指向一个不存在的 core 模块目录 ⇒ 必须非零退出并给出可读原因。
+test("g-314 判据 7（反向变异·真源码副本）：入口缺失时入口报错而非静默成功", async () => {
+  // 真变异：复制**真实入口源码**，但放到没有 ../core/cli 的位置 ⇒ 命中「找不到核心模块」分支。
   const sb = makeSandbox("g314-noentry");
   try {
     const orphanDir = join(sb.dir, "bin");
     mkdirSync(orphanDir, { recursive: true });
     const orphan = join(orphanDir, "dsh-cli.mjs");
-    // 复制真实入口，但放在没有 ../core/cli 的位置 ⇒ 加载失败分支
     writeFileSync(orphan, readFileSync(cliSourceEntry, "utf8"), "utf8");
     chmodSync(orphan, 0o755);
     const r = runCliProcess(orphan, ["version"], sb.dir);

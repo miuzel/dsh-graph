@@ -56,11 +56,16 @@ dsh plugin --profile <name> add dsh-graph
 包内提供轻量只读 CLI（不依赖常驻服务、网络或第三方 CLI 框架），可直接读工作区的 `.dsh-graph/`：
 
 ```sh
-npx dsh-cli info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
-npx dsh-cli status        # 目标数、事件数、最近事件、规则库版本
-npx dsh-cli goal list     # 列出目标（--all 含归档）
-npx dsh-cli goal show g-1 # 单个目标（元信息 + 正文）
+npx --package dsh-graph dsh-cli info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
+npx --package dsh-graph dsh-cli status        # 目标数、事件数、最近事件、规则库版本
+npx --package dsh-graph dsh-cli goal list     # 列出目标（--all 含归档）
+npx --package dsh-graph dsh-cli goal show g-1 # 单个目标（元信息 + 正文）
 ```
+
+> `npx --package dsh-graph dsh-cli …` 是**不预先安装**的写法（临时拉包后执行其 `bin` 条目）；
+> 已装进 `devDependencies` 时直接用 `npx dsh-cli …` 或 `./node_modules/.bin/dsh-cli …`。
+> 本 CLI 的实测平台为 **Linux / WSL2**；**Windows / macOS 未验证**（未做真机兼容性测试，
+> 尤其未经 Windows 上 `npx` 与路径分隔符链路验证）。
 
 用法、退出码、路径定位规则与冷启动实测口径见 **[docs/dsh-cli-guide.md](docs/dsh-cli-guide.md)**。
 

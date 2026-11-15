@@ -20,10 +20,15 @@ OpenCode 等）里「看一眼看板」的场景：一条命令、毫秒级返�
 npm i -g dsh-graph && dsh-cli info
 # 项目本地（package.json devDependencies）
 npm i -D dsh-graph && npx dsh-cli info      # 或 ./node_modules/.bin/dsh-cli info
+# 不预先安装的一次性用法（临时拉包后执行其 bin）
+npx --package dsh-graph dsh-cli info
 # 本仓库开发（先构建）
 bash scripts/build.sh
 node dist/bin/dsh-cli.mjs info
 ```
+
+> **平台**：本 CLI 的实测平台是 **Linux / WSL2**；**Windows / macOS 未验证** —— 未做真机兼容性
+> 测试，尤其是 Windows 下的 `npx` 调用链与路径分隔符处理，勿据本文推定「已支持」。
 
 ## 命令
 
@@ -54,8 +59,9 @@ dsh-cli help             显示帮助
 - 默认从当前目录**向上查找** `.dsh-graph`，命中最近的祖先即用；
 - `--root` 支持绝对路径与相对路径（相对当前目录），可指向看板目录本身（`.../.dsh-graph`）
   或它所在的 workspace（构建时按 core 的默认相对 root 补齐 `.dsh-graph`）；
-- 拒绝危险路径：文件系统根、家目录本身、以及用户全局配置目录（`$DSH_HOME`，默认 `~/.dsh`）
-  及其子目录；符号链接目录同样拒绝；
+- **危险路径拦截只对显式 `--root` 生效**：文件系统根、家目录本身、用户全局配置目录
+  （`$DSH_HOME`，默认 `~/.dsh`）及其子目录一律拒绝，符号链接目录同样拒绝。
+  默认的「向上查找」路径不做这套拦截（它只认 `.dsh-graph` 目录本体，见下一条）；
 - 向上查找**只认 `.dsh-graph` 目录本体**，到根仍没有即报「非工作区」，
   **不会**回落到用户全局配置 —— 隔离项目不会误用 `~/.dsh` 下的东西。
 
@@ -130,12 +136,21 @@ symlink 拒收），CLI 不重写这套语义。
 ## 测试
 
 ```bash
-node --test core/tests/g314-dsh-cli.test.ts   # 本目标专项：20 条用例
+node --test core/tests/g314-dsh-cli.test.ts   # 本目标专项：21 条用例
 node scripts/run-tests.mjs                     # 整套件自证闸门
 ./node_modules/.bin/tsc --noEmit -p tsconfig.json
 ```
 
 专项套件覆盖：参数解析（含负向）、路径定位（向上查找 / 绝对 / 相对 / 危险路径 / 非工作区）、
 环境容错（未初始化 / 损坏事件流 / 损坏 `project.yaml` / 损坏目标 frontmatter）、
-退出码分层、零副作用快照（内容哈希 + inode + mtime）、复用 core 的静态与行为断言，
-以及 4 条**反向变异**对照（禁用危险路径守卫、吞掉退出码、引入写副作用、入口缺失）。
+退出码分层、零副作用快照（内容哈希 + inode + mtime）、复用 core 的静态与行为断言。
+
+**反向变异对照（判据 7）据实分三类，共 4 条**：
+
+- **真源码副本变异（2 条）**：把 `core/` 与入口 `bin/dsh-cli.mjs` 复制进 `tmp/` 沙箱，就地改坏关键行后用
+  真进程实测 —— ①拆掉危险路径守卫（`$DSH_HOME` 子目录）后「必须拒绝」的断言变红；②把 `failure()`
+  的退出码吞成 `0` 后「运行期失败必须退出 1」的断言变红。两条都先断言**未变异副本**与仓内实现一致，
+  且变异锚点**恰好命中 1 处**，避免「失败其实来自别的原因」的假阳性。
+- **真变异（1 条）**：复制真实入口源码到没有 `../core/cli` 的位置 ⇒ 必须报「找不到可执行核心模块」并非零退出。
+- **敏感性对照（1 条）**：向看板树写入一个文件后，零副作用快照断言必红（证明快照口径能抓住写入；
+  它不是源码变异，口径已在该用例注释与标题中写明）。
