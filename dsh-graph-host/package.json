@@ -6,6 +6,9 @@
   "license": "MIT",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "dsh-cli": "./bin/dsh-cli.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./lib/client.js",

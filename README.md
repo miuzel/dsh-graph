@@ -51,6 +51,19 @@ dsh plugin --profile <name> add dsh-graph
 
 需要 Node ≥ 22。依赖说明、宿主兼容范围（`engines.dsh` 声明与实测宿主）、侧边栏用法、数据目录等完整内容，见 **[dsh-graph-host/README.md](dsh-graph-host/README.md)**（即 npm 包内 README）。升级宿主后若 Web 看板半边不激活（`web boot: … did not activate`），见该 README 的「[升级残留自检与清理](dsh-graph-host/README.md#升级残留自检与清理)」。
 
+## 命令行（dsh-cli）
+
+包内提供轻量只读 CLI（不依赖常驻服务、网络或第三方 CLI 框架），可直接读工作区的 `.dsh-graph/`：
+
+```sh
+npx dsh-cli info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
+npx dsh-cli status        # 目标数、事件数、最近事件、规则库版本
+npx dsh-cli goal list     # 列出目标（--all 含归档）
+npx dsh-cli goal show g-1 # 单个目标（元信息 + 正文）
+```
+
+用法、退出码、路径定位规则与冷启动实测口径见 **[docs/dsh-cli-guide.md](docs/dsh-cli-guide.md)**。
+
 ## 核心概念
 
 - **基于图的目标管理**：目标是自足实体 —— 自然语言任务 + 动态生成的取证计划与质量判据；任务类型不预先模板化，结构化的是生命周期与求值语义。

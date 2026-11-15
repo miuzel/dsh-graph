@@ -75,7 +75,9 @@ const FALLBACK_RE = /退回两次 rename/;
  *  刻意用**精确计数**而不是派生：派生需要在测试里再持有一份 build.sh 的资产清单（第二副本），
  *  与本包「单一真源」口径冲突；清单漂移由本常量的精确比较如实判红。 */
 // g-393: two compiled hostless domain modules; keep the exact count fail-closed.
-const DIST_FILE_COUNT = 88;
+// g-314: dsh-cli 入口 dist/bin/dsh-cli.mjs（+1）与编译核心 dist/core/cli/*.js（args/diagnostics/
+//   health/locate/main 共 +5）⇒ 88 + 6 = 94。
+const DIST_FILE_COUNT = 94;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）
@@ -98,8 +100,11 @@ function makeSandbox(): Sandbox {
   cpSync(join(repoRoot, "dsh-graph-host"), join(repo, "dsh-graph-host"), { recursive: true });
   // g-496：公共层提示词资产在仓库根 `prompts/`（构建合并两层的源之一），沙箱须同构镜像。
   cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
+  // g-314：dsh-cli 入口源码（bin/）与核心子目录（core/cli/）同为构建必需源目录，须同构镜像。
+  cpSync(join(repoRoot, "bin"), join(repo, "bin"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
   cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
+  cpSync(join(repoRoot, "core", "cli"), join(repo, "core", "cli"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));
   }
