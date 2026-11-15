@@ -37,12 +37,14 @@ dsh-cli info             环境自检：Node 版本、graph root、初始化状�
 dsh-cli status           看板状态：目标数、事件数、最近事件、规则库版本、问题列表
 dsh-cli goal list        列出目标（默认不含归档；--all 含归档）
 dsh-cli goal show <id>   显示单个目标（元信息 + 正文）
+dsh-cli sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（g-315）
 dsh-cli version          显示版本
 dsh-cli help             显示帮助
 ```
 
 选项：`--root <path>`（显式指定 graph root）、`--json`（机器可读输出）、
-`--all/-a`（`goal list` 含归档）、`--help/-h`、`--version/-V`。
+`--all/-a`（`goal list` 含归档）、`--full` / `--active-only` / `--target <path>`（仅 `sync`，见下）、
+`--help/-h`、`--version/-V`。
 
 ### 退出码
 
@@ -68,6 +70,92 @@ dsh-cli help             显示帮助
 `--root` 接受兄弟目录写法（`cd src && dsh-cli --root ../.dsh-graph`），这是最常见的用法。
 最终 root 一律经 core 的 `resolveCanonicalRoot` 归一（Git linked worktree 归一、scratch 边界、
 symlink 拒收），CLI 不重写这套语义。
+
+## `dsh-cli sync`：上下文投影（g-315）
+
+把 `.dsh-graph` 里的**常驻硬性事实**与**版本目标概览**投影成 `.claude/CLAUDE.md` 与 `AGENTS.md`
+里的受控区段，供 Claude Code / Codex 等单兵工具作为稳定前缀。设计目的只有一个：让前缀**尽量不变**，
+从而吃到 Prompt 缓存（缓存按前缀匹配，前缀一变整段失效）。
+
+```bash
+dsh-cli sync                        # 写两个文档
+dsh-cli sync --target AGENTS.md     # 只写其中一个
+dsh-cli sync --full                 # 不折叠目标列表（默认单次最多列 40 个）
+dsh-cli sync --active-only          # 跳过终态目标（delivered）
+dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sha256/problems
+```
+
+### 写入位置
+
+| 文档 | 位置 | 说明 |
+| --- | --- | --- |
+| `.claude/CLAUDE.md` | **发起调用的 workspace 根** | Claude Code 的项目级指令文件；不存在则新建 |
+| `AGENTS.md` | **发起调用的 workspace 根** | 与本仓库自己的 `AGENTS.md` 是同一套约定 |
+
+「发起调用的 workspace」= 你运行命令时所在的 Git 工作树根（非 git 目录则就是当前目录）。
+
+> 为什么不直接取「看板根的父目录」：在 Git **linked worktree** 里，任何 dsh-cli 命令的看板根都会被
+> core 归一到**主树**（`mode: "canonicalized"`）。若按看板根反推写入位置，在 worktree 里 sync 就会
+> 悄悄改写**主树**的 `AGENTS.md`，而 worktree 自己的文件纹丝不动。g-315 实测复现过这个坑，
+> 现在的实现按「调用方工作树」独立解析写入位置（`resolveWorkspaceForSync`），
+> 跨树（看板不属于调用方工作树）时**直接拒绝**，不替用户猜。
+
+### 输出结构：稳定前缀 + 动态概览
+
+区段内部是固定两段，顺序不可交换：
+
+```text
+<!-- dsh-graph:sync:begin -->
+### A. 硬性事实（稳定前缀，勿手改）     ← standing 记忆，逐条一行，按 id 排序
+### B. 动态概览（目标状态，可随时变化） ← 版本、状态计数、目标清单
+<!-- dsh-graph:sync:end -->
+```
+
+- **A 段只由 standing 记忆自身决定**：不含计数、不含时间戳、不含绝对路径。因此记忆集合不变时，
+  A 段逐字节不变（`--json` 的 `prefix_sha256` 可直接对比）；增删一个目标、改一个状态**不会**影响它。
+- **A 段不受 `updated_at` 重排影响**：条目终序按记忆 **id** 固定（core 的排序末级是更新时间，
+  修订一条记忆会重排整段，那正好毁掉前缀）。
+- **B 段允许变化**：它本来就在尾部，变化只影响尾部。
+- **输出是输入的纯函数**：刻意不写「生成时间」——这两个文档是要入库的，时间戳会让每次运行都
+  「有变更」（提交噪音 + 「无变更不写」形同虚设）。
+
+### 写入策略（受控区段 / 追加 / 原子写）
+
+1. **有标记**：只替换 `BEGIN`/`END` 之间的内容。**区段之外的字节逐字保留**（不重排、不重写行尾、
+   不 trim）——用户手写的任何内容都不会被碰。
+2. **无标记**（首次使用 / 用户自己写的 AGENTS.md）：追加到文件**末尾**，原有内容完整保留在最前面。
+   补行尾的规则是确定的：原文不以换行结尾则补一个（沿用原文 `\r\n`/`\n` 风格），绝不整文件覆盖。
+3. **标记畸形**（多个 `BEGIN`、只有一端、顺序颠倒）：**拒绝并退出 1**，一个字节都不写。
+   不猜哪段是受控区段——猜错会把用户手写内容夹进区段里，下次 sync 直接吞掉。
+4. **无变更不写**：新内容与磁盘逐字节相同则跳过该文件（mtime / inode 都不变）。
+5. **原子写**：有变更时经 core 的 `atomicWrite`（同目录临时文件 + fsync + rename），失败不留半文件。
+6. **先全部成功再写**：推广到两个文件时，**先完成全部渲染与可写性预检**，任一输入或目标出问题
+   就整体失败、两个文件都不写（不存在「写了一个、第二个失败」的部分写入）。
+
+### 边界与退出码
+
+| 场景 | 退出码 | 行为 |
+| --- | --- | --- |
+| 空记忆 / 无未发布版本 | `0` | 写入带「（没有常驻记忆）」「（无未发布版本）」的可读区段（新仓库也要能 sync 成功） |
+| 目标文件缺失 | `0` | 新建（从区段开始） |
+| `memory.jsonl` 有坏行 | `1` | 报行号与原因，**不写任何文件**（core 读取会静默跳过坏行 ⇒ 硬性事实会无声消失） |
+| 事件流损坏 | `1` | 报错，不写 |
+| 目标目录只读 / 目标不可读 / 目标是目录 | `1` | 报错，**两个文件都不写** |
+| 锁定标记畸形 | `1` | 报错，不写 |
+| `--target` 值非法 | `2` | 用法错误 |
+
+### 投影范围与取舍（如实记录）
+
+- 记忆：**只投影 `scope: "standing"`**。`kind: "user"` 的 standing 记忆**也投影**——core 的
+  `recallMemory` 对 user 条目按 owner 隔离，而 CLI 没有身份上下文；若照 host 的无身份路径过滤，
+  用户亲手登记的常驻约束会被静默排除。sync 写的是本工作区自己的文件，故按「本工作区全部
+  standing 事实」投影（测试里对这一取舍有交叉断言）。
+- 目标：**只投影未 `released` 的版本**（`released` 属历史）；版本内目标**不按状态过滤**
+  （`delivered` / `blocked` 也是真实状态，静默过滤会让投影看起来比看板干净）。需要只看在做的
+  事项时用 `--active-only`。
+- 折叠：B 段单次最多列 40 个目标（按状态优先级 + id 排序），其余折叠成一行计数；
+  `--full` 展开。完整清单仍用 `dsh-cli goal list`。
+- 只读资产：sync **不写 `.dsh-graph` 的任何字节**（测试用整树快照 + mtime/inode 断言）。
 
 ## 复用与安全边界
 

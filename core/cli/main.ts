@@ -1,13 +1,16 @@
 /**
- * dsh-cli 命令分派（g-314）：把已解析的参数映射到只读命令执行，并把结果写成人类可读或 JSON。
+ * dsh-cli 命令分派（g-314 / g-315）：把已解析的参数映射到命令执行，并把结果写成人类可读或 JSON。
  *
  * 退出码约定（判据 4）：
  * - `0` 成功；
  * - `1` 运行期失败（非工作区 / 未初始化 / 目标不存在 / 损坏配置 / 非法路径）；
  * - `2` 用法错误（未知命令、未知选项、缺参、多余参数）。
  *
- * 零副作用：本文件**不**发起任何写操作；`info` / `status` / `goal list` / `goal show` / `version`
- * 全部只读（不 init、不记事件、不建目录）。
+ * 零副作用（默认命令）：`info` / `status` / `goal list` / `goal show` / `version` 全部只读
+ * （不 init、不记事件、不建目录）。
+ *
+ * **唯一会写文件的命令是 `sync`（g-315）**：它只写 workspace 根的 `.claude/CLAUDE.md` 与 `AGENTS.md`
+ * 的受控区段，**从不**写 `.dsh-graph`（写入实现见 `sync.ts`：先全部规划、后原子落地）。
  */
 import { parseArgs, type ParsedArgs } from "./args.ts";
 import { locateGraphRoot, LocateError } from "./locate.ts";
@@ -38,7 +41,7 @@ export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 
-const HELP_TEXT = `dsh-cli — 轻量 dsh-graph 看板命令行（只读核心）
+const HELP_TEXT = `dsh-cli — 轻量 dsh-graph 看板命令行（默认只读；sync 为唯一的写命令）
 
 用法：
   dsh-cli <命令> [选项]
@@ -48,6 +51,7 @@ const HELP_TEXT = `dsh-cli — 轻量 dsh-graph 看板命令行（只读核心�
   status           看板状态：目标数、事件数、最近事件、规则库版本、问题列表
   goal list        列出目标（默认不含归档；--all 含归档）
   goal show <id>   显示单个目标（含正文）
+  sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段
   version          显示 dsh-cli 版本
   help             显示本帮助
 
@@ -55,6 +59,9 @@ const HELP_TEXT = `dsh-cli — 轻量 dsh-graph 看板命令行（只读核心�
   --root <path>    显式指定 graph root（绝对路径，或相对当前目录的路径）
   --json           机器可读 JSON 输出
   --all, -a        goal list 包含归档目标
+  --full           sync 不折叠目标列表（默认单次最多列 40 个）
+  --active-only    sync 跳过终态目标（delivered）
+  --target <path>  sync 只写其一：.claude/CLAUDE.md 或 AGENTS.md
   --help, -h       显示帮助
   --version, -V    显示版本
 
@@ -63,7 +70,12 @@ const HELP_TEXT = `dsh-cli — 轻量 dsh-graph 看板命令行（只读核心�
   不会回落到用户全局配置（$DSH_HOME / ~/.dsh）。
 
 退出码：
-  0 成功 / 1 运行期失败（非工作区、未初始化、目标不存在、损坏配置） / 2 用法错误
+  0 成功 / 1 运行期失败（非工作区、未初始化、目标不存在、损坏配置、sync 的可判定失败） / 2 用法错误
+
+sync（g-315）：
+  把 .dsh-graph 的 standing 常驻记忆（稳定前缀）与未发布版本目标概览（动态段）投影到
+  workspace 根的 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（<!-- dsh-graph:sync:begin/end -->）。
+  区段外字节级不动；无标记时追加到末尾；无变更不写；有变更原子写；失败不写任何文件。
 `;
 
 function emit(out: string[], text: string): void {
@@ -170,6 +182,10 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
     return { exitCode: damaged ? EXIT_FAILURE : EXIT_OK, stdout: `${out.join("\n")}\n`, stderr: warnLine };
   }
 
+  if (args.command === "sync") {
+    return runSyncCommand(located, args, ctx.cwd ?? process.cwd());
+  }
+
   if (args.command === "goal" && args.subcommand === "list") {
     const { listGoals } = await import("./diagnostics.ts");
     const { goals, problems } = listGoals({ root: located.root, includeArchived: args.all });
@@ -219,6 +235,79 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
 
   // 理论不可达（parseArgs 已穷举）；保底仍给非零用法错误，绝不静默成功。
   return usageError(`未实现的分派：${args.command ?? ""} ${args.subcommand ?? ""}`.trim());
+}
+
+/**
+ * `dsh-cli sync`（g-315）：把 `.dsh-graph` 投影写入 workspace 根的两个受控区段。
+ *
+ * 输出口径：
+ * - 每个目标一行状态：`written`（已更新）/ `unchanged`（无变更、未写，mtime 不变）/ `error`；
+ * - `--json` 给机器可读版本（含 `prefix_sha256`，用于断言前缀跨次稳定）；
+ * - 任一可判定失败（损坏记忆/事件流、目标目录只读、目标不可读、标记畸形）⇒ exit 1 且**不写任何文件**；
+ * - 用法问题（`--target` 值非法）⇒ exit 2。
+ */
+async function runSyncCommand(
+  located: { root: string; warning?: string; explicit: boolean },
+  args: ParsedArgs,
+  invokedWorkspace: string,
+): Promise<RunResult> {
+  // sync 是本 CLI 唯一会写文件的命令 ⇒ 动态加载，保持 info/version 的冷启动成本不变。
+  const mod = await import("./sync.ts");
+  const closedStates = args.activeOnly ? ["delivered"] : undefined;
+  let plan;
+  try {
+    plan = mod.planSync(located.root, {
+      targets: args.target,
+      full: args.full,
+      closedStates,
+      invokedWorkspace,
+    });
+  } catch (e) {
+    if (e instanceof mod.SyncError) {
+      return usageError(e.message);
+    }
+    throw e;
+  }
+  const result = mod.applySync(plan);
+
+  const isUsageProblem = (p: { code: string }) => p.code === "bad-option";
+  if (result.problems.some(isUsageProblem)) {
+    return usageError(result.problems.filter(isUsageProblem).map((p) => p.message).join("；"));
+  }
+  const failures = result.problems;
+  const warnLine = located.warning ? `警告：${located.warning}\n` : "";
+
+  if (args.json) {
+    const body = {
+      root: result.root,
+      workspace: result.workspace,
+      ok: failures.length === 0,
+      changed: result.changedCount,
+      written: result.written.map((t) => t.rel),
+      unchanged: result.skipped.map((t) => t.rel),
+      targets: result.targets.map((t) => ({ path: t.rel, found_block: t.rendered.found, changed: t.changed })),
+      // 稳定前缀（A 段）的 sha256：两次运行相等即「前缀跨次字节稳定」的机器可读证据。
+      prefix_sha256: mod.hashOf(mod.extractStablePrefix(result.block ?? "") ?? ""),
+      problems: failures.map((p) => ({ code: p.code, message: p.message })),
+    };
+    return {
+      exitCode: failures.length > 0 ? EXIT_FAILURE : EXIT_OK,
+      stdout: jsonOut(body),
+      stderr: warnLine,
+    };
+  }
+
+  const out: string[] = [];
+  for (const t of result.targets) {
+    const state = failures.length > 0 ? "skipped（失败，未写）" : t.changed ? "written" : "unchanged（无变更，未写）";
+    const mode = t.rendered.found ? "替换受控区段" : t.existing === null ? "新建文件" : "无标记 ⇒ 追加区段";
+    emit(out, `${t.rel}\t${state}\t${mode}`);
+  }
+  if (failures.length > 0) {
+    for (const p of failures) emit(out, `错误：${p.message}`);
+    return { exitCode: EXIT_FAILURE, stdout: `${out.join("\n")}\n`, stderr: warnLine };
+  }
+  return { exitCode: EXIT_OK, stdout: `${out.join("\n")}\n`, stderr: warnLine };
 }
 
 /** 写入结果并返回退出码（供可执行入口复用；单测直接用 runCli 的返回值）。 */

@@ -77,7 +77,8 @@ const FALLBACK_RE = /退回两次 rename/;
 // g-393: two compiled hostless domain modules; keep the exact count fail-closed.
 // g-314: dsh-cli 入口 dist/bin/dsh-cli.mjs（+1）与编译核心 dist/core/cli/*.js（args/diagnostics/
 //   health/locate/main 共 +5）⇒ 88 + 6 = 94。
-const DIST_FILE_COUNT = 94;
+// g-315: dsh-cli sync 投影模块 dist/core/cli/sync.js（+1）⇒ 94 + 1 = 95。
+const DIST_FILE_COUNT = 95;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）

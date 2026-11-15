@@ -32,6 +32,12 @@ export interface ParsedArgs {
   version: boolean;
   /** `--all` / `-a`：`goal list` 是否包含归档目标。 */
   all: boolean;
+  /** `--full`：`sync` 不折叠目标列表（g-315）。 */
+  full: boolean;
+  /** `--active-only`：`sync` 跳过终态目标（g-315）；布尔开关，终态集合由 CLI 固定（见 main.ts）。 */
+  activeOnly: boolean;
+  /** `--target <path>`：`sync` 只写其中一个输出文档（g-315）。 */
+  target: string | null;
 }
 
 export interface ParseResult {
@@ -40,7 +46,7 @@ export interface ParseResult {
 }
 
 /** 已知顶层命令（`goal` 为多子命令容器）。 */
-export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "help"] as const;
+export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "help"] as const;
 /** `goal` 的已知子命令。 */
 export const GOAL_SUBCOMMANDS = ["list", "show"] as const;
 
@@ -49,6 +55,7 @@ const MAX_POSITIONALS: Record<string, number> = {
   info: 0,
   status: 0,
   version: 0,
+  sync: 0,
   help: 0,
   "goal list": 0,
   "goal show": 1,
@@ -71,6 +78,9 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   let help = false;
   let version = false;
   let all = false;
+  let full = false;
+  let activeOnly = false;
+  let target: string | null = null;
   let afterDoubleDash = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -81,6 +91,24 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     }
     if (token === "--") {
       afterDoubleDash = true;
+      continue;
+    }
+    // `--target=<path>` 形态（g-315 sync）
+    if (token.startsWith("--target=")) {
+      const value = token.slice("--target=".length);
+      if (value === "") return err("missing-value", "选项 --target 需要一个路径值（--target=<path>）");
+      if (target !== null) return err("unexpected-argument", "选项 --target 只能给出一次");
+      target = value;
+      continue;
+    }
+    if (token === "--target") {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return err("missing-value", "选项 --target 需要一个路径值（用法：--target <path>）");
+      }
+      if (target !== null) return err("unexpected-argument", "选项 --target 只能给出一次");
+      target = value;
+      i++;
       continue;
     }
     // `--opt=value` 形态
@@ -104,11 +132,16 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     }
     if (token === "--json") { json = true; continue; }
     if (token === "--all" || token === "-a") { all = true; continue; }
+    if (token === "--full") { full = true; continue; }
+    if (token === "--active-only") { activeOnly = true; continue; }
     if (token === "--help" || token === "-h") { help = true; continue; }
     if (token === "--version" || token === "-V") { version = true; continue; }
 
     if (token.startsWith("-") && token !== "-") {
-      return err("unknown-option", `未知选项：${token}（可用：--root、--json、--all、--help、--version）`);
+      return err(
+        "unknown-option",
+        `未知选项：${token}（可用：--root、--json、--all、--full、--active-only、--target、--help、--version）`,
+      );
     }
     positionals.push(token);
   }
@@ -128,6 +161,9 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           help,
           version,
           all,
+          full,
+          activeOnly,
+          target,
         },
         error: null,
       };
@@ -161,6 +197,14 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     }
   }
 
+  // 选项与命令的适配（g-315）：sync 专属选项出现在其它命令上属于用法错误，不得被静默忽略。
+  if (command !== "sync" && (full || activeOnly || target !== null)) {
+    const used = [full ? "--full" : null, activeOnly ? "--active-only" : null, target !== null ? "--target" : null]
+      .filter(Boolean)
+      .join("、");
+    return err("unexpected-argument", `选项 ${used} 只适用于 sync 命令`);
+  }
+
   const key = subcommand ? `${command} ${subcommand}` : command;
   const max = MAX_POSITIONALS[key];
   if (max !== undefined && tail.length > max) {
@@ -184,6 +228,9 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       help,
       version,
       all,
+      full,
+      activeOnly,
+      target,
     },
     error: null,
   };
