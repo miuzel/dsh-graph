@@ -93,6 +93,8 @@ dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sh
 | `AGENTS.md` | **发起调用的 workspace 根** | 与本仓库自己的 `AGENTS.md` 是同一套约定 |
 
 「发起调用的 workspace」= 你运行命令时所在的 Git 工作树根（非 git 目录则就是当前目录）。
+**在主树的 tracked 子目录**（如 `core/`、`docs/`）里运行时，写入位置解析到这里所属的工作树根
+（即主树根），**不是**那个子目录；在 linked worktree 的子目录里运行同理，写到该 worktree 根。
 
 > 为什么不直接取「看板根的父目录」：在 Git **linked worktree** 里，任何 dsh-cli 命令的看板根都会被
 > core 归一到**主树**（`mode: "canonicalized"`）。若按看板根反推写入位置，在 worktree 里 sync 就会
@@ -138,6 +140,7 @@ dsh-cli sync --json                 # 机器可读：written/unchanged/prefix_sh
 | --- | --- | --- |
 | 空记忆 / 无未发布版本 | `0` | 写入带「（没有常驻记忆）」「（无未发布版本）」的可读区段（新仓库也要能 sync 成功） |
 | 目标文件缺失 | `0` | 新建（从区段开始） |
+| **目标文件损坏**（frontmatter 非 JSON 等无法解析） | `1` | 点名坏文件，**不写任何文件**（core 的看板投影会静默跳过坏目标 ⇒ 目标会从投影里无声消失；与 `goal list` 的报错口径一致） |
 | `memory.jsonl` 有坏行 | `1` | 报行号与原因，**不写任何文件**（core 读取会静默跳过坏行 ⇒ 硬性事实会无声消失） |
 | 事件流损坏 | `1` | 报错，不写 |
 | 目标目录只读 / 目标不可读 / 目标是目录 | `1` | 报错，**两个文件都不写** |

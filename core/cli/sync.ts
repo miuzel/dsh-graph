@@ -30,6 +30,9 @@ import { accessSync, constants, mkdirSync, readFileSync, statSync } from "node:f
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { atomicWrite, boardProjection, isHumanActor, readMemory, recallMemory, type BoardGoal } from "../ops.ts";
+// 目标文件**可解析性预检**复用既有诊断入口（`listGoals` = `listGoalFiles` 枚举 + core `loadGoal` 解析），
+// 本模块因此**不手写任何 frontmatter 解析**（判据 3）；与 `goal list` 的报错口径同源。
+import { listGoals } from "./diagnostics.ts";
 // 写入位置（workspace 解析）同样复用 core：`discoverGitWorktree` 给出 worktree 根与主树根，
 // 本模块不自己实现任何 git 探查。
 import { discoverGitWorktree, isScratchWorkspace } from "../root.ts";
@@ -76,6 +79,7 @@ const STATUS_ORDER = ["in_progress", "review", "blocked", "ready", "collecting",
 export type SyncProblemCode =
   | "memory-corrupt"
   | "goal-unreadable"
+  | "goal-file-corrupt"
   | "version-unreadable"
   | "event-log-corrupt"
   | "target-unwritable"
@@ -136,9 +140,49 @@ export interface SyncInputs {
 /** 空记忆 / 空看板都**不是**失败：渲染成带「（无）」说明的区段并退出 0（否则新仓库永远 sync 不成功）。 */
 export function loadSyncInputs(root: string): SyncInputs {
   const problems: SyncError[] = [];
+  // 目标可解析性预检须**先于**任何载入：`boardProjection` 对坏目标文件是 `catch { /* 坏目标文件跳过 */ }`
+  // （core 有意如此，见 ops.ts / version-lane.ts），若只靠它，「一个合法目标 + 一个损坏目标」的看板会
+  // **静默成功**且把坏目标从投影里丢掉 —— 而同样场景 `dsh-cli goal list` 报「目标文件不可解析」并非零退出。
+  // sync 投影的是「当前在做什么」，静默少一个目标等于投影撒谎；故有坏目标即整体失败、零写入。
+  const corruptGoals = goalParseProblems(root);
+  problems.push(...corruptGoals);
+  if (corruptGoals.length > 0) {
+    return { standing: [], versions: [], backlogCount: 0, standaloneCount: 0, problems };
+  }
   const standing = loadStanding(root, problems);
   const board = loadVersions(root, problems);
   return { standing, versions: board.versions, backlogCount: board.backlogCount, standaloneCount: board.standaloneCount, problems };
+}
+
+/**
+ * 目标文件**可解析性预检**（只读，零写）。
+ *
+ * 复用 core 既有诊断入口 `listGoals`（= `listGoalFiles` 枚举 + `loadGoal` 解析），**不手写第二套
+ * frontmatter 解析**；其 `problems` 文案与 `dsh-cli goal list` 完全同源（含 core `loadGoal` 给出的
+ * 具体原因，如「frontmatter 不是合法 JSON」），因此两个命令对同一份损坏数据给出同一结论。
+ *
+ * 范围与 sync 的输入面严格对齐：`boardProjection`（版本内 / 独立 / backlog）与 `buildGoalIndex`
+ * 都经 `listGoalFiles` 枚举，故这里用同一枚举（含归档）⇒ 不存在「预检看不到、投影却会读到」的文件。
+ * 用 `includeArchived: true` 是为了与 `buildGoalIndex` 的面一致（它含归档对端），避免归档坏文件逃过预检。
+ */
+function goalParseProblems(root: string): SyncError[] {
+  let problems: string[];
+  try {
+    problems = listGoals({ root, includeArchived: true }).problems;
+  } catch (e) {
+    return [new SyncError("goal-unreadable", `目标文件枚举失败：${(e as Error).message}`)];
+  }
+  if (problems.length === 0) return [];
+  const head = problems.slice(0, 5).join("；");
+  const more = problems.length > 5 ? `（另有 ${problems.length - 5} 处）` : "";
+  return [
+    new SyncError(
+      "goal-file-corrupt",
+      `发现 ${problems.length} 个无法解析的目标文件：${head}${more}。` +
+        `core 的看板投影会静默跳过这些文件（目标会从投影里无声消失），故 sync 整体失败、不写任何文件；` +
+        `请先修复上述文件（或用 dsh-cli goal list 复核）再 sync`,
+    ),
+  ];
 }
 
 /**

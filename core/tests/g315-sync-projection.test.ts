@@ -386,18 +386,43 @@ test("g-315 判据3：sync.ts 只经 core 公开入口读资产，不含第二�
   assert.doesNotMatch(code, /writeFileSync|createWriteStream|appendFileSync/, "写入必须只经 core atomicWrite");
 });
 
-test("g-315 判据3：frontmatter 语义由 core 决定（损坏目标文件 ⇒ sync 失败而非猜内容）", () => {
+test("g-315 判据3/6：损坏目标文件 ⇒ sync 非零退出、点名坏文件、两文档零写入（不静默丢弃目标）", () => {
   const sb = makeSandbox("g315-core-semantics");
   try {
     const { workspace, root } = makeBoard(sb.dir);
     writeVersion(root, "v1.0", { id: "v-1", name: "v1.0", status: "planning", created_at: "2026-01-01T00:00:00+08:00" });
-    writeFileSync(join(root, "versions", "v1.0", "goals"), "", "utf8"); // 占位，随后删掉
-    rmSync(join(root, "versions", "v1.0", "goals"), { force: true });
-    // 手工写一个非 JSON frontmatter 的版本文件：core parseDoc 会拒
-    writeFileSync(join(root, "versions", "v1.0", "version.md"), "---\nnot: [json\n---\n\n## 范围\n", "utf8");
-    // boardProjection 对坏版本文件是「按未知处理」（不抛），因此这里核的是「不伪造版本名」
-    syncInBoard(workspace);
+    // 一个**合法**目标 + 一个**损坏**目标（frontmatter 非 JSON）。这个组合是关键：
+    // 只有合法目标时 sync 成功，只看「是否失败」区分不出「预检生效」还是「恰好没有合法目标」。
+    writeGoal(root, join("versions", "v1.0", "goals", "g-1", "goal.md"), { id: "g-1", title: "合法目标", status: "draft" });
+    const broken = join(root, "versions", "v1.0", "goals", "g-2", "goal.md");
+    mkdirSync(join(root, "versions", "v1.0", "goals", "g-2"), { recursive: true });
+    writeFileSync(broken, "---\nnot: [json\n---\n\n## 目标描述\n\n坏目标。\n", "utf8");
+
+    const before = snapshotTree(workspace);
+    const bad = runCliProcess(cliSourceEntry, ["sync"], workspace);
+    // ① 可判定的非零退出（不是「安静成功」）
+    assert.equal(bad.code, EXIT_FAILURE, `损坏目标文件必须非零退出；stdout=${bad.stdout} stderr=${bad.stderr}`);
+    // ② 点名坏文件（可据此定位修复；不得只说「有错」）
+    assert.match(bad.stdout + bad.stderr, /g-2[/\\]goal\.md/, "错误信息必须点名损坏的目标文件");
+    assert.match(bad.stdout + bad.stderr, /无法解析/, "必须说明是「无法解析」，与 goal list 同口径");
+    // ③ 两个文档零写入（整体失败，不产生部分写入）
+    assert.equal(snapshotTree(workspace), before, "两个文档必须零写入（内容/mtime/inode 全不变）");
+    assert.equal(existsSync(join(workspace, "AGENTS.md")), false, "AGENTS.md 不得被创建");
+    assert.equal(existsSync(join(workspace, ".claude")), false, ".claude/CLAUDE.md 不得被创建");
+    // ④ 不得把坏 frontmatter 的原文片段投影出来（原断言保留：即使有输出也不得伪造内容）
+    assert.ok(!readdirSync(workspace).includes("AGENTS.md"), "无输出可投影");
+
+    // ⑤ 同一份看板在 `goal list` 与 `sync` 下口径一致（都判失败并点名同一文件）
+    const list = runCliProcess(cliSourceEntry, ["goal", "list"], workspace);
+    assert.equal(list.code, EXIT_FAILURE, "goal list 同场景也必须非零退出（口径一致性基线）");
+    assert.match(list.stdout + list.stderr, /g-2[/\\]goal\.md/);
+
+    // ⑥ 修好坏目标后必须恢复成功（证明失败确实由该文件引起，而非夹具本身不可写）
+    rmSync(broken, { recursive: true, force: true });
+    const good = runCliProcess(cliSourceEntry, ["sync"], workspace);
+    assert.equal(good.code, EXIT_OK, `移除坏目标后必须成功；stderr=${good.stderr}`);
     const doc = read(join(workspace, "AGENTS.md"));
+    assert.ok(doc.includes("g-1"), "合法目标必须被投影");
     assert.ok(!doc.includes('"not"'), "不得把坏 frontmatter 的原文片段投影出来");
   } finally {
     sb.cleanup();
@@ -775,6 +800,41 @@ test("g-315 判据7（反向变异·真源码副本）：关掉「损坏记忆�
     const mutated = runCliProcess(mutation.entry, ["sync", "--json"], workspace);
     assert.equal(mutated.code, EXIT_OK, `变异体应静默成功；stderr=${mutated.stderr}`);
     assert.equal(JSON.parse(mutated.stdout).ok, true, "变异体把损坏输入判为 OK（本套件判据6 断言变红）");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("g-315 判据7（反向变异·真源码副本）：去掉「目标可解析性预检」 ⇒ 坏目标被静默跳过且 sync 退出 0（判据3/6 断言变红）", () => {
+  const sb = makeSandbox("g315-mut-badgoal");
+  try {
+    const { workspace, root } = makeBoard(sb.dir);
+    writeVersion(root, "v1.0", { id: "v-1", name: "v1.0", status: "planning", created_at: "2026-01-01T00:00:00+08:00" });
+    writeGoal(root, join("versions", "v1.0", "goals", "g-1", "goal.md"), { id: "g-1", title: "合法目标", status: "draft" });
+    const brokenDir = join(root, "versions", "v1.0", "goals", "g-2");
+    mkdirSync(brokenDir, { recursive: true });
+    writeFileSync(join(brokenDir, "goal.md"), "---\nnot: [json\n---\n\n## 目标描述\n\n坏目标。\n", "utf8");
+
+    const mutation = makeMutationSandbox(sb);
+    // 前置：未变异副本必须先以「坏目标」失败（否则变异对照没有意义）
+    const pristine = runCliProcess(mutation.entry, ["sync"], workspace);
+    assert.equal(pristine.code, EXIT_FAILURE, `未变异时损坏目标必须非零退出；stdout=${pristine.stdout}`);
+    assert.match(pristine.stdout + pristine.stderr, /g-2[/\\]goal\.md/);
+    assert.equal(existsSync(join(workspace, "AGENTS.md")), false, "未变异时零写入");
+
+    // 变异：把预检变成「永远无问题」——等价于回到「靠 boardProjection 静默跳过坏目标」的旧行为
+    mutateSource(
+      mutation.file("sync.ts"),
+      "const corruptGoals = goalParseProblems(root);",
+      "const corruptGoals: SyncError[] = [];",
+    );
+    const mutated = runCliProcess(mutation.entry, ["sync", "--json"], workspace);
+    // 变异体必须复现评审指出的退化：exit 0 + 坏目标从投影里无声消失
+    assert.equal(mutated.code, EXIT_OK, `变异体应静默成功（本套件判据3/6 断言变红）；stderr=${mutated.stderr}`);
+    assert.equal(JSON.parse(mutated.stdout).ok, true, "变异体把损坏目标判为 OK");
+    const doc = read(join(workspace, "AGENTS.md"));
+    assert.ok(doc.includes("g-1"), "变异体仍投影合法目标");
+    assert.ok(!doc.includes("g-2"), "变异体把坏目标静默丢弃（正是本预检要防的退化）");
   } finally {
     sb.cleanup();
   }
