@@ -8,7 +8,9 @@
     "test": "node --test core/tests/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare": "bash scripts/build.sh",
-    "check:dist": "node --test core/tests/dist-freshness-g312.test.ts"
+    "check:dist": "node --test core/tests/dist-freshness-g312.test.ts",
+    "pack:packages": "node scripts/pack-packages.mjs",
+    "pack:tarballs": "node scripts/pack-packages.mjs --tarballs"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
