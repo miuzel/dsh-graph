@@ -41,7 +41,7 @@
 
 Web 宿主里的 `/api/dsh-graph/**` 走**单一受保护入口**：只注册一条 `prefix` 路由，每请求先由宿主公开的 `connection.admit` 鉴权、再判定 owner，之后才分发业务。未通过 ⇒ `401`（匿名/凭证无效）、`403`（信任边界或非 owner）、**`503`**（宿主没有 `admit` 等能力不可判定情形，fail-closed）。该入口**只影响 HTTP**：`graph_*` 工具面不经过它。
 
-鉴权行为只在 DSH `0.2.1-rc.2` 实测；`engines.dsh` 声明的其它宿主版本未逐版验证。完整口径见 [dsh-graph-host/README.md](dsh-graph-host/README.md#http-鉴权web-看板的-rest-入口)。
+鉴权行为只在 DSH `0.2.1-rc.2`（历史轮次）实测；`0.1.x`、`0.2.0`、`0.2.1` 各版本已不在支持范围，当前声明范围 `>=0.2.2-rc.3` 上的鉴权未逐版验证。完整口径见 [dsh-graph-host/README.md](dsh-graph-host/README.md#http-鉴权web-看板的-rest-入口)。
 
 ## 安装
 

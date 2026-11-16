@@ -12111,7 +12111,8 @@ export function apply(ctx, config) {
 
     // g-374 F1：注册完成摘要截获（宿主生命周期事件；O(1) 回调，非轮询 / 非 fs watcher）。
     // 特性探测：宿主无 ctx.on（不支持该事件面的旧宿主）⇒ **不注册、静默降级**（不写文件、不抛错、
-    // 不影响 attempt 生命周期与既有功能）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。
+    // 不影响 attempt 生命周期与既有功能）。engines 下界 = `>=0.2.2-rc.3`（见 `package.json`）；
+    // 此处特性探测仅用于缺能力时静默降级，**不改变下限**。
     if (typeof ctx?.on === "function") {
       try {
         const off = ctx.on("subagent/end", captureAttemptResults);
@@ -12180,7 +12181,8 @@ export function apply(ctx, config) {
     //      `tools.get(name)`（**全局视图**）与 `tools.get(name, agent)`（**该 agent 视图**）双向确认：
     //      只有「全局存在且对该 agent 可见」的名字才放进 deny。作用域自有注册永不出现在全局视图 ⇒ 被排除。
     //   ② **特性探测 + 静默降级**：旧宿主（或测试夹具）没有 `ctx.on` / `tools.restrict` ⇒ **不注册监听**、
-    //      不抛错、不改变任何东西（51 个工具照常注册可见）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。
+    //      不抛错、不改变任何东西（51 个工具照常注册可见）。engines 下界 = `>=0.2.2-rc.3`（见
+    //      `package.json`）；此处特性探测仅用于缺能力时静默降级，**不改变下限**。
     //   ③ **注册期无条件**：apply 期 51 个 `graph_*` 工具**照常全部注册**（判据 4 的 51 红线），
     //      裁剪只发生在**会话可见面**，绝不写成「按配置跳过注册」——否则工具计数会随配置漂移。
     //
@@ -12253,14 +12255,13 @@ export function apply(ctx, config) {
     //   ① dsh-graph-guide-hint（order 10）—— 本地化资产 guide-hint.<lang>.md；
     //   ② dsh-graph-supervisor-discipline（order 11）—— 本地化资产 discipline.<lang>.md；
     //   ③ dsh-graph-standing-memory（order 92）—— **用户/Agent 动态文本**（记忆库正文）。
-    // 宿主兼容性（实测各版本 @deepseek-ai/dsh-system-prompt 真实 renderPrompt；dsh 与
-    // system-prompt 版本锁步，peerDependencies 精确同版）：
-    //   · 0.2.0-rc.2 / 0.1.6-alpha.1：认 `interpolate: false` ⇒ 逐字保留（修复生效）；
-    //   · 0.1.5-rc.2 / 0.1.5-rc.3（= engines 下界一侧）：**忽略**该字段（旧 renderPrompt 无条件
-    //     插值）⇒ 旧宿主上本修复不生效，含 `{{...}}` 的记忆仍会抛错/被替换；传该字段本身无害
-    //     （旧宿主 assemble 只取 name/text，多余键被丢弃，不报错）。
-    // 未验证范围：0.1.6-alpha.2 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 仅做源码特征核对
-    // （renderPrompt 含 `interpolate === false` 分支），未逐一实跑。
+    // 当前声明范围（`engines.dsh` = `>=0.2.2-rc.3 <0.2.3-0`，见 `package.json`）：范围内的宿主
+    // renderPrompt 均认 `interpolate: false` ⇒ 逐字保留（修复生效）；本插件据此无条件传该字段。
+    // 历史描述（**已不在支持范围**，仅解释代码为何仍容忍该字段被忽略）：0.1.5-rc.2 / 0.1.5-rc.3
+    // 旧 renderPrompt **忽略**该字段并仍无条件插值；0.2.0-rc.2 / 0.1.6-alpha.1 已认该字段。
+    // 承袭而来的容错：旧宿主 assemble 只取 name/text、多余键被丢弃，传该字段本身无害、不报错。
+    // 未验证范围：当前范围只逐版核实到 `0.2.2-rc.3`；`0.2.2-rc.3` 之上的 `0.2.2` 正式版按同源
+    // 实现推定（`interpolate === false` 分支仍在），未逐版实跑。
     const sectionState = { registered: false, timer: null };
     const registerGuideSection = () => {
       if (sectionState.registered) return;

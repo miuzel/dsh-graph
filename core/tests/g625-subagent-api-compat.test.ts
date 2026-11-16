@@ -111,6 +111,28 @@ test("g-627 A① 旧归属 API isOwnedBy 即使还在位也不得被调用（收
   assert.deepEqual(isOwnedByCalls, [], "旧 API 已不在支持面内，绝不得被调用");
 });
 
+test("g-627 A①b 旧分支不得回潮：宿主只有 isOwnedBy（无 rootOf）⇒ 归属一律 unknown（fail-closed）", () => {
+  // 负向对照支点：该夹具**显式**用 `ownershipApi: "legacy"` 搭 rc.1 旧 API 桩（生产侧读取已在 g-627
+  // 删除，故这是**唯一**能到达该桩的路径）。若哪天有人把 `agents.isOwnedBy` 分支塞回生产代码，本用例
+  // 会从 unknown 翻成 yes/no 而变红 —— 这正是「旧分支不得回潮」的钉住方式。
+  const h = createHarnessWith({
+    ownershipApi: "legacy",
+    reuse: { childRegistry: { "child-1": { status: "idle", ownedBy: ["a1"] } } },
+  });
+  const agents = h.ctx.get("agents");
+  const subagents = h.ctx.get("subagents");
+  assert.ok(agents, "夹具必须提供 agents 服务");
+  assert.equal(typeof agents.isOwnedBy, "function", "夹具旧形态确有 isOwnedBy");
+  assert.equal(typeof subagents.rootOf, "undefined", "夹具旧形态确无 rootOf");
+  for (const opts of [null, { requireLiveTree: true }]) {
+    const probe = ownershipProbeOf(agents, subagents, opts);
+    assert.equal(probe.mode, "unavailable", `${JSON.stringify(opts)}：无 rootOf ⇒ 归属面不可用`);
+    assert.notEqual(probe.reason, null, "无 rootOf 必须给出原因");
+    // 旧桩对 child-1 会答 true（ownedBy 命中）；生产面必须无视它，判 unknown 而非 yes。
+    assert.equal(probe.ownsId("child-1", { id: "a1", session: { id: "a1" } }), "unknown", `${JSON.stringify(opts)}：不得采信 isOwnedBy`);
+  }
+});
+
 test("g-627 A② rootOf 抛错 ⇒ unknown（requireLiveTree）/ parentSession 回退（默认，见 g-626）", () => {
   const owner = agentObj("sup-1");
   const child = agentObj("child-1", "sup-1");

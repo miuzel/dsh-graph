@@ -254,7 +254,7 @@ dsh-graph 为 Agent 提供了完善的工具链（共 53 个 `graph_*` 工具）
   | 认证通过但路径不存在 / 方法不符 | `404` / `405`（认证之后才返回） |
 - **能力依赖**：判定完全依赖宿主公开能力 `connection.admit`。宿主没提供它时，HTTP 入口**一律 503 fail-closed**（不会退化成匿名放行）；该情形**不影响** Agent 工具面（`graph_*` 工具不经过 HTTP 入口）。
 - **尾斜杠与 query**：`/api/dsh-graph` 与 `/api/dsh-graph/` 不是同一路径（后者认证后 404）；两条资产 `prefix` 的 `prefix/` 会进入业务并由业务给 400（非法文件名）；query 不参与匹配。
-- **实测范围（如实）**：本节的鉴权行为只在 **DSH `0.2.1-rc.2`** 上实测（真实宿主 `BrowserAuth` + 真实 Token 交换 + 真实 HTTP）。`engines.dsh` 声明的其余宿主版本（含 `0.1.x`、`0.2.0` 各版本）**本次未逐版验证**；若某宿主缺少公开 `admit`，按上表 HTTP 入口会 503，这一点**未经逐版核实**，因此不能把声明范围读成「当前 Web 鉴权结论」。兼容范围的取舍由维护者决定，本版不做收窄或扩张。
+- **实测范围（如实）**：本节的鉴权行为只在 **DSH `0.2.1-rc.2`**（历史轮次）上实测（真实宿主 `BrowserAuth` + 真实 Token 交换 + 真实 HTTP）。该结论**早于**本版收窄宿主范围：`0.1.x`、`0.2.0`、`0.2.1` 各版本已不在支持范围（见上「宿主兼容范围」一节），当前声明范围 `>=0.2.2-rc.3` 上的鉴权**未逐版验证**；若某宿主缺少公开 `admit`，按上表 HTTP 入口会 503，这一点同样**未经逐版核实**，因此不能把声明范围读成「当前 Web 鉴权结论」。
 
 
 ### Profile 全局设置（子代理默认值）
@@ -554,7 +554,7 @@ The plugin serves a set of `/api/dsh-graph/**` REST endpoints in the Web host (u
   | Admitted but unknown path / wrong method | `404` / `405` (only after admission) |
 - **Capability dependency**: everything hinges on the host's public `connection.admit`. When the host does not provide it, the HTTP entry points answer **503 fail-closed** (never a silent anonymous pass-through); the **tool surface is unaffected** (`graph_*` tools do not go through the HTTP entry).
 - **Trailing slash and query**: `/api/dsh-graph` and `/api/dsh-graph/` are different paths (the latter is 404 after admission); `prefix/` on the two asset prefixes enters business handling and yields a 400 (illegal file name); query does not participate in matching.
-- **Verified scope, stated plainly**: the behaviour in this section was measured **only on DSH `0.2.1-rc.2`** (real host `BrowserAuth`, real token exchange, real HTTP). The other host versions declared in `engines.dsh` (including `0.1.x` and the `0.2.0` line) were **not verified version by version** in this round. If a host lacks the public `admit`, the table above implies 503 for HTTP entry points — that implication is **not verified per version**, so the declared range must not be read as a current Web-authentication verdict. Widening or narrowing the range is the maintainer's call; this release does neither.
+- **Verified scope, stated plainly**: the behaviour in this section was measured **only on DSH `0.2.1-rc.2`** (a historical round; real host `BrowserAuth`, real token exchange, real HTTP). That verdict **predates** this release's narrowing: the `0.1.x`, `0.2.0` and `0.2.1` lines are no longer supported (see "host compatibility range" above), and authentication on the current declared range `>=0.2.2-rc.3` was **not verified version by version**. If a host lacks the public `admit`, the table above implies 503 for HTTP entry points — that implication is likewise **not verified per version**, so the declared range must not be read as a current Web-authentication verdict.
 
 
 ### Profile-wide settings (subagent defaults)

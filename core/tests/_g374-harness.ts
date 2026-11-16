@@ -70,10 +70,11 @@ export function createHarnessWith(opts: {
   dispatchError?: unknown;
   reuse?: ReuseHarnessOptions;
   /**
-   * g-625：归属 API 形态（缺省 `legacy` = g-613 以来逐字不变）：
-   *   · `legacy`：`agents.isOwnedBy`（rc.1）；
-   *   · `rootOf`：`agents` **没有** `isOwnedBy`，只有 `subagents.rootOf` + 公开
+   * g-625 / g-627：归属 API 形态（**缺省 `rootOf`** = 当前唯一支持面）：
+   *   · `rootOf`（默认）：`agents` **没有** `isOwnedBy`，只有 `subagents.rootOf` + 公开
    *     `session.header.parentSession`（rc.3）。`rootOf` 对 `unmanaged` child 抛 UNAUTHORIZED。
+   *   · `legacy`：`agents.isOwnedBy`（rc.1 旧 API）—— 生产侧读取已在 g-627 删除，**仅**用于
+   *     「旧分支不得回潮」的负向对照（显式传入时才搭旧桩）。
    */
   ownershipApi?: "legacy" | "rootOf";
   /**
@@ -248,6 +249,8 @@ export function createHarnessWith(opts: {
   const labels = () => capturedRequests.map((r) => r?.label ?? "");
   return {
     ws, root, toolsByName, routes, call, emit, labels, capturedRequests, capturedVia, execContext, handlers,
+    /** g-627：宿主 ctx（`get(name)` 返回本夹具的服务桩），供直接调用收口 helper 的负向对照使用。 */
+    ctx,
     /** g-613：复用路径投递到既有子代理的消息（parent/target/正文）。 */
     sentMessages,
     /** g-625：rc.3 子级目录观察统计（observe 次数 / dispose 次数；缺省 null = 未提供该服务）。 */

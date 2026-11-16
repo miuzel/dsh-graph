@@ -33,6 +33,7 @@ const HOST_PKG = join(repoRoot, "dsh-graph-host", "package.json");
 const CLIENT_DIR = join(repoRoot, "dsh-graph-host", "lib", "client");
 const HOST_SOURCE = join(repoRoot, "dsh-graph-host", "index.js");
 const HOST_README = join(repoRoot, "dsh-graph-host", "README.md");
+const ROOT_README = join(repoRoot, "README.md");
 const COMPAT_DOC_REL = "docs/host-compat-v0.25.0.md";
 /** g624 形态守卫（其头注释声明「本版只支持扁平 spec」的宿主下限口径）。 */
 const G624_SPEC_DOC_REL = "core/tests/g624-activation-spec-compat.test.ts";
@@ -134,6 +135,7 @@ function narrowingProblems(input: {
   manifest: { engines?: Record<string, string>; peerDependencies?: Record<string, string> };
   sources: Array<{ name: string; text: string }>;
   hostReadme: string | null;
+  rootReadme: string | null;
   compatDoc: string | null;
   g624Doc: string | null;
 }): string[] {
@@ -157,6 +159,10 @@ function narrowingProblems(input: {
     if (compareSemver(lower, "0.2.2-rc.3") !== 0) problems.push(`下界必须恰为 0.2.2-rc.3（实得 ${lower}）⇒ 超出本轮声明的下限`);
     if (upper !== "0.2.3-0") problems.push(`上界必须为 0.2.3-0（未实测的下一线必须排除），实得 ${upper}`);
     problems.push(...crossFileConsistency(enginesRange, lower, input.compatDoc, input.g624Doc));
+    problems.push(...proseRangeConsistency(enginesRange, lower, [
+      { name: "dsh-graph-host/README.md", text: input.hostReadme },
+      { name: "README.md", text: input.rootReadme },
+    ], input.sources));
   }
   problems.push(...retiredFindings(input.sources));
   if (input.hostReadme === null) {
@@ -236,6 +242,75 @@ function crossFileConsistency(
   return problems;
 }
 
+/**
+ * **散文口径一致性**（g-627 第三轮返工新增；B1/B2 复发的直接防线）。
+ *
+ * `crossFileConsistency` 只核「版本号」三处真源，覆盖不到**散文里对范围的断言**：att-002 的两个
+ * 复发缺陷正是这一类 —— README 说「`0.1.x`、`0.2.0` 各版本本次未逐版验证 … 本版不做收窄或扩张」
+ * （把已退出的旧线说成**仍在声明范围内**），以及 `index.js` 注释写「engines 下界维持 >=0.1.5-rc.2,
+ * 不得抬高」（与真源相反的**指令性**口吻，写在产品源码里）。
+ *
+ * 判定口径是「**声明语境**」而不是「出现即红」——历史描述必须可留，故：
+ *   A. README：同一条列表项里既出现**低于下界**的旧版本号、又出现「未逐版验证」这类**把它们算作
+ *      声明范围**的措辞 ⇒ 红；若该条同时**明确**把它们标为不在支持范围（`已不在支持范围` /
+ *      `不再支持` / no longer supported 等），则视为正确写法，放行。
+ *   B. 源码注释：出现旧下界 `>=0.1.5-rc.2` 或 `不得抬高`/`维持` 一类**与当前下限相反的指令性**
+ *      断言 ⇒ 红（正确写法是引用 `>=0.2.2-rc.3` 且说明「不改变下限」）。
+ * C. 历史描述可留的唯一形态：把旧版本号放在**显式标注为非当前**的句子里（本函数的负向对照里
+ *     `历史描述（**已不在支持范围**…）` 即该形态）。
+ */
+function proseRangeConsistency(
+  enginesRange: string,
+  lower: string,
+  readmes: Array<{ name: string; text: string | null }>,
+  sources: Array<{ name: string; text: string }>,
+): string[] {
+  const problems: string[] = [];
+  const belowFloor = /\b0\.1\.[0-9]|\b0\.1\.x|\b0\.2\.[01](?![0-9])/;
+  // 「把它们算作声明范围」的措辞：未逐版验证 / 声明的其余宿主版本 / 不做收窄或扩张
+  const countsAsInScope = /未逐版验证|未逐版核实|声明的其余宿主版本|其余宿主版本|不做收窄或扩张|neither narrows nor widens|does neither/i;
+  // 「明确排除」的措辞：写了就等于正确（不是把它们当成在范围内）。
+  // 含「低于宿主下限 / 低于下限 / 已删除 / 不再支持」等 —— 历史描述必须**显式**落在这一族措辞里才放行。
+  const explicitlyExcluded = /已不在支持范围|不再支持|不支持|已删除|低于宿主下限|低于下限|低于下界|no longer supported|not supported|below the (?:host )?(?:lower bound|floor)/i;
+
+  for (const { name, text } of readmes) {
+    if (text === null) {
+      problems.push(`散文口径：缺少 ${name}，无法核对支持范围散文`);
+      continue;
+    }
+    const lines = text.split("\n");
+    lines.forEach((line, i) => {
+      if (!belowFloor.test(line) || !countsAsInScope.test(line)) return;
+      if (explicitlyExcluded.test(line)) return;
+      problems.push(
+        `散文口径：${name}:${i + 1} 把低于下界 ${lower} 的旧宿主版本描述为声明范围内（「未逐版验证」一类）`
+        + " ⇒ 必须改为「只在历史轮次实测；当前声明范围未逐版验证」或显式标注已不在支持范围",
+      );
+    });
+  }
+
+  // 「与当前下限相反的指令性注释」：旧下界串 + 不得抬高/维持 的口吻
+  for (const src of sources) {
+    const lines = src.text.split("\n");
+    lines.forEach((line, i) => {
+      // 「与 engines 下限相反的指令性断言」必须**同时**满足两点才判红，避免误伤与下限无关的
+      // 普通散文（如「维持一条定时器」「准入错误维持 400」）：
+      //   ① 出现**低于下界**的版本号（旧下界 `>=0.1.x` / `0.1.5-rc.x` / `0.1.x` / `0.2.0/0.2.1`），或
+      //   ② 出现 `不得抬高` 这类**明说下限的升降**口吻（本身即指令性）。
+      const belowFloorInLine = /\b0\.1\.[0-9]|\b0\.1\.x|>=0\.1\.|\b0\.2\.[01](?![0-9])/.test(line);
+      const directive = /不得抬高/.test(line);
+      const maintainTone = /维持/.test(line) && /engines|下界|下限/.test(line);
+      if (!((directive || maintainTone) || (belowFloorInLine && /engines|下界|下限/.test(line)))) return;
+      if (explicitlyExcluded.test(line)) return;
+      problems.push(
+        `散文口径：${src.name}:${i + 1} 出现与当前下限 ${lower} 相反的指令性断言（「不得抬高」/旧下界）`
+        + " ⇒ 应改为「engines 下界 = >=0.2.2-rc.3（见 package.json）；特性探测仅用于缺能力时静默降级，不改变下限」",
+      );
+    });
+  }
+  return problems;
+}
+
 function readOrNull(path: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
@@ -251,6 +326,7 @@ function realInput() {
     manifest: JSON.parse(readFileSync(HOST_PKG, "utf8")),
     sources: [{ name: "index.js", text: readFileSync(HOST_SOURCE, "utf8") }, ...clientSources()],
     hostReadme: readOrNull(HOST_README),
+    rootReadme: readOrNull(ROOT_README),
     compatDoc: readOrNull(join(repoRoot, COMPAT_DOC_REL)),
     g624Doc: readOrNull(join(repoRoot, G624_SPEC_DOC_REL)),
   };
@@ -267,6 +343,10 @@ test("g-627 判据：宿主下限真源唯一、范围合法，旧宿主分支�
 // =============================================================================
 // 负向对照：变异必须全部被接住（只改内存副本）
 // =============================================================================
+
+/** att-002 的缺陷原文（B1）：把已退出的 `0.1.x` / `0.2.0` 说成仍在声明范围内，并称本版不收窄。 */
+const B1_DEFECTIVE_ZH = "- **实测范围（如实）**：本节的鉴权行为只在 **DSH `0.2.1-rc.2`** 上实测（真实宿主 `BrowserAuth` + 真实 Token 交换 + 真实 HTTP）。`engines.dsh` 声明的其余宿主版本（含 `0.1.x`、`0.2.0` 各版本）**本次未逐版验证**；若某宿主缺少公开 `admit`，按上表 HTTP 入口会 503，这一点**未经逐版核实**，因此不能把声明范围读成「当前 Web 鉴权结论」。兼容范围的取舍由维护者决定，本版不做收窄或扩张。";
+const B2_DEFECTIVE_EN = "- **Verified scope, stated plainly**: the behaviour in this section was measured **only on DSH `0.2.1-rc.2`** (real host `BrowserAuth`, real token exchange, real HTTP). The other host versions declared in `engines.dsh` (including `0.1.x` and the `0.2.0` line) were **not verified version by version** in this round. Widening or narrowing the range is the maintainer's call; this release does neither.";
 
 test("g-627 负向对照：只改 peer / 只改 engines / 旧分支回潮 / 删迁移引用 必红；合法变更不误红", () => {
   const base = realInput();
@@ -337,10 +417,56 @@ test("g-627 负向对照：只改 peer / 只改 engines / 旧分支回潮 / 删�
   expectRed((i) => { i.g624Doc = i.g624Doc!.replace("宿主下限 = `>=0.2.2-rc.3`", "宿主下限已定"); },
     "缺少「宿主下限", "删 g624 形态声明");
 
+  // ⑧'' **散文口径**（第三轮返工新增，B1/B2 复发的直接防线）：README 把旧线说成在范围内、
+  //      index.js 写「不得抬高」这类相反指令 ⇒ 必红。
+  // (f) README 中文 —— **逐字复原 att-002 的缺陷原文**（B1 原形），必须判红
+  expectRed((i) => {
+    i.hostReadme = i.hostReadme!.replace(
+      /^- \*\*实测范围（如实）\*\*：.*$/m,
+      B1_DEFECTIVE_ZH,
+    );
+  }, "README.md:", "README 把 0.1.x/0.2.0 说成声明范围内（B1 原形）");
+  // (g) README 英文镜像复原缺陷原文
+  expectRed((i) => {
+    i.hostReadme = i.hostReadme!.replace(/^- \*\*Verified scope, stated plainly\*\*:.*$/m, B2_DEFECTIVE_EN);
+  }, "README.md:", "README 英文镜像把 0.1.x/0.2.0 说成声明范围内");
+  // (h) 「本版不做收窄或扩张」（与 :45 已收窄直接矛盾）
+  expectRed((i) => {
+    i.hostReadme = i.hostReadme!.replace(/^- \*\*Verified scope, stated plainly\*\*:.*$/m,
+      "- **Verified scope**: the other host versions declared in `engines.dsh` (including `0.1.x` and the `0.2.0` line) were **not verified version by version**; widening or narrowing the range is the maintainer's call; this release does neither.");
+  }, "README.md:", "README 称本版不做收窄或扩张");
+  // (f') 仓库根 README 同一类散文（第四处残留，本轮全仓扫描发现）必须判红
+  expectRed((i) => {
+    i.rootReadme = i.rootReadme!.replace(/^鉴权行为只在 DSH `0\.2\.1-rc\.2`.*$/m,
+      "鉴权行为只在 DSH `0.2.1-rc.2` 实测；`engines.dsh` 声明的其它宿主版本未逐版验证。完整口径见下。");
+  }, "README.md:", "根 README 把其它宿主版本说成仍在声明范围内");
+
+  // (i) index.js 出现「engines 下界维持 >=0.1.5-rc.2，不得抬高」这类与当前下限相反的指令性注释（B2 原形）
+  expectRed((i) => {
+    i.sources[0].text += "\n// 不影响 attempt 生命周期与既有功能）。engines 下界维持 >=0.1.5-rc.2，**不得抬高**。\n";
+  }, "不得抬高", "index.js 写入「不得抬高」相反指令（B2 原形）");
+  // (j) index.js 仅「不得抬高」口吻（不写旧版本号）同样判红
+  expectRed((i) => {
+    i.sources[0].text += "\n// engines 下界不得抬高。\n";
+  }, "不得抬高", "index.js 仅出现「不得抬高」口吻");
+  // (k) 客户端模块同样纳入扫描
+  expectRed((i) => {
+    i.sources.filter((x) => x.name.includes("client")).at(0)!.text += "\n// engines 下界不得抬高\n";
+  }, "不得抬高", "客户端模块出现相反指令");
+
   // ⑨ 合法变更不得误红：注释里提到已删除的旧 API（留痕）不是违规
   const withComment = structuredClone(base);
   withComment.sources[0].text += "\n// g-627：旧名 startContinuable / isOwnedBy 分支已删除（留痕说明，不算代码）\n";
   assert.deepEqual(narrowingProblems(withComment), [], "注释里的历史说明不得误红");
+  // ⑨' 散文口径不得误红：把旧版本号写成**显式历史描述**是正确形态，必须放行
+  const asHistory = structuredClone(base);
+  asHistory.sources[0].text += "\n// 历史描述（**已不在支持范围**，仅解释代码为何仍容忍该字段被忽略）：0.1.5-rc.2 / 0.1.5-rc.3\n";
+  asHistory.hostReadme = asHistory.hostReadme!.replace(
+    "当前声明范围 `>=0.2.2-rc.3` 上的鉴权**未逐版验证**",
+    "当前声明范围 `>=0.2.2-rc.3` 上的鉴权**未逐版验证**；`0.1.x`、`0.2.0`、`0.2.1` 已不在支持范围",
+  );
+  assert.deepEqual(narrowingProblems(asHistory), [], "显式标注为历史描述的旧版本号不得误红");
+
   // ⑩ 合法变更不得误红：上界以外的合法重排（换行/空白）不影响判定
   const reformatted = structuredClone(base);
   reformatted.manifest.engines!.dsh = `  ${reformatted.manifest.engines!.dsh}  `;
