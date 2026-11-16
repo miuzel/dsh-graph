@@ -17,7 +17,16 @@
  *   且零 store 副作用；`tools/list` 只列出白名单工具。
  * - 错误响应**不**回显 token，也不区分「错误 token / 已轮换 / 已撤销」。
  */
-import { READ_ONLY_COMMANDS, ServiceError, executeReadOnlyCommand, type ServiceContext } from "./queries.ts";
+import { READ_ONLY_COMMANDS, RESERVED_ARG_KEYS, ServiceError, executeReadOnlyCommand, type ServiceContext } from "./queries.ts";
+import {
+  HUMAN_GATE_PARTIAL,
+  HUMAN_GATE_TOOLS,
+  MCP_WRITE_ACTOR,
+  WRITE_MODE_COMMANDS,
+  WRITE_MODE_DISABLED_REASON,
+  isWriteModeCommand,
+  type WriteCommand,
+} from "./write-commands.ts";
 
 /** 本服务实现的 MCP 协议版本（单一版本 + 完全向后兼容的默认口径）。 */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -44,9 +53,29 @@ export const RPC_ERROR = Object.freeze({
   NOT_INITIALIZED: -32002,
 });
 
-/** `tools/list` 的工具描述（**从白名单派生**，不可能出现写工具）。 */
-export function listToolDescriptors(): any[] {
-  return READ_ONLY_COMMANDS.map((c) => {
+/** 写模式开关（**服务端**决定；默认 false）。取值只可能来自服务配置/启动选项，见 `write-commands.ts`。 */
+export function isWriteModeEnabled(opts?: { writeMode?: { enabled?: boolean } | boolean } | null): boolean {
+  const w = opts?.writeMode;
+  if (typeof w === "boolean") return w === true;
+  return w?.enabled === true;
+}
+
+/** 写模式下的工具集合（只读 + 写白名单）；**关闭时与只读集合逐项一致**。 */
+export function registeredCommands(opts?: { writeMode?: { enabled?: boolean } | boolean } | null): readonly WriteCommand[] {
+  if (!isWriteModeEnabled(opts)) return [] as readonly WriteCommand[];
+  return WRITE_MODE_COMMANDS;
+}
+
+/** 全部已注册工具名（只读 + 按需写）。关闭写模式时**恰为**只读名单。 */
+export function registeredToolNames(opts?: { writeMode?: { enabled?: boolean } | boolean } | null): readonly string[] {
+  const writes = registeredCommands(opts);
+  return [...READ_ONLY_COMMANDS.map((c) => c.name), ...writes.map((c) => c.name)];
+}
+
+/** `tools/list` 的工具描述（**从已注册集合派生**；写模式关闭时不可能出现写工具）。 */
+export function listToolDescriptors(opts?: { writeMode?: { enabled?: boolean } | boolean } | null): any[] {
+  const writes = registeredCommands(opts);
+  const descriptors = READ_ONLY_COMMANDS.map((c) => {
     const properties: Record<string, any> = {};
     for (const [key, type] of Object.entries(c.input)) {
       properties[key] = type === "number" ? { type: "number" } : type === "boolean" ? { type: "boolean" } : { type: "string" };
@@ -63,12 +92,46 @@ export function listToolDescriptors(): any[] {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     };
   });
+  for (const c of writes) {
+    const properties: Record<string, any> = {};
+    for (const [key, type] of Object.entries(c.input)) properties[key] = schemaForType(type);
+    descriptors.push({
+      name: c.name,
+      description: c.gateNote ? `${c.description}（边界：${c.gateNote}）` : c.description,
+      inputSchema: { type: "object", properties, required: [...(c.required ?? [])], additionalProperties: false },
+      // 写工具**不得**声明 readOnlyHint：客户端据此判断破坏性。
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    });
+  }
+  return descriptors;
 }
 
-/** 工具名 ⇒ 白名单命令名（此处不做任何改写：名字一一对应，杜绝别名进入写域）。 */
-export function isRegisteredTool(name: unknown): boolean {
-  return READ_ONLY_COMMANDS.some((c) => c.name === name);
+function schemaForType(type: string): Record<string, any> {
+  switch (type) {
+    case "number":
+      return { type: "number" };
+    case "boolean":
+      return { type: "boolean" };
+    case "string[]":
+      return { type: "array", items: { type: "string" } };
+    case "object":
+      return { type: "object" };
+    default:
+      return { type: "string" };
+  }
 }
+
+/**
+ * 工具名 ⇒ 已注册命令判定（名字一一对应，杜绝别名）。
+ * 写模式关闭时写工具名**根本不注册**（与 g-623 逐项一致）；开启后只认 `WRITE_MODE_COMMANDS` 白名单。
+ */
+export function isRegisteredTool(name: unknown, opts?: { writeMode?: { enabled?: boolean } | boolean } | null): boolean {
+  if (READ_ONLY_COMMANDS.some((c) => c.name === name)) return true;
+  return isWriteModeEnabled(opts) && isWriteModeCommand(name);
+}
+
+/** 写模式下**仍 fail-closed** 的工具名（Human Gate / 主管身份 / 执行派发）。 */
+export const HUMAN_GATE_TOOL_NAMES: readonly string[] = Object.freeze(Object.keys(HUMAN_GATE_TOOLS));
 
 /**
  * **认证层**：token 伪参数检测（在任何业务解析之前调用）。
@@ -102,6 +165,11 @@ export function parseBearer(header: string | null | undefined): string | null {
 export interface McpContext extends ServiceContext {
   /** 认证回调：返回 true 才继续（服务层注入，持凭据存储的闭包）。 */
   authenticate: (token: string | null) => boolean;
+  /**
+   * 写模式（g-632 A）：**只能由服务端启动配置决定**（`serve --allow-write`）。默认关闭。
+   * 本对象从不从请求参数构造 —— 请求里出现任何写模式开关参数都按保留参数拒绝。
+   */
+  writeMode?: { enabled: boolean };
 }
 
 function rpcOk(id: JsonRpcId, result: unknown): JsonRpcResponse {
@@ -140,7 +208,10 @@ export function dispatchRpc(ctx: McpContext, msg: any): JsonRpcResponse | null {
           protocolVersion: version,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: SERVER_NAME, version: CONTRACT_VERSION },
-          instructions: "只读看板服务：仅注册只读查询工具；写/执行/人工审批命令未注册。",
+          instructions: isWriteModeEnabled(ctx)
+            ? `写模式已由服务端显式开启（actor 固定为 ${MCP_WRITE_ACTOR}）：执行类写工具可达；` +
+              `但人工裁决（graph_resolve_accept、transition→delivered）与主管身份/执行派发仍 fail-closed。`
+            : "只读看板服务：仅注册只读查询工具；写/执行/人工审批命令未注册。",
         });
       }
       case "notifications/initialized":
@@ -150,19 +221,29 @@ export function dispatchRpc(ctx: McpContext, msg: any): JsonRpcResponse | null {
       case "ping":
         return isNotification ? null : rpcOk(id, {});
       case "tools/list":
-        return rpcOk(id, { tools: listToolDescriptors() });
+        return rpcOk(id, { tools: listToolDescriptors(ctx) });
       case "tools/call": {
         const name = params.name;
         if (typeof name !== "string" || name === "") {
           return rpcErr(id, RPC_ERROR.INVALID_PARAMS, "tools/call 需要非空 name");
         }
-        if (!isRegisteredTool(name)) {
-          // 未注册（含所有写/执行/Human Gate 工具）⇒ 明确拒绝；**未触碰 store**。
-          return rpcErr(id, RPC_ERROR.METHOD_NOT_FOUND, `未注册的工具（MVP 只读白名单）：${name}`, { code: "E_UNKNOWN_COMMAND" });
+        if (!isRegisteredTool(name, ctx)) {
+          // 未注册 ⇒ 明确拒绝；**未触碰 store**。三种情形给出可读原因（都仍是 E_UNKNOWN_COMMAND）：
+          // ① 写模式关闭 ② 写模式下仍保留给人工/主管的工具 ③ 完全未实现的名字（与 g-623 逐字一致）。
+          return rpcErr(id, RPC_ERROR.METHOD_NOT_FOUND, unregisteredToolReason(name, ctx), { code: "E_UNKNOWN_COMMAND" });
         }
         const args = params.arguments && typeof params.arguments === "object" ? params.arguments : {};
+        // g-632 A：写模式开关族也是保留参数 —— 出现在**工具 arguments** 里同样必须被拒
+        // （不只靠工具 schema 的 additionalProperties，因为只读路径会把未声明键静默忽略）。
+        for (const key of Object.keys(args)) {
+          if (WRITE_MODE_SWITCH_KEYS.has(key)) {
+            return rpcErr(id, RPC_ERROR.INVALID_PARAMS, "请求参数包含保留的可信上下文字段（写模式开关不可由客户端提供）");
+          }
+        }
         try {
-          const value = executeReadOnlyCommand({ graphRoot: ctx.graphRoot, executionWorkspace: ctx.executionWorkspace }, name, args);
+          const value = isWriteModeCommand(name)
+            ? executeWriteCommand(ctx, name, args)
+            : executeReadOnlyCommand({ graphRoot: ctx.graphRoot, executionWorkspace: ctx.executionWorkspace }, name, args);
           return rpcOk(id, { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value, isError: false });
         } catch (e: any) {
           const code = e instanceof ServiceError ? e.code : "E_STORAGE";
@@ -184,7 +265,13 @@ export function dispatchRpc(ctx: McpContext, msg: any): JsonRpcResponse | null {
   }
 }
 
-/** 保留参数名（可信上下文）：客户端永远不能经 MCP 参数提供。 */
+/**
+ * 保留参数名（可信上下文）：客户端永远不能经 MCP 参数提供。
+ *
+ * g-632 A：**写模式开关也是可信上下文** —— `allowWrite` / `writeMode` / `mode` 等出现在请求
+ * （顶层 params、tools/call arguments、或 initialize 参数）时一律 INVALID_PARAMS 拒绝。
+ * 写模式只能由服务端启动动作（`serve --allow-write`）决定，任何请求都不得把自己升格为可写。
+ */
 export const RESERVED_PARAM_KEYS: readonly string[] = [
   "actor",
   "owner",
@@ -199,7 +286,71 @@ export const RESERVED_PARAM_KEYS: readonly string[] = [
   "authorization",
   "sessionId",
   "capability",
+  // g-632 A：写模式开关（服务端显式动作，不是请求参数）
+  "allowWrite",
+  "allow_write",
+  "allowwrite",
+  "writeMode",
+  "write_mode",
+  "writable",
+  "readOnly",
+  "read_only",
+  "write",
+  "mode",
 ];
+
+/** g-632 A：写模式开关族的保留参数名（请求任何位置出现都拒绝；**不是**开启通道）。 */
+export const WRITE_MODE_SWITCH_KEYS: ReadonlySet<string> = new Set([
+  "allowWrite",
+  "allow_write",
+  "allowwrite",
+  "writeMode",
+  "write_mode",
+  "writable",
+  "readOnly",
+  "read_only",
+]);
+
+/** 未注册工具的可读原因（三种情形；对外错误码仍是 E_UNKNOWN_COMMAND，与 g-623 一致）。 */
+export function unregisteredToolReason(name: unknown, opts?: { writeMode?: { enabled?: boolean } | boolean } | null): string {
+  const tool = String(name);
+  if (!isWriteModeEnabled(opts)) {
+    // 关闭时：写模式白名单里的名字给出「如何开启」；其余（含 Human Gate）保持 g-623 原文。
+    if (isWriteModeCommand(tool)) return `${WRITE_MODE_DISABLED_REASON}（工具：${tool}）`;
+    return `未注册的工具（MVP 只读白名单）：${tool}`;
+  }
+  const gate = HUMAN_GATE_TOOLS[tool];
+  if (gate) return `写模式下仍 fail-closed（${tool}）：${gate}`;
+  return `未注册的工具（不在写模式白名单内）：${tool}`;
+}
+
+/**
+ * 执行一个**写模式**命令（只在 `writeMode.enabled === true` 且名字在 `WRITE_MODE_COMMANDS` 内时可达）。
+ *
+ * 两道运行时防线（即使上游判定被误改也不会退化为提权）：
+ * ① 写模式关闭 ⇒ 直接 E_UNKNOWN_COMMAND（**不触碰 store**）；
+ * ② Human Gate 名单 ⇒ E_FORBIDDEN（不执行任何写操作）。
+ */
+export function executeWriteCommand(ctx: McpContext, name: string, args: Record<string, any>): unknown {
+  if (!isWriteModeEnabled(ctx)) {
+    throw new ServiceError("E_UNKNOWN_COMMAND", `${WRITE_MODE_DISABLED_REASON}（工具：${name}）`);
+  }
+  if (HUMAN_GATE_TOOLS[name]) {
+    throw new ServiceError("E_FORBIDDEN", `写模式下仍 fail-closed（${name}）：${HUMAN_GATE_TOOLS[name]}`);
+  }
+  const cmd = WRITE_MODE_COMMANDS.find((c) => c.name === name);
+  if (!cmd) throw new ServiceError("E_UNKNOWN_COMMAND", `未注册的工具（不在写模式白名单内）：${name}`);
+  // 保留参数（actor/owner/human/approval/root/…）一律拒绝：伪可信上下文不可能生效。
+  for (const key of Object.keys(args ?? {})) {
+    if (RESERVED_ARG_KEYS.has(key)) throw new ServiceError("E_FORBIDDEN", `参数 ${key} 不可由客户端提供`);
+  }
+  const safe: Record<string, any> = {};
+  for (const [key, value] of Object.entries(args ?? {})) {
+    if (value === undefined) continue;
+    safe[key] = value;
+  }
+  return cmd.run({ graphRoot: ctx.graphRoot, executionWorkspace: ctx.executionWorkspace }, safe);
+}
 
 /**
  * 一次完整的 MCP HTTP 请求处理（**认证先行**）。服务层负责在调用本函数之前完成

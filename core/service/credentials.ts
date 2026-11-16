@@ -108,6 +108,37 @@ export function ensurePrivateDir(dir: string): void {
   }
 }
 
+/**
+ * 追加写 0600 私有文件（g-632 A：写模式开关审计用）。
+ *
+ * 与 `writePrivateFile` 同一条权限纪律：文件不存在时以 0600 创建；已存在且权限过宽时
+ * 先尝试收紧一次，仍过宽即拒绝（不静默继续）。追加失败由调用方决定是否阻断。
+ */
+export function appendPrivateFile(file: string, content: string): void {
+  const existed = existsSync(file);
+  const fd = openSync(file, existed ? "a" : "wx", 0o600);
+  try {
+    if (POSIX) fchmodSync(fd, 0o600);
+    writeSync(fd, Buffer.from(content, "utf8"));
+  } finally {
+    closeSync(fd);
+  }
+  if (POSIX) {
+    let mode = statSync(file).mode & 0o777;
+    if (mode & 0o077) {
+      try {
+        chmodSync(file, 0o600);
+      } catch {
+        /* 交由下面的复检判定 */
+      }
+      mode = statSync(file).mode & 0o777;
+      if (mode & 0o077) {
+        throw new CredentialError("permission_too_open", `私有文件权限过宽（${mode.toString(8)}），要求 0600：${file}`);
+      }
+    }
+  }
+}
+
 /** 原子写 0600 私有文件（temp + rename，同目录同文件系统）。 */
 export function writePrivateFile(file: string, content: string): void {
   const tmp = `${file}.tmp-${randomBytes(6).toString("hex")}`;

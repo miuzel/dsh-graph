@@ -266,7 +266,11 @@ test("g-623 端到端（防伪绿对照）：把「认证先行」改坏后，�
   try {
     const file = join(dir, "mcp-mutant.ts");
     // 变异副本里的相对 import 需指向真实 core（同一目录深度），故写成绝对路径。
-    const fixed = mutated.replace('from "./queries.ts"', `from ${JSON.stringify(join(repoRoot, "core", "service", "queries.ts"))}`);
+    // g-632 A：按**实际存在的**同目录相对 import 逐个改写（不写死单文件，否则新增依赖时变异副本
+    // 会因找不到模块而误红 —— 红的是加载失败，不是认证变异）。
+    const fixed = mutated.replace(/from "\.\/([A-Za-z0-9_\-]+\.ts)"/g, (_m, name) =>
+      `from ${JSON.stringify(join(repoRoot, "core", "service", name))}`);
+    assert.ok(fixed.includes("service/queries.ts"), "变异副本必须已把相对 import 改写为绝对路径");
     writeFileSync(file, fixed, "utf8");
     const probe = spawnSync(
       process.execPath,

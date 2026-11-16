@@ -8757,7 +8757,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_store_attachment",
-        description: "存储一个上下文附件到项目根 .dsh-graph/attachments/（可含安全子目录），返回稳定引用名（用 @att/<相对引用名> 在卡片正文/goal.md 引用）。文本用 content；二进制/图片/Excel 用 base64。name 拒绝绝对路径、./.. 穿越、反斜杠、NUL；目标已存在且内容不同会生成唯一名（不覆盖）；异常不留半文件。",
+        description: "存储一个上下文附件到看板根目录（默认 .dsh-graph）下的 attachments/（可含安全子目录），返回稳定引用名（用 @att/<相对引用名> 在卡片正文/goal.md 引用）。文本用 content；二进制/图片/Excel 用 base64。name 拒绝绝对路径、./.. 穿越、反斜杠、NUL；目标已存在且内容不同会生成唯一名（不覆盖）；异常不留半文件。",
         parameters: params({ name: str, content: str, base64: str }, ["name"]),
       },
       run: (a, ex) => {
@@ -9337,7 +9337,7 @@ export function apply(ctx, config) {
     {
       def: {
         name: "graph_handoff",
-        description: "生成/更新 .dsh-graph/HANDOFF.md 换会话交接文档：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。写盘前若旧 HANDOFF.md 存在且内容不同，先归档到 <root>/handoffs/HANDOFF-<时间戳>.md（归档目录不入 git）。",
+        description: "生成/更新看板根目录（默认 .dsh-graph）下的 HANDOFF.md 换会话交接文档：board 投影 + 长期记忆 + 关键环境事实段自动拼接。产物不依赖会话上下文；返回交接全文。旧会话交接时调用。写盘前若旧 HANDOFF.md 存在且内容不同，先归档到 <root>/handoffs/HANDOFF-<时间戳>.md（归档目录不入 git）。",
         parameters: params({ query: str, memory_limit: { type: "number" } }, []),
       },
       run: (a, ex) => {

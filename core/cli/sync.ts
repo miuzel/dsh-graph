@@ -35,7 +35,7 @@ import { atomicWrite, boardProjection, isHumanActor, readMemory, recallMemory, t
 import { listGoals } from "./diagnostics.ts";
 // 写入位置（workspace 解析）同样复用 core：`discoverGitWorktree` 给出 worktree 根与主树根，
 // 本模块不自己实现任何 git 探查。
-import { discoverGitWorktree, isScratchWorkspace } from "../root.ts";
+import { DEFAULT_GRAPH_DIR_NAME, discoverGitWorktree, isScratchWorkspace } from "../root.ts";
 
 // ---------------------------------------------------------------------------
 // 常量与文档化规则
@@ -601,18 +601,30 @@ export interface SyncTargetPlan {
  *
  * 非 git 目录（普通文件夹）⇒ 注释为 workspace 根本身，行为与 `dirname(root)` 一致。
  */
-export function resolveWorkspaceForSync(invokedWorkspace: string, root: string): string {
+function resolveGraphDirNameForOwnership(dirName: string | null | undefined, graphRoot: string): string {
+  if (typeof dirName === "string" && dirName.trim() !== "") return dirName.trim();
+  // 未显式给出：默认名下的历史调用行为完全不变（只看 `<parent>/.dsh-graph`）；
+  // 看板根自身目录名非默认时按实际名判定（自定义根目录形态）。
+  const base = basename(graphRoot);
+  return base === "" ? DEFAULT_GRAPH_DIR_NAME : base;
+}
+
+export function resolveWorkspaceForSync(invokedWorkspace: string, root: string, dirName?: string | null): string {
   const invoked = resolve(invokedWorkspace);
   const graphRoot = resolve(root);
-  const localRoot = join(invoked, ".dsh-graph");
+  // g-632 B：归属判定按**实际目录名**（自定义名下 `<ws>/board-a` 仍必须是「本工作树自己的看板」），
+  // 而不是硬编码默认名。未给出时从 graphRoot 反推（见 `graphDirNameFromRoot`）——
+  // 默认名路径逐字等价于旧写法。
+  const name = resolveGraphDirNameForOwnership(dirName, graphRoot);
+  const localRoot = join(invoked, name);
 
-  // 写法 A：看板就在调用方 workspace 里（`<ws>/.dsh-graph`，普通目录或仓库根）。
+  // 写法 A：看板就在调用方 workspace 里（`<ws>/<name>`，普通目录或仓库根）。
   if (localRoot === graphRoot) return invoked;
 
   // 写法 B：看板被 core 归一到别处（linked worktree → 主树）。此时只有两种合法情形：
   // 调用方 workspace 属于同一个仓库，且看板属于该仓库的主工作树。
   const info = isScratchWorkspace(invoked) ? null : discoverGitWorktree(invoked);
-  if (info && resolve(join(info.mainWorktree, ".dsh-graph")) === graphRoot) {
+  if (info && resolve(join(info.mainWorktree, name)) === graphRoot) {
     // 调用方在 linked worktree 里、根被归一到主树 ⇒ 写入**调用方自己的** worktree 根。
     return info.worktreeRoot;
   }
@@ -620,7 +632,7 @@ export function resolveWorkspaceForSync(invokedWorkspace: string, root: string):
     "bad-option",
     `看板 ${graphRoot} 与当前工作目录所属的工作树不一致（调用方：${invoked}）。` +
       `sync 只把投影写进「发起调用的那棵树」的 .claude/CLAUDE.md 与 AGENTS.md —— ` +
-      `请在目标树根运行，或用 --root 指向该树自己的 .dsh-graph`,
+      `请在目标树根运行，或用 --root 指向该树自己的 ${name}`,
   );
 }
 

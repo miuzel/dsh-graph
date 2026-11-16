@@ -34,6 +34,12 @@ export interface RuntimeConfig {
   /** 契约版本 / 存储兼容标签（只读声明）。 */
   contractVersion: string;
   storageProfile: string;
+  /**
+   * g-632 A：**MCP 写模式**（默认 false / 缺省即关闭）。只由服务端显式启动动作写入
+   * （`serve init --allow-write` / `serve --allow-write`），**从不**由任何请求参数决定。
+   * 缺省字段（旧运行配置）一律按 `false` 读取 ⇒ 升级后默认行为与 g-623 逐项一致。
+   */
+  allowWrite?: boolean;
 }
 
 export class ServiceConfigError extends Error {
@@ -140,6 +146,8 @@ export function readRuntimeConfig(stateDir: string): RuntimeConfig {
     executionWorkspace: String(parsed.executionWorkspace ?? ""),
     contractVersion: String(parsed.contractVersion ?? SERVICE_CONTRACT_VERSION),
     storageProfile: String(parsed.storageProfile ?? STORAGE_PROFILE),
+    // 缺省即关闭；只接受**明确的布尔 true**（字符串 "true" 等一律不认，避免畸形配置意外开启）。
+    allowWrite: parsed.allowWrite === true,
   };
   // 端口 0 = 「由系统分配空闲高位端口」（不冻结具体端口，见设计 §2）；1..65535 为显式端口。
   if (!Number.isInteger(cfg.port) || cfg.port < 0 || cfg.port > 65535) {

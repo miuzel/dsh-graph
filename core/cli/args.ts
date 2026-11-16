@@ -8,10 +8,11 @@
  * - **不吞 `--`**：`--` 之后一律视为位置参数（便于未来子命令接文件路径），但当前命令集
  *   不接受多余位置参数 ⇒ 仍会报错；保留该记号使语义明确而非静默忽略。
  */
+import { assertGraphDirName } from "../root.ts";
 
 /** 解析失败：`message` 面向人类可读，`code` 供测试与调用方稳定断言。 */
 export interface ArgError {
-  code: "unknown-option" | "missing-value" | "unknown-command" | "missing-argument" | "unexpected-argument" | "missing-command";
+  code: "unknown-option" | "missing-value" | "unknown-command" | "missing-argument" | "unexpected-argument" | "missing-command" | "invalid-value";
   message: string;
 }
 
@@ -43,6 +44,11 @@ export interface ParsedArgs {
    * 「未验证」并以非零退出（见 `submit.ts`：绝不伪装成全绿）。
    */
   skipTests: boolean;
+  /**
+   * g-632 B：`--graph-dir-name <name>` —— 核心资料目录名（项目级自定义；相对 workspace 的目录名，
+   * 可含子目录）。默认 `.dsh-graph`；与 `--root` 互斥（`--root` 已直接给出看板目录）。
+   */
+  graphDirName: string | null;
   /** g-623 */
   serveArgv?: string[];
 }
@@ -87,6 +93,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   const rawArgv = [...argv];
   const positionals: string[] = [];
   let root: string | null = null;
+  let graphDirName: string | null = null;
   let json = false;
   let help = false;
   let version = false;
@@ -109,6 +116,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           args: {
             command: "help", subcommand: "serve", positionals: [], root: null, json: false, help: true,
             version: false, all: false, full: false, activeOnly: false, target: null, skipTests: false,
+            graphDirName: null,
           },
           error: null,
         };
@@ -128,6 +136,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           activeOnly: false,
           target: null,
           skipTests: false,
+          graphDirName: null,
           // 动作词必须**显式**传给服务（`serve` 是默认动作，不能靠 argv 自身推断）
           serveArgv: action === "serve" ? serveTail.filter((t) => t !== action) : [action, ...serveTail.filter((t) => t !== action)],
         },
@@ -183,6 +192,23 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       i++;
       continue;
     }
+    if (token.startsWith("--graph-dir-name=")) {
+      const value = token.slice("--graph-dir-name=".length);
+      if (value.trim() === "") return err("missing-value", "选项 --graph-dir-name 需要一个目录名（--graph-dir-name=<name>）");
+      if (graphDirName !== null) return err("unexpected-argument", "选项 --graph-dir-name 只能给出一次");
+      graphDirName = value;
+      continue;
+    }
+    if (token === "--graph-dir-name") {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return err("missing-value", "选项 --graph-dir-name 需要一个目录名（用法：--graph-dir-name <name>）");
+      }
+      if (graphDirName !== null) return err("unexpected-argument", "选项 --graph-dir-name 只能给出一次");
+      graphDirName = value;
+      i++;
+      continue;
+    }
     if (token === "--json") { json = true; continue; }
     if (token === "--all" || token === "-a") { all = true; continue; }
     if (token === "--full") { full = true; continue; }
@@ -194,7 +220,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     if (token.startsWith("-") && token !== "-") {
       return err(
         "unknown-option",
-        `未知选项：${token}（可用：--root、--json、--all、--full、--active-only、--target、--skip-tests、--help、--version）`,
+        `未知选项：${token}（可用：--root、--graph-dir-name、--json、--all、--full、--active-only、--target、--skip-tests、--help、--version）`,
       );
     }
     positionals.push(token);
@@ -219,6 +245,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           activeOnly,
           target,
           skipTests,
+          graphDirName,
         },
         error: null,
       };
@@ -255,6 +282,23 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   // 选项与命令的适配（g-317）：`--skip-tests` 只适用于 submit，出现在其它命令上属于用法错误。
   if (command !== "submit" && skipTests) {
     return err("unexpected-argument", "选项 --skip-tests 只适用于 submit 命令");
+  }
+
+  // g-632 B：`--graph-dir-name` 与 `--root` 互斥（两者都在指定看板位置，同时给出即歧义）。
+  if (graphDirName !== null && root !== null) {
+    return err("unexpected-argument", "选项 --graph-dir-name 与 --root 不能同时给出（--root 已直接指定看板目录）");
+  }
+
+  // g-632 B：目录名本身先过越界校验（`..` / 绝对路径 / 空段一律用法错误，绝不进入解析）。
+  if (graphDirName !== null) {
+    try {
+      graphDirName = assertGraphDirName(graphDirName);
+    } catch (e) {
+      return err("invalid-value", `选项 --graph-dir-name 非法：${(e as Error).message}`);
+    }
+    if (command === "sync") {
+      return err("unexpected-argument", "选项 --graph-dir-name 不适用于 sync（sync 只写 workspace 根的两个受控区段）");
+    }
   }
 
   // 选项与命令的适配（g-315）：sync 专属选项出现在其它命令上属于用法错误，不得被静默忽略。
@@ -301,6 +345,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       activeOnly,
       target,
       skipTests,
+      graphDirName,
     },
     error: null,
   };
