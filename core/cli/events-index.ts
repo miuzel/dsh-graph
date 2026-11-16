@@ -155,8 +155,28 @@ function fileSize(file: string): number {
 }
 
 /**
+ * 定长读取：**精确**读到 `buf.length` 字节，返回实际读到的字节数。
+ *
+ * 为什么必须校验返回值（g-630 att-002 评审实测 bug）：`fstat` 与 `read` 之间文件可能被截断，
+ * 此时 `readSync` 会**短读**；旧代码忽略返回值，`Buffer.alloc` 的 `\0` 就留在缓冲里冒充内容，
+ * 参与 headSha 比对与尾行解析 ⇒ `trim()` 把 `\0` 当空白去掉后**仍判命中**并返回错误聚合。
+ * 这里短读一律如实返回（`got < buf.length`），由调用方转成「回退全量校验」，绝不让 `\0` 进入后续逻辑。
+ */
+function readExact(fd: number, buf: Buffer, position: number): number {
+  let got = 0;
+  while (got < buf.length) {
+    const n = readSync(fd, buf, got, buf.length - got, position + got);
+    if (n <= 0) break; // 文件尾（被截断）⇒ 短读，交由调用方判定
+    got += n;
+  }
+  return got;
+}
+
+/**
  * 探测事件流：`tailBytes` 为尾窗期望字节数（不足文件长度时取全文）。
  * 返回 null 表示文件不存在；其它错误交由调用方转成回退。
+ *
+ * **短读**（fstat 与 read 之间文件被截断）⇒ 抛 `EG630SHORTREAD` 错误 ⇒ 调用方回退全量校验。
  */
 function probeFile(file: string, tailBytes: number, headLen: number | null = null): Probe | null {
   let fd: number;
@@ -171,11 +191,17 @@ function probeFile(file: string, tailBytes: number, headLen: number | null = nul
     const size = Number(st.size);
     const len = headLen === null ? Math.min(HEAD_PREFIX_BYTES, size) : Math.min(headLen, size);
     const head = Buffer.alloc(len);
-    if (len > 0) readSync(fd, head, 0, len, 0);
+    if (len > 0) {
+      const got = readExact(fd, head, 0);
+      if (got !== len) throw shortRead("头部前缀", len, got);
+    }
     const tailLen = Math.min(Math.max(tailBytes, 0), size);
     const tailStart = size - tailLen;
     const tail = Buffer.alloc(tailLen);
-    if (tailLen > 0) readSync(fd, tail, 0, tailLen, tailStart);
+    if (tailLen > 0) {
+      const got = readExact(fd, tail, tailStart);
+      if (got !== tailLen) throw shortRead("尾部窗口", tailLen, got);
+    }
     const headSha = len === 0 ? "" : createHash("sha256").update(head).digest("hex");
     return { size, inoKey: inoKeyOf(Number(st.dev), Number(st.ino)), headLen: len, headSha, tailStart, tail };
   } finally {
@@ -183,8 +209,37 @@ function probeFile(file: string, tailBytes: number, headLen: number | null = nul
   }
 }
 
-/** 与 core `readEvents` 同口径校验单行；合格返回解析对象，不合格返回 null（空行返回 undefined）。 */
+function shortRead(what: string, want: number, got: number): Error {
+  const err = new Error(`事件流${what}短读（期望 ${want} 字节，实读 ${got} 字节，文件在探测期间被截断）`);
+  (err as NodeJS.ErrnoException).code = "EG630SHORTREAD";
+  return err;
+}
+
+/**
+ * 严格 UTF-8 解码：非法序列（如尾窗从多字节字符中间起始）**抛错**而不是产出 U+FFFD。
+ * 宽松解码会把残缺首字节替换成 `\ufffd`，从而掩盖「窗口起点落在字符中间」这一事实；
+ * 抛错 ⇒ 调用方回退全量校验（`readFileSync(utf8)` 的替换语义由 core 全量路径独自承担）。
+ */
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+function decodeStrict(buf: Buffer): string {
+  return STRICT_UTF8.decode(buf);
+}
+
+/**
+ * 与 core `readEvents`（`core/events.ts:77-80` 契约）同口径校验单行；合格返回解析对象，
+ * 不合格返回 null（空行返回 undefined）。
+ *
+ * **这是有意的最小拷贝**（判据 5：「不复制第二套事件解析真源」）：core 的 `readEvents` 把「逐行解析
+ * 合法」与「读整档」焊死在一个函数里（无单行导出），而本模块要**只解析新增区间 / 尾窗**，必须能单独
+ * 取单行判定。为避免契约漂移，本函数只保留 3 条不可再少的骨架（空行跳过 / JSON.parse 成功 / 有
+ * event+actor），**不**引入任何 core 没有的字段语义；错误文本与行号仍由 core 全量路径单方面生产
+ * （本模块在新增行非法时只返回 null ⇒ 立刻回退，绝不自己报错）。
+ * 守卫：`g630-events-index.test.ts` 内有**真源码副本变异**用例，改坏本函数必红。
+ */
 function parseEventLine(line: string): GraphEvent | null | undefined {
+  // `\u0000` 不可能出现在合法 JSON 文本里（JSON 必须转义为 `\u0000`）。出现即意味着上游给了
+  // 零填充/二进制残渣（例如未校验的短读缓冲），必须判非法 —— 这是「不得让 \0 进入后续逻辑」的第二道防线。
+  if (line.includes("\u0000")) return null;
   const trimmed = line.trim();
   if (trimmed === "") return undefined;
   try {
@@ -303,8 +358,8 @@ function entryFromEvents(file: string, probe: Probe, events: GraphEvent[]): Even
 }
 
 /** 尾窗里「最后一条非空行」的解析结果：null=末行非法，undefined=尾窗内无可计行。 */
-function lastEventFromTail(probe: Probe): { ok: boolean; event: string | null; ts: string | null } {
-  const lines = probe.tail.toString("utf8").split("\n");
+function lastEventFromTail(probe: Probe): { ok: boolean; event: string | null; ts: string | null } | null {
+  const lines = decodeStrict(probe.tail).split("\n");
   // 尾窗未覆盖文件头时，第一段是残缺行 —— 丢弃它（只有完整行才算）。
   if (probe.tailStart > 0) lines.shift();
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -332,7 +387,14 @@ function applyAppend(
   const added = probe.tail.subarray(offsetInTail);
   if (added.length === 0) return null;
   if (added[added.length - 1] !== 0x0a) return null; // 半行（写者未落盘完整）⇒ 不能算已提交事件
-  const lines = added.toString("utf8").split("\n");
+  let addedText: string;
+  try {
+    // 严格解码：非纯追加（起点落在多字节字符中间）⇒ 无法逐行确证 ⇒ 回退。
+    addedText = decodeStrict(added);
+  } catch {
+    return null;
+  }
+  const lines = addedText.split("\n");
   lines.pop(); // 末空串
   let count = entry.eventCount;
   let lastEvent = entry.lastEvent;
@@ -408,6 +470,7 @@ export function summarizeEvents(root: string): EventsSummary {
   if (appended === null) return fallback("事件流新增区间无法逐行确证（已退回全量校验）");
   // 交叉校验：追加后的末事件必须与「文件末行」一致（防增量区间与真实结尾漂移）。
   const tailLast = lastEventFromTail(probe);
+  if (tailLast === null) return fallback("事件流尾部窗口不是合法 UTF-8 文本（已退回全量校验）");
   if (!tailLast.ok) return fallback("事件流末行不可解析（已退回全量校验）");
   if (tailLast.event !== appended.lastEvent) {
     return fallback("事件流追加后末事件与新增区间不一致（已退回全量校验）");
@@ -432,6 +495,18 @@ export function fullScanAndIndex(root: string): {
   lastEventTs: string | null;
 } {
   const file = join(root, "events.jsonl");
+  // **大小必须与事件来自同一份字节**：先 fstat 一次，再 readFileSync 读完，最后 fstat 复核。
+  // 若两次大小相等，则「读到的字节 ≡ 记录 size 的那份字节」（读是单次 readFileSync，看到的是一个
+  // 完整瞬间；期间若发生追加，大小必然变化）。
+  // 为什么必须这样（att-002 实测的**真实正确性缺陷**，不是测试问题）：旧实现先 readEvents、后
+  // 用 probeFile 现取大小，并发追加时会把索引写成 {size: 新大小, eventCount: 旧条数}
+  // （实测 {size:14604, count:42}，而该 size 对应 54 条）；此后文件只要停在 14604，索引就**永远**
+  // 返回 42 而不能自愈 —— 正是判据 2 禁止的「错误聚合」。
+  const sizeBefore = fileSize(file);
+  if (sizeBefore < 0) {
+    // 事件流不存在：core 返回空数组（既有语义），无可锚定的文件 ⇒ 不写索引。
+    return { eventCount: 0, lastEvent: null, lastEventTs: null };
+  }
   const events = readEvents(root);
   const last = events.length > 0 ? events[events.length - 1] : null;
   const result = {
@@ -440,8 +515,10 @@ export function fullScanAndIndex(root: string): {
     lastEventTs: last && typeof last.ts === "string" ? last.ts : null,
   };
   try {
+    if (fileSize(file) !== sizeBefore) return result; // 扫描期间被追加/截断 ⇒ 本次结果不自洽，不写索引
     const probe = probeFile(file, 0);
-    if (probe) writeIndexFile(root, entryFromEvents(file, probe, events));
+    if (!probe || probe.size !== sizeBefore) return result;
+    writeIndexFile(root, entryFromEvents(file, probe, events));
   } catch {
     /* 索引是纯缓存：写入失败只影响下次速度 */
   }

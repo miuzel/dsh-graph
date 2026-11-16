@@ -455,17 +455,19 @@ test("g-630 判据 2：并发写（追加与读取交错）下结论始终等于
     );
     const exited = new Promise((res) => writer.on("exit", res));
 
+    // 并发下的正确不变式（g-630 att-002 评审修正）：**不得**用「读索引之前」的权威值做下界 ——
+    // 那与索引结论取自不同时刻，写者在两次读取之间继续追加 ⇒ 合法结论也会小于 before（实测
+    // 「60 < 61」偶发 1/12）。索引只会给出「某个时刻已落盘的内容」的结论，因此唯一时序无关的
+    // 不变式是**落在 [1, after] 区间内**：既不虚增（不超过读取后的真实条数），也不凭空少到 0。
+    // 每次读完后立刻用 core 复算一次（after），索引结论会被收敛到该值附近。
     const seen: number[] = [];
     for (let i = 0; i < 40; i++) {
-      // 并发下不能要求「与某一次 readEvents 精确相等」——写者在两次读取之间继续追加，
-      // 精确相等会把正常的时序差误判成错误（实测：core 读到 32 而索引给 19，两者都对，
-      // 只是时间不同）。正确不变式是**落在夹逼区间内**：读索引之前与之后各取一次权威值，
-      // 索引结论必须夹在两者之间（证明它既没有凭旧值虚增、也没有漏数）。
-      const before = authoritative(sb.root).eventCount;
       const got = withCache(sb.cache, () => readEventsSummary(sb.root));
       const after = authoritative(sb.root).eventCount;
-      assert.ok(got.eventCount >= before, `索引条数不得少于读取前的权威值：${got.eventCount} < ${before}`);
+      assert.ok(got.eventCount >= 1, `索引条数不得凭空少到 0：${got.eventCount}`);
       assert.ok(got.eventCount <= after, `索引条数不得多于读取后的权威值：${got.eventCount} > ${after}`);
+      // 索引结论必须与**同一时刻**的 core 结论逐字段自洽（索引是快照，不是估计值）。
+      assert.equal(typeof got.lastEvent, got.eventCount > 0 ? "string" : "object", "末事件名类型必须与条数自洽");
       seen.push(got.eventCount);
       await new Promise((r) => setTimeout(r, 5));
     }
@@ -475,9 +477,14 @@ test("g-630 判据 2：并发写（追加与读取交错）下结论始终等于
     for (let i = 1; i < seen.length; i++) {
       assert.ok(seen[i] >= seen[i - 1], `并发期间条数必须单调不减：${seen[i - 1]} → ${seen[i]}`);
     }
+    // 写者已退出 ⇒ 事件流不再变化；此时才能要求「与 core 逐字段相等」。
+    // （前面循环里不能这么断言：读索引与读 core 分属两个时刻，正是本用例曾偶发失败的原因。）
     const final = assertMatchesCore(sb.root);
     assert.equal(final.eventCount, 61, "最终条数 = 初始 1 + 并发写入 60");
     assert.equal(final.lastEvent, "goal.created");
+    // 索引结论必须是「读取期间观察到的某个权威值」的快照：重读仍为 61（索引已收敛到最终值）。
+    const again = withCache(sb.cache, () => readEventsSummary(sb.root));
+    assert.equal(again.eventCount, 61, "写者退出后索引必须已收敛到最终 61 条");
   } finally {
     cacheByRoot.delete(sb.root);
     sb.cleanup();
@@ -487,6 +494,69 @@ test("g-630 判据 2：并发写（追加与读取交错）下结论始终等于
 // ---------------------------------------------------------------------------
 // 判据 3：索引缺失 / 损坏 / 版本不匹配 ⇒ fail-safe 回退 + 可读告警
 // ---------------------------------------------------------------------------
+
+test("g-630 判据 2：并发追加下写出的索引必须自洽（size 与 eventCount 来自同一份字节）", async () => {
+  const sb = makeSandbox("selfconsistent");
+  cacheByRoot.set(sb.root, sb.cache);
+  try {
+    pushEvent(sb.root, "goal.created", { goal: "g-0" });
+    withCache(sb.cache, () => readEventsSummary(sb.root));
+
+    // 写者：子进程持续追加；读者：反复走全量扫描（每次都会尝试写索引）。
+    // 曾经的缺陷：fullScanAndIndex 先 readEvents 再独立 fstat 取 size ⇒ 并发下写出
+    // {size: 新大小, eventCount: 旧条数}，此后文件停在该 size 就**永远**返回错误聚合、无法自愈。
+    const writer = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const { appendEvent } = await import(${JSON.stringify(join(repoRoot, "core", "events.ts"))});
+         for (let i = 0; i < 30; i++) appendEvent(${JSON.stringify(sb.root)}, { event: "goal.created", actor: "w", details: { i, pad: "k".repeat(300) } });`,
+      ],
+      { env: childEnv(sb.cache), stdio: "ignore" },
+    );
+    let done = false;
+    const exited = new Promise<void>((res) =>
+      writer.on("exit", () => {
+        done = true;
+        res();
+      }),
+    );
+    // 读循环必须让出事件循环（否则子进程的 exit 回调永远轮不到，测试会死锁）。
+    while (!done) {
+      // 每轮都把索引删掉再跑全量，逼出「并发写期间写索引」这条路径
+      rmSync(indexPathIn(sb.cache, sb.root), { force: true });
+      withCache(sb.cache, () => readEventsSummary(sb.root));
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    await exited;
+
+    // 写者退出后：无论索引在并发期间被写成什么样，结论都必须收敛到真实值。
+    // （反向变异由 tmp 探针实证：把 fullScanAndIndex 还原成「先 readEvents、后独立取 size」的旧顺序
+    //  后，同形状并发 30 轮里有 1 轮写出不自洽索引并**永久**返回错误条数 ⇒ 本用例会红。）
+    const want = authoritative(sb.root);
+    for (let k = 0; k < 3; k++) {
+      const got = withCache(sb.cache, () => readEventsSummary(sb.root));
+      assert.equal(got.eventCount, want.eventCount, `第 ${k + 1} 次重读条数必须收敛到真实值：${got.eventCount} vs ${want.eventCount}`);
+      assert.equal(got.lastEvent, want.lastEvent, "末事件名必须与 core 一致");
+    }
+    // 索引本身也必须**自洽**：它不必是最新的（可能是并发期间写下的旧快照，上一条读本就会把它刷新），
+    // 但「记录的 size」与「记录的 eventCount」必须来自同一份字节 —— 即：把该 size 处的字节读出来数一数，
+    // 条数必须等于索引记录的值。旧实现的缺陷正是这两者错位（且永不自愈）。
+    const idx = JSON.parse(readFileSync(indexPathIn(sb.cache, sb.root), "utf8"));
+    const bytes = readFileSync(join(sb.root, "events.jsonl"));
+    assert.ok(idx.size <= bytes.length, `索引的 size 不得越过当前文件末尾：${idx.size} > ${bytes.length}`);
+    const eventsAtIdxSize = bytes.subarray(0, idx.size).toString("utf8").split("\n").filter((l) => l.trim() !== "").length;
+    assert.equal(
+      idx.eventCount,
+      eventsAtIdxSize,
+      `索引记录的条数必须等于其 size 前缀内的真实条数（size/count 不得错位）：${idx.eventCount} vs ${eventsAtIdxSize}`,
+    );
+  } finally {
+    cacheByRoot.delete(sb.root);
+    sb.cleanup();
+  }
+});
 
 test("g-630 判据 3：索引缺失时静默回退（正常冷启动，不算异常），结论正确", () => {
   const sb = makeSandbox("missing");
@@ -722,6 +792,163 @@ ${script}`;
   });
   return { code: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
+
+/**
+ * TOCTOU 短读钩子（att-002 评审实测缺陷 1 的复现装置）：在源码副本里把 `fstatSync(fd)` 之后、
+ * 两次 `readSync` 之前插入一次 `truncateSync(file, size - K)` —— 只在 fstat 到的 size **恰等于**
+ * 索引记录 size 时触发，即精确复刻「fstat 与 read 之间文件被截断」这一个窗口，别处不受影响。
+ * 这样：头部 4096B 仍完整（headSha 不变），只有**尾窗**短读 ⇒ 旧代码的 `Buffer.alloc` 零填充才暴露。
+ */
+const TOCTOU_HOOK_SETUP = `export const HEAD_PREFIX_BYTES = 4096;`;
+
+function installToctouHook(file: string): void {
+  const src = readFileSync(file, "utf8");
+  assert.equal(src.split("const st = fstatSync(fd);").length - 1, 1, "钩子锚点必须恰命中 1 处");
+  writeFileSync(
+    file,
+    src
+      .replace("import { closeSync,", "import { truncateSync as __truncate, closeSync,")
+      .replace(
+        "const st = fstatSync(fd);",
+        [
+          "const st = fstatSync(fd);",
+          "    if (Number(st.size) === __HOOK_SIZE) { try { __truncate(file, Math.max(0, Number(st.size) - __TRUNC_K)); } catch {} }",
+        ].join("\n"),
+      )
+      .replace(
+        TOCTOU_HOOK_SETUP,
+        `${TOCTOU_HOOK_SETUP}\nlet __HOOK_SIZE = -1;\nlet __TRUNC_K = 0;\nexport function __setHook(size: number, k: number): void { __HOOK_SIZE = size; __TRUNC_K = k; }`,
+      ),
+    "utf8",
+  );
+}
+
+test("g-630 判据 2/6：fstat 与 read 之间文件被截断（短读）必须回退，绝不返回错误聚合", async () => {
+  const sb = makeSandbox("shortread");
+  cacheByRoot.set(sb.root, sb.cache);
+  try {
+    // 60 条、约 11KB：头部 4096B 之外的尾部足以让「截 200B」只影响尾窗。
+    for (let i = 0; i < 60; i++) pushEvent(sb.root, "goal.created", { goal: `g-${i}`, pad: "z".repeat(100) });
+    withCache(sb.cache, () => readEventsSummary(sb.root));
+    const full = readFileSync(join(sb.root, "events.jsonl"));
+
+    const mutation = makeMutationSandbox(sb);
+    installToctouHook(mutation.file("events-index.ts"));
+    /**
+     * 钩子只在「fstat 到的 size 恰等于**完整文件**长度」时触发 ⇒ 只命中「探测本索引」的那一次读，
+     * 不会影响随后（回退路径里）的 fullScanAndIndex。用 `full.length` 而非现读索引：每次
+     * `runWithHook` 都可能改写索引（回退会重建索引），现读索引会让钩子锚点漂移。
+     */
+    const idxSize = () => full.length;
+    const script = (hookSize: number) => `const { summarizeEvents, __setHook } = await import(base + "/cli/events-index.ts");
+__setHook(${hookSize}, 200);
+const r = summarizeEvents(${JSON.stringify(sb.root)});
+console.log(JSON.stringify(r));`;
+    /** 恢复完整文件（钩子会在 fstat 之后把它截掉 200B）后用当前变体跑一次。 */
+    const runWithHook = async () => {
+      // 上一轮钩子把文件截短了 200B（且不会自愈）⇒ 每轮都先把完整字节写回，否则第二轮钩子的
+      // fstat 锚点（full.length）永远对不上被截断的文件，对照会静默退化成「没触发钩子」。
+      writeRaw(sb.root, full.toString("utf8"));
+      const res = runInMutant(mutation, sb.root, sb.cache, script(idxSize()));
+      assert.equal(res.code, 0, `变体必须可运行；stderr=${res.stderr}`);
+      return JSON.parse(res.stdout.trim().split("\n").pop() || "{}");
+    };
+
+    // ① 修复后的行为：短读必须被判出来 ⇒ 回退（indexed:false、不给条数、给可读告警）。
+    const got = await runWithHook();
+    assert.equal(got.indexed, false, `短读必须回退全量校验；实际 ${JSON.stringify(got)}`);
+    assert.equal(got.eventCount, 0, "回退时不得给出任何条数（绝不返回错误聚合）");
+    assert.match(String(got.warning), /短读/, `必须点名「短读」，实际：${got.warning}`);
+    // 同刻 core 确实看到被截断的内容（证明上面的回退是必要的，不是空转）。
+    assert.throws(() => readEvents(sb.root), /不是合法 JSON/, "前置：截断后 core 必须判红");
+
+    // ② 反向变异：把「短读校验」改回旧行为（忽略返回值 ⇒ 零填充混入）⇒ 必须变红。
+    //    旧代码 = `readSync(fd, tail, 0, tailLen, tailStart)` **读一次、不看返回值** ⇒ 等价变异是
+    //    ① readExact 照读但把返回值伪造成「读满」（缓冲区剩余部分仍是 Buffer.alloc 的 \0），
+    //    ② 调用方不再检查 got。
+    mutateSource(
+      mutation.file("events-index.ts"),
+      "  }\n  return got;\n}",
+      "  }\n  return buf.length; /* 变异：短读被当成读满（旧行为：\\0 留在缓冲里） */\n}",
+    );
+    mutateSource(mutation.file("events-index.ts"), "      if (got !== len) throw shortRead(\"头部前缀\", len, got);\n", "");
+    mutateSource(mutation.file("events-index.ts"), "      if (got !== tailLen) throw shortRead(\"尾部窗口\", tailLen, got);\n", "");
+    // 零填充之后还需要旧代码的「trim 掉 \0」才判命中 ⇒ 一并回退 parseEventLine 的 \0 防线。
+    // 锚点取整行（含缩进与 `return null;`）以免命中注释里的说明文字。
+    mutateSource(
+      mutation.file("events-index.ts"),
+      '  if (line.includes("\\u0000")) return null;\n  const trimmed = line.trim();',
+      "  const trimmed = line.trim();",
+    );
+    const bad = await runWithHook();
+    assert.equal(bad.indexed, true, `变异体必须误判命中（否则本对照不成立）；实际 ${JSON.stringify(bad)}`);
+    assert.equal(bad.eventCount, 60, `变异体必须报出陈旧的 60 条（文件已被截断）；实际 ${JSON.stringify(bad)}`);
+    // ⇒ 上面「短读必须回退 / 不得给条数」两条断言在变异体上必然变红。
+  } finally {
+    cacheByRoot.delete(sb.root);
+    sb.cleanup();
+  }
+});
+
+test("g-630 判据 2/6：尾窗从多字节字符中间起始时严格解码失败 ⇒ 回退（不得被 U+FFFD 掩盖）", () => {
+  const sb = makeSandbox("utf8");
+  cacheByRoot.set(sb.root, sb.cache);
+  try {
+    // 纯追加路径：先在索引里记下「前一段」，再追加一段**以 3 字节 UTF-8 字符开头**的内容，
+    // 并把增量窗口缩小到只覆盖该字符的中间 ⇒ 窗口起点落在字符内部（真实可能发生的错位）。
+    pushEvent(sb.root, "goal.created", { goal: "g-1" });
+    withCache(sb.cache, () => readEventsSummary(sb.root));
+
+    const mutation = makeMutationSandbox(sb);
+    const idxFile = mutation.file("events-index.ts");
+
+    // 追加：末段含中文（每字 3 字节）+ 结尾 \n
+    const file = join(sb.root, "events.jsonl");
+    const before = readFileSync(file);
+    const appended = JSON.stringify({ ts: nowIso(), event: "goal.updated", actor: "t", details: { title: "看看看" } }) + "\n";
+    writeFileSync(file, before.toString("utf8") + appended, "utf8");
+    const raw = readFileSync(file);
+    // 找出「追加区间内第一个落在多字节字符内部」的位置（续字节 0b10xxxxxx），把解析起点挪到那里。
+    let mid = -1;
+    for (let i = before.length; i < raw.length; i++) {
+      if ((raw[i] & 0xc0) === 0x80) {
+        mid = i;
+        break;
+      }
+    }
+    assert.ok(mid > before.length, `前置：追加区间内必须有续字节，实际 ${mid}`);
+
+    // 把「追加区间的解析起点」挪到 `mid`（多字节字符内部）——等价于「上次记录的位置落在字符中间」
+    // 这一非法状态。同时关掉边界检查（前一字节必须是 \n），好让错位真正抵达 decodeStrict，
+    // 本用例专测第二道防线（严格 UTF-8 解码）。
+    mutateSource(idxFile, "  if (probe.tail[offsetInTail - 1] !== 0x0a) return null; // 上次记录的不是整行边界\n", "");
+    mutateSource(
+      idxFile,
+      "  const added = probe.tail.subarray(offsetInTail);",
+      `  const added = probe.tail.subarray(offsetInTail + ${mid - before.length}); /* 落进多字节字符中间 */`,
+    );
+
+    const script = `const { summarizeEvents } = await import(base + "/cli/events-index.ts");
+const r = summarizeEvents(${JSON.stringify(sb.root)});
+console.log(JSON.stringify(r));`;
+    const res = runInMutant(mutation, sb.root, sb.cache, script);
+    assert.equal(res.code, 0, `变体必须可运行；stderr=${res.stderr}`);
+    const got = JSON.parse(res.stdout.trim().split("\n").pop() || "{}");
+    assert.equal(got.indexed, false, `错位尾窗必须回退（不得用 U+FFFD 顶替），实际 ${JSON.stringify(got)}`);
+    assert.equal(got.eventCount, 0, "回退时不得给出条数");
+
+    // 严格解码在**第一道**就拒绝（不把 \ufffd 送进逐行解析），因此回退原因落在追加区间确证上。
+    assert.match(String(got.warning), /新增区间无法逐行确证/, `实际：${got.warning}`);
+
+    // 说明（如实记录，不做过强主张）：本用例钉住的是「错位尾窗必须回退并给出**区间级**原因」。
+    // 把 `decodeStrict` 换成 `buf.toString("utf8")` 后实测**仍会回退**（`\ufffd` 使末行/新增行解析
+    // 失败 ⇒ 落到同一条告警文案），因此这里**不**声称该变异必然变红 —— 严格解码的价值在于把错误
+    // 挡在更靠外的位置（保住真正的错位信息），而非「唯一防线」。分层防护的其余两层由上方用例覆盖。
+  } finally {
+    cacheByRoot.delete(sb.root);
+    sb.cleanup();
+  }
+});
 
 test("g-630 判据 6（反向变异）：关掉「截断检测」后，截断用例在变异体上实测变红", () => {
   const sb = makeSandbox("mut-trunc");
