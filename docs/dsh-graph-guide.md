@@ -1,6 +1,6 @@
 # dsh-graph 使用说明（g-314）
 
-`dsh-graph` 是 dsh-graph 的**轻量命令行**（除 `sync`、`claim` 外全部只读）：直接读写工作区里的 `.dsh-graph/` 资产，
+`dsh-graph` 是 dsh-graph 的**轻量命令行**（除 `sync`、`claim`、`submit` 外全部只读）：直接读写工作区里的 `.dsh-graph/` 资产，
 不起常驻服务、不联网、不引入任何第三方 CLI 框架。面向单兵 CLI 工具（Claude Code、Codex、
 OpenCode 等）里「看一眼看板」的场景：一条命令、毫秒级返回。
 
@@ -39,20 +39,21 @@ dsh-graph goal list        列出目标（默认不含归档；--all 含归档�
 dsh-graph goal show <id>   显示单个目标（元信息 + 正文）
 dsh-graph sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（g-315）
 dsh-graph claim <goal-id>  认领目标：推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）（g-316）
+dsh-graph submit [goal-id] 提交：跑全量自检门禁 + Git 变更统计 → 推进到 review + review.requested（g-317）
 dsh-graph version          显示版本
 dsh-graph help             显示帮助
 ```
 
 选项：`--root <path>`（显式指定 graph root）、`--json`（机器可读输出）、
 `--all/-a`（`goal list` 含归档）、`--full` / `--active-only` / `--target <path>`（仅 `sync`，见下）、
-`--help/-h`、`--version/-V`。
+`--skip-tests`（仅 `submit`，**默认关闭**，见下）、`--help/-h`、`--version/-V`。
 
 ### 退出码
 
 | 码 | 含义 |
 | --- | --- |
 | `0` | 成功 |
-| `1` | 运行期失败：非工作区、未初始化、目标不存在、损坏配置/事件流、非法路径、claim 的可判定拒绝 |
+| `1` | 运行期失败：非工作区、未初始化、目标不存在、损坏配置/事件流、非法路径、claim/submit 的可判定拒绝（含 `submit --skip-tests` 的「未验证」降级） |
 | `2` | 用法错误：未知命令/子命令/选项、缺参、多余参数 |
 
 失败一律给出**中文可读原因**，且**零副作用**（不 init、不记事件、不建目录）。
@@ -242,16 +243,128 @@ dsh-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
 **除「持久化阶段失败」（事件先行的固有余量）外，所有拒绝路径都是零副作用**：判定全部发生在
 任何写入之前；测试用「整树内容哈希 + inode + mtime」快照逐字节比对。
 
+## `dsh-graph submit [goal-id]`：机器化完成闭环（g-317）
+
+写命令链的最后一环：跑项目自检、取**可信**结论、收集 Git 变更统计，然后把目标经 core 状态机推进到
+`review` 并写入 `review.requested` —— 用机器证据完成交接，而不是自然语言扯皮。
+
+```bash
+dsh-graph submit                # 推断唯一在途目标（状态 in_progress）
+dsh-graph submit g-317          # 显式指定目标
+dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Agent 读取）
+```
+
+**目标推断（判据 1）**：「在途」的唯一口径是状态 `in_progress`。省略 goal-id 时若在途目标不是恰好
+1 个 ⇒ **报错并列出候选**（`goal-ambiguous` / `goal-none-in-flight`），绝不猜。已在 `review` 的目标
+**不算在途** —— 否则「重复提交」与「从在途推断」必然互相矛盾（见下方幂等）。
+唯一的 `review` 目标只在**没有任何在途目标**时才被用来做**幂等重放推断**（`submit` 回一次
+`changed=false` 的成功，不迁移、不写事件）；只要还有在途目标，它就不参与推断。
+
+### 自检为什么必须可信（判据 2，本命令最关键的点）
+
+项目 `scripts.test` 是 `node --test core/tests/*.test.ts`，而它**无法区分伪绿**：注入
+`NODE_TEST_CONTEXT` 时 `node --test` 会静默 skip 全部文件并 `exit 0`；被取消 / 跳过 / 待办的用例
+只计入 `cancelled` / `skipped` / `todo` 而非 `fail`。因此 `submit`：
+
+- 只调用 **`node scripts/run-tests.mjs`**（含三方交叉校验的整套件自证闸门，即 AGENTS.md 里的
+  全量门禁），并以**它的退出码**为准；**从不**把 `node --test` 的原始退出码当权威；
+- 额外核对自证行，**任一条即阻断**：退出码非 0、退出码 0 却解析不到自证行（未运行 / 空选集）、
+  `tests=0`、`skipped`/`todo`/`cancelled` 任一非 0、退出码 0 但 `fail>0`（计数自相矛盾）；
+- 阻断时在简报里**点名原因**，而不是只回一个裸退出码。注意门禁的两种自证行**形态不同**，
+  原因也来自不同的地方：
+
+  | 结局 | 门禁自证行 | 转述来源 |
+  | --- | --- | --- |
+  | 通过 | `[run-tests] ✔ 自证通过：tests=… (>0) skipped=… fail=… cancelled=… todo=… pass=… exit=0 …`（**带计数**） | 计数逐个核对 |
+  | 失败 | `[run-tests] ✖ 自证失败：<原因串>`（**只有原因，没有计数**） | 摘冒号后的原因串 |
+
+  失败行**不含**计数，所以原因取自那一句本身——例如真实门禁跑出
+  `✖ 自证失败：整套件自证闸门不达标 —— 有用例被**跳过**（skipped=1）` 时，`submit` 报的是
+  「门禁原因：整套件自证闸门不达标 —— 有用例被**跳过**（skipped=1）」，而不是笼统的
+  「测试未运行」。只有输出里**完全没有**任何自证行（测试真的没跑起来 / 输出被截断）时，
+  才会报「未解析到自检自证行」。
+
+不使用 `pnpm test` / `npx`：pnpm 的 `verifyDepsBeforeRun` 会隐式 install 并触发构建（AGENTS.md 明令禁项）。
+
+### Git 变更统计口径（判据 4）
+
+| 字段 | 命令 | 口径 |
+| --- | --- | --- |
+| `files_changed` / `insertions` / `deletions` | `git diff --numstat HEAD` | 相对 **HEAD** ⇒ **已暂存与未暂存一并计入**；**不含**未跟踪文件（它对 HEAD 没有 diff）；二进制文件按 0 行计但文件仍计 1 个 |
+| `untracked_files` | `git ls-files --others --exclude-standard` | 未跟踪文件数；已被 `.gitignore` 忽略的**不计入**（它们本来就不会入库） |
+| `clean` | `git status --porcelain` | 为空即干净 |
+
+两种情况的行为都明确、都不静默：
+
+- **工作区不干净**（正常情况：提交前本就有改动）⇒ 照常提交，统计写入事件作为机器证据；
+- **无变更**（0 文件 / 0 行）⇒ **继续提交**，但在边界提示里明确标注「工作区无任何改动」；
+- **非 git 工作区** ⇒ `changes=null` 并在边界里说明，不伪造 0。
+
+### 状态迁移与事件顺序（判据 5）
+
+写路径全部复用 core，CLI 不手写 events、不写 `goal.md`、不绕锁：
+
+1. `core.requestAcceptReview` 写 **`review.requested`**（既有入口：`details` 含 `targetStage` /
+   `what` / `snapshot`（截断 200 字），并追加机器证据摘要 `command` / `exit_code` / `verified` /
+   `tests` / `pass` / `fail` / `skipped` / `todo` / `cancelled` / `changes` 计数）；
+2. `core.transition` 把状态推进到 `review`（`goal.transition` 事件先行、再写 frontmatter）。
+
+**顺序由测试钉住**：真源码副本里给 `transition` 注入失败后，`review.requested` 已落盘、状态未变，
+`--json` 的 `events_written=true` 且 stderr 如实说明「事件已先行落盘」。
+
+**幂等（判据 8）**：目标已在 `review` ⇒ **幂等成功**（退出 `0`、`changed=false`、`events=[]`、
+**不产生任何事件、不改任何字节**）。为了让「重跑确认」始终可用，幂等命中**仍会重跑一次自检**并把
+当前结论放进输出（不写看板）——否则一份短暂失败过的测试会让「已提交」永远无法被重复确认。
+
+### 长文本零污染（判据 6）
+
+测试输出与 diff 全文**绝不**进 `events.jsonl`、`--json` 与看板字段：进程内只保留输出尾部（≤400 字）
+供人类简报使用；`--json` 只给计数、退出码与耗时；事件里只有计数摘要。测试对事件行长度与字段做
+断言。
+
+### `--skip-tests`（显式降级，默认关闭）
+
+**默认关闭**。显式给出时跳过自检：看板仍然照常迁移到 `review`（事件里 `verified=false`），但
+
+- 退出码为 **1**（不是 0 —— 未验证绝不伪装成通过）；
+- 人类简报与 stderr 都**大声标注「未验证」**，`--json` 给 `verified=false` / `unverified=true`。
+
+### 边界与退出码
+
+| 场景 | 退出码 | code / 行为 |
+| --- | --- | --- |
+| 成功 | `0` | 输出完成简报（`--json` 为结构化结果） |
+| 已在 `review`（幂等命中） | `0` | `changed=false`，零事件、零字节改动 |
+| 缺目标 >1 个参数 / 未知选项 / `--skip-tests` 用在别的命令 | `2` | 用法错误 |
+| 多个 / 没有在途目标（省略 goal-id） | `1` | `goal-ambiguous`（列候选）/ `goal-none-in-flight` |
+| 目标不存在 | `1` | `goal-not-found` |
+| **目标文件损坏** | `1` | `goal-file-corrupt`（**不**伪装成「不存在」） |
+| 已归档 | `1` | `goal-archived` |
+| 状态不允许（`draft`/`planning`/`collecting`/`ready`/`blocked`） | `1` | `state-not-allowed`，提示先 `claim` |
+| **自检未通过 / 伪绿 / 空选集 / 未运行** | `1` | `self-check-blocked`，点名原因（转述门禁失败行里 `✖ 自证失败：` 之后的原因串）；看板零改动 |
+| 非 dsh-graph 工作区 | `1` | 提示在项目根运行或 `--root`；零副作用 |
+| 看板未初始化 | `1` | 提示先初始化 |
+| 只读看板目录 | `1` | `board-unwritable`；预检在**取锁之前** ⇒ 连锁文件都不建 |
+| 并发 submit（锁被占用） | `1` | `submit-lock-busy` |
+| `review.requested` 写入失败 | `1` | `review-request-failed`，状态未变 |
+| 迁移失败 | `1` | `transition-*`；`review.requested` 已先行落盘，如实标注 |
+| `--skip-tests`（未验证降级） | `1` | 看板已写入，但 `verified=false` + 大声告警「未验证」 |
+
+**除上述「事件已先行落盘」的固有余量外，所有拒绝路径都是零副作用**：判定全部发生在任何写入之前；
+测试用「整树内容哈希 + inode + mtime」快照逐字节比对。注意自检本身会跑测试（可能写临时文件），
+判据要求的「零副作用」指的是**看板状态与事件零改动**。
+
 ## 复用与安全边界
 
 - **复用 core**：`project.yaml` 走 `readProjectConfig`（含 `*_malformed` fail-closed 标志）、
   事件流走 `readEvents`、目标文件走 `listGoalFiles`/`loadGoal`/`findGoalFile`、
   frontmatter 与状态机全部来自 `core/domain/*`。CLI 不复制 frontmatter 解析、事件解析、
   状态机或锁逻辑（由 `core/tests/g314-dsh-graph.test.ts` 的可执行代码静态扫描守卫）。
-- **写命令只有两个**：`sync`（写 workspace 根的受控区段，不碰 `.dsh-graph`）与 `claim`
+- **写命令只有三个**：`sync`（写 workspace 根的受控区段，不碰 `.dsh-graph`）、`claim` 与 `submit`
   （经 core 的锁 + 事件先行写看板状态）。其余命令不写任何文件。
-  `claim` 的迁移一律经 core 的 `transition`（CLI 不拼事件行、不自己写目标文件）；
-  由 `core/tests/g316-claim.test.ts` 的可执行代码静态扫描守卫。
+  `claim` 的迁移一律经 core 的 `transition`；`submit` 一律经 core 的 `requestAcceptReview` +
+  `transition`（CLI 不拼事件行、不自己写目标文件）；分别由 `core/tests/g316-claim.test.ts` 与
+  `core/tests/g317-submit.test.ts` 的可执行代码静态扫描守卫。
 - **不读凭据、不联网**：源码不含 `node:http/https/net/dns/tls` 或 `fetch`。
 - **隔离**：不触碰用户全局配置，不写其他项目数据。
 
@@ -315,6 +428,7 @@ dsh-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
 node --test core/tests/g314-dsh-graph.test.ts   # g-314 专项：21 条用例
 node --test core/tests/g315-sync-projection.test.ts  # g-315 专项
 node --test core/tests/g316-claim.test.ts     # g-316 专项：22 条用例（含 4 条真源码副本反向变异）
+node --test core/tests/g317-submit.test.ts    # g-317 专项（含真实门禁链路 + 2 条真源码副本反向变异）
 node scripts/run-tests.mjs                     # 整套件自证闸门
 ./node_modules/.bin/tsc --noEmit -p tsconfig.json
 ```

@@ -16,7 +16,7 @@ export interface ArgError {
 }
 
 export interface ParsedArgs {
-  /** 命令名词（`info` / `status` / `version` / `goal` / `help`）。 */
+  /** 命令名词（`info` / `status` / `version` / `goal` / `sync` / `claim` / `submit` / `help`）。 */
   command: string | null;
   /** 子命令（`goal` 的 `list` / `show`）。 */
   subcommand: string | null;
@@ -38,6 +38,11 @@ export interface ParsedArgs {
   activeOnly: boolean;
   /** `--target <path>`：`sync` 只写其中一个输出文档（g-315）。 */
   target: string | null;
+  /**
+   * `--skip-tests`（g-317）：**默认关闭**。显式给出时跳过自检，工作摘要与事件里一律标注
+   * 「未验证」并以非零退出（见 `submit.ts`：绝不伪装成全绿）。
+   */
+  skipTests: boolean;
 }
 
 export interface ParseResult {
@@ -46,7 +51,7 @@ export interface ParseResult {
 }
 
 /** 已知顶层命令（`goal` 为多子命令容器）。 */
-export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "claim", "help"] as const;
+export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "claim", "submit", "help"] as const;
 /** `goal` 的已知子命令。 */
 export const GOAL_SUBCOMMANDS = ["list", "show"] as const;
 
@@ -57,6 +62,7 @@ const MAX_POSITIONALS: Record<string, number> = {
   version: 0,
   sync: 0,
   claim: 1,
+  submit: 1,
   help: 0,
   "goal list": 0,
   "goal show": 1,
@@ -82,6 +88,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   let full = false;
   let activeOnly = false;
   let target: string | null = null;
+  let skipTests = false;
   let afterDoubleDash = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -135,13 +142,14 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     if (token === "--all" || token === "-a") { all = true; continue; }
     if (token === "--full") { full = true; continue; }
     if (token === "--active-only") { activeOnly = true; continue; }
+    if (token === "--skip-tests") { skipTests = true; continue; }
     if (token === "--help" || token === "-h") { help = true; continue; }
     if (token === "--version" || token === "-V") { version = true; continue; }
 
     if (token.startsWith("-") && token !== "-") {
       return err(
         "unknown-option",
-        `未知选项：${token}（可用：--root、--json、--all、--full、--active-only、--target、--help、--version）`,
+        `未知选项：${token}（可用：--root、--json、--all、--full、--active-only、--target、--skip-tests、--help、--version）`,
       );
     }
     positionals.push(token);
@@ -165,6 +173,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           full,
           activeOnly,
           target,
+          skipTests,
         },
         error: null,
       };
@@ -198,6 +207,11 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     }
   }
 
+  // 选项与命令的适配（g-317）：`--skip-tests` 只适用于 submit，出现在其它命令上属于用法错误。
+  if (command !== "submit" && skipTests) {
+    return err("unexpected-argument", "选项 --skip-tests 只适用于 submit 命令");
+  }
+
   // 选项与命令的适配（g-315）：sync 专属选项出现在其它命令上属于用法错误，不得被静默忽略。
   if (command !== "sync" && (full || activeOnly || target !== null)) {
     const used = [full ? "--full" : null, activeOnly ? "--active-only" : null, target !== null ? "--target" : null]
@@ -222,6 +236,11 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   if (command === "claim" && tail.length === 0) {
     return err("missing-argument", "命令 claim 需要一个目标 ID（用法：dsh-graph claim <goal-id>）");
   }
+  // submit（g-317）：**允许省略** goal-id —— 省略时从「唯一在途目标」推断（多个/没有 ⇒ 在
+  // submit.ts 里报错并列候选，不猜）。这里只拒绝「给多了」。
+  if (command === "submit" && tail.length > 0 && tail[0].trim() === "") {
+    return err("missing-argument", "命令 submit 的目标 ID 不能为空串（用法：dsh-graph submit [goal-id]）");
+  }
 
   return {
     args: {
@@ -236,6 +255,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       full,
       activeOnly,
       target,
+      skipTests,
     },
     error: null,
   };

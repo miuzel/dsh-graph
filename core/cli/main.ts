@@ -12,8 +12,10 @@
  * 会写文件的命令只有两个：
  * - `sync`（g-315）只写 workspace 根的 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，
  *   **从不**写 `.dsh-graph`（写入实现见 `sync.ts`：先全部规划、后原子落地）；
- * - `claim`（g-316）是**唯一的看板写命令**：它只经 core 的 `transition` 迁移目标状态
- *   （事件先行 + 锁 + 锁内重读），并把轻量任务单打到 stdout（实现见 `claim.ts`）。
+ * - `claim`（g-316）只经 core 的 `transition` 迁移目标状态
+ *   （事件先行 + 锁 + 锁内重读），并把轻量任务单打到 stdout（实现见 `claim.ts`）；
+ * - `submit`（g-317）同样只经 core 的 `transition` + `requestAcceptReview` 写看板：
+ *   先跑全量自检门禁与 Git 统计，再把目标推进到 `review`（实现见 `submit.ts`）。
  */
 import { parseArgs, type ParsedArgs } from "./args.ts";
 import { locateGraphRoot, LocateError } from "./locate.ts";
@@ -44,7 +46,7 @@ export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 
-const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读；写命令只有 sync 与 claim）
+const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读；写命令只有 sync / claim / submit）
 
 用法：
   dsh-graph <命令> [选项]
@@ -56,6 +58,7 @@ const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读
   goal show <id>   显示单个目标（含正文）
   sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段
   claim <goal-id>  认领目标：把状态推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）
+  submit [goal-id] 提交：跑全量自检门禁 + Git 变更统计，把目标推进到 review 并写 review.requested
   version          显示 dsh-graph 版本
   help             显示本帮助
 
@@ -66,6 +69,7 @@ const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读
   --full           sync 不折叠目标列表（默认单次最多列 40 个）
   --active-only    sync 跳过终态目标（delivered）
   --target <path>  sync 只写其一：.claude/CLAUDE.md 或 AGENTS.md
+  --skip-tests     submit 跳过自检（**默认关闭**；显式使用即以非零退出并标注「未验证」）
   --help, -h       显示帮助
   --version, -V    显示版本
 
@@ -74,7 +78,7 @@ const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读
   不会回落到用户全局配置（$DSH_HOME / ~/.dsh）。
 
 退出码：
-  0 成功 / 1 运行期失败（非工作区、未初始化、目标不存在、损坏配置、sync 的可判定失败） / 2 用法错误
+  0 成功 / 1 运行期失败（非工作区、未初始化、目标不存在、损坏配置、sync/claim/submit 的可判定失败） / 2 用法错误
 
 sync（g-315）：
   把 .dsh-graph 的 standing 常驻记忆（稳定前缀）与未发布版本目标概览（动态段）投影到
@@ -88,6 +92,14 @@ claim（g-316）：
   （解析一律经 core 的公开入口，CLI 不自行解析目标文件格式。）
   已是 in_progress ⇒ 幂等成功（不写事件）。目标不存在 / 无判据 / 判据未确认 / 状态不允许 /
   损坏 goal.md / 非工作区 / 只读目录 / 并发认领 ⇒ 非零退出且零副作用。claim 不派发子代理、不建 attempt 目录。
+
+submit（g-317）：
+  写命令链最后一环。省略 goal-id 时从**唯一在途目标**（状态 in_progress）推断；多个或没有即报错
+  并列出候选（不猜）。随后依次：跑 node scripts/run-tests.mjs 全量自检门禁（**只看它的退出码**，
+  不是 node --test 的原始退出码 —— 后者无法区分 skip/todo/cancelled 伪绿）、收集 Git 变更统计
+  （git diff --numstat HEAD 含暂存 + git ls-files --others 未跟踪；口径详见 docs/dsh-graph-guide.md），
+  然后经 core 状态机把目标推进到 review：**review.requested（含机器证据摘要）先行、goal.transition 后行**。
+  已在 review ⇒ 幂等命中（退出 0，不写任何事件）。任一步阻断 ⇒ 非零退出且看板状态与事件零改动。
 `;
 
 function emit(out: string[], text: string): void {
@@ -104,6 +116,15 @@ function usageError(message: string): RunResult {
 
 function failure(message: string): RunResult {
   return { exitCode: EXIT_FAILURE, stdout: "", stderr: `dsh-graph: ${message}\n` };
+}/**
+ * 与 {@link failure} 等价、但**不复制同一行字面量**的失败出口。
+ *
+ * 为什么需要它（g-317 实测）：g-314/g-316 的反向变异把 failure() 的那行
+ * `return { exitCode: EXIT_FAILURE, … }` 当作「恰命中 1 处」的锚点；任何新命令再抄一遍
+ * 同一行，都会让那两个既有变异对照因「锚点命中 2 处」而红。故新命令一律走本出口。
+ */
+function submitFailure(message: string): RunResult {
+  return failure(message);
 }
 
 function jsonOut(value: unknown): string {
@@ -200,6 +221,10 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
 
   if (args.command === "claim") {
     return runClaimCommand(located, args);
+  }
+
+  if (args.command === "submit") {
+    return runSubmitCommand(located, args, ctx.cwd ?? process.cwd());
   }
 
   if (args.command === "goal" && args.subcommand === "list") {
@@ -369,6 +394,67 @@ async function runClaimCommand(
 
 /** claim 写入事件时的 actor 标识（与看板其它 CLI 动作一致：显式标明来源是可审计的前提）。 */
 const CLAIM_ACTOR = "cli:dsh-graph claim";
+
+/**
+ * `dsh-graph submit [goal-id]`（g-317）：自检 + Git 统计 → 推进到 review。
+ *
+ * 输出口径（退出码表见 `docs/dsh-graph-guide.md`）：
+ * - 成功（含已在 review 的幂等命中）⇒ exit 0；`--json` 给稳定结构的机器可读结果；
+ * - 自检阻断 / 目标不存在 / 状态不允许 / 重复推断歧义 / 损坏 goal.md / 非工作区 / 只读目录
+ *   ⇒ exit 1 且**看板状态与事件零改动**；
+ * - `--skip-tests` 显式降级 ⇒ 照常迁移但 exit 1、简报与 `--json` 标注「未验证」（绝不伪装成通过）；
+ * - 用法问题（多余参数、`--skip-tests` 用在别的命令）⇒ exit 2（由参数解析给出）。
+ *
+ * 写路径唯一：`submit.ts` 只调 core 的 `requestAcceptReview` + `transition`，本层不写任何文件。
+ */
+async function runSubmitCommand(
+  located: { root: string; workspace: string; warning?: string; explicit: boolean },
+  args: ParsedArgs,
+  invokedWorkspace: string,
+): Promise<RunResult> {
+  // submit 会连带 core 的 ops/状态机 + 子进程 ⇒ 动态加载，保持 info/version 冷启动成本不变。
+  const mod = await import("./submit.ts");
+  const warnLine = located.warning ? `警告：${located.warning}\n` : "";
+  const id = args.positionals.length > 0 ? args.positionals[0] : null;
+  try {
+    const result = await mod.submitGoal({
+      root: located.root,
+      // 自检与 Git 统计都在**调用者真正所在的工作区**里跑（`cd sub && dsh-graph submit` 时
+      // 往上找到的 workspace 可能不是仓库根；这里以调用 cwd 为准，保证跑的是同一份代码）。
+      workspace: invokedWorkspace,
+      id,
+      actor: SUBMIT_ACTOR,
+      skipTests: args.skipTests,
+    });
+    const exitCode = result.unverified ? EXIT_FAILURE : EXIT_OK;
+    // 未验证告警：`--json` 与人类输出**都**要发（脚本消费 JSON 时同样必须被告知「未验证」，
+    // 不能因为输出格式不同就让告警静默消失）。
+    const unverifiedWarn = result.unverified
+      ? `${warnLine}dsh-graph: ⚠ 本次 submit 为**未验证**（--skip-tests 或自检降级）：` +
+        `${result.changed ? "review.requested 已落盘" : "本次未写入看板（幂等命中）"}但无测试证据，请勿据此判为完成。\n`
+      : warnLine;
+    if (args.json) {
+      return { exitCode, stdout: jsonOut({ ok: true, ...result }), stderr: unverifiedWarn };
+    }
+    return { exitCode, stdout: mod.renderSubmitBrief(result), stderr: unverifiedWarn };
+  } catch (e) {
+    if (e instanceof mod.SubmitError) {
+      const tail = e.eventsWritten ? "（注意：事件已先行落盘，重试同一命令即可收敛）" : "";
+      const message = `submit${id ? ` ${id}` : ""} 失败：${e.message}${tail}`;
+      if (args.json) {
+        return { exitCode: EXIT_FAILURE, stdout: jsonOut(mod.submitErrorPayload(e, located.root)), stderr: `dsh-graph: ${message}\n` };
+      }
+      return submitFailure(message);
+    }
+    // 不在本分支复制 claim 的 `failure()` 写法：g-314/g-316 的反向变异把
+    // `return { exitCode: EXIT_FAILURE, stdout: "", stderr: \`dsh-graph: ${message}\\n\` };`
+    // 当作**恰命中 1 处**的锚点，多一处会让那两个既有变异对照失去意义（实测已踩红）。
+    return { exitCode: EXIT_FAILURE, stdout: "", stderr: `dsh-graph: submit 失败：${(e as Error).message}\n` };
+  }
+}
+
+/** submit 写入事件时的 actor 标识（与 claim 同口径：显式标明来源）。 */
+const SUBMIT_ACTOR = "cli:dsh-graph submit";
 
 /** 写入结果并返回退出码（供可执行入口复用；单测直接用 runCli 的返回值）。 */
 export async function runAndPrint(argv: readonly string[], ctx: CliContext): Promise<number> {

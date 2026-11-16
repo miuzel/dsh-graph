@@ -46,6 +46,7 @@
         "g313-architecture-eval-guard.test.ts",
         "g315-sync-projection.test.ts",
         "g316-claim.test.ts",
+        "g317-submit.test.ts",
         "g321-dsh-016-compat.test.ts",
         "g324-refresh-countdown-reset.test.ts",
         "g329-abandon-worktree.test.ts",

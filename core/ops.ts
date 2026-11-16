@@ -14025,11 +14025,16 @@ export function acceptReview(
 }
 
 /** 请求主管复核接受：追加 review.requested 事件，返回 {pending:true}。
- *  details 带 targetStage=当前 status、what=描述/判据/review、snapshot 简要。 */
+ *  details 带 targetStage=当前 status、what=描述/判据/review、snapshot 简要。
+ *
+ *  g-317：可选 `opts.extra` 把**机器证据摘要**（计数/退出码等短标量）并入同一事件的 details，
+ *  供 `dsh-graph submit` 复用本入口而不是另造事件。缺省（不传）时 details 与历史**逐字段相同**；
+ *  `extra` 不得用于倾倒长文本（调用方只传计数与短字符串）。 */
 export function requestAcceptReview(
   root: string,
   id: string,
   actor: string,
+  opts?: { extra?: Record<string, unknown> },
 ): { pending: true; goal: string } {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
@@ -14049,7 +14054,7 @@ export function requestAcceptReview(
     actor,
     event: "review.requested",
     goal: id,
-    details: { targetStage: status, what, snapshot },
+    details: { targetStage: status, what, snapshot, ...(opts?.extra ?? {}) },
   });
   return { pending: true, goal: id };
 }
