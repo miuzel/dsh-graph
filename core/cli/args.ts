@@ -43,6 +43,8 @@ export interface ParsedArgs {
    * 「未验证」并以非零退出（见 `submit.ts`：绝不伪装成全绿）。
    */
   skipTests: boolean;
+  /** g-623 */
+  serveArgv?: string[];
 }
 
 export interface ParseResult {
@@ -51,9 +53,11 @@ export interface ParseResult {
 }
 
 /** 已知顶层命令（`goal` 为多子命令容器）。 */
-export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "claim", "submit", "help"] as const;
+export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "claim", "submit", "serve", "help"] as const;
 /** `goal` 的已知子命令。 */
 export const GOAL_SUBCOMMANDS = ["list", "show"] as const;
+/** `serve` 的已知动作（g-623；其余 token 一律作为服务选项原样转交）。 */
+export const SERVE_ACTIONS = ["serve", "init", "status", "uninstall", "stop"] as const;
 
 /** 各命令接受的位置参数个数上限（不含子命令名）。 */
 const MAX_POSITIONALS: Record<string, number> = {
@@ -63,6 +67,7 @@ const MAX_POSITIONALS: Record<string, number> = {
   sync: 0,
   claim: 1,
   submit: 1,
+  serve: Number.POSITIVE_INFINITY,
   help: 0,
   "goal list": 0,
   "goal show": 1,
@@ -79,6 +84,7 @@ function err(code: ArgError["code"], message: string): ParseResult {
  * 选项可出现在命令前后（`dsh-graph --root x goal list` 与 `dsh-graph goal list --root x` 等价）。
  */
 export function parseArgs(argv: readonly string[]): ParseResult {
+  const rawArgv = [...argv];
   const positionals: string[] = [];
   let root: string | null = null;
   let json = false;
@@ -156,6 +162,55 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   }
 
   const [commandRaw, ...rest] = positionals;
+  // `serve` 专属选项由服务自己解析 ⇒ 原样保留 `--opt value` 的成对顺序（不随位置参数剥离）。
+  const serveRawArgv = rawArgv.slice(rawArgv.indexOf("serve") + 1).filter((t) => t !== "--");
+
+  // g-623：`serve` 的选项属于**服务**（--graph-root/--workspace/--state-dir/--port/--host/
+  // --rotate-token/--revoke-token …），CLI 参数解析器不解释它们，只原样转交（单一真源在
+  // core/service/serve.ts）。因此 `serve` 走**独立**的解析路径：跳过未知选项检查。
+  if (commandRaw === "serve") {
+    if (help) {
+      return {
+        args: {
+          command: "help",
+          subcommand: "serve",
+          positionals: [],
+          root: null,
+          json: false,
+          help: true,
+          version: false,
+          all: false,
+          full: false,
+          activeOnly: false,
+          target: null,
+          skipTests: false,
+        },
+        error: null,
+      };
+    }
+    const sub = positionals.slice(1);
+    const action = sub.find((t) => (SERVE_ACTIONS as readonly string[]).includes(t)) ?? "serve";
+    // 原样转交的 argv：按**原始**顺序，去掉动作词本身（动作由服务自己再解析一次）。
+    const serveArgv = serveRawArgv.filter((t) => t !== action);
+    return {
+      args: {
+        command: "serve",
+        subcommand: action === "serve" ? null : action,
+        positionals: sub.filter((t) => t !== action),
+        root: null,
+        json: false,
+        help: false,
+        version: false,
+        all: false,
+        full: false,
+        activeOnly: false,
+        target: null,
+        skipTests: false,
+        serveArgv,
+      },
+      error: null,
+    };
+  }
 
   // 仅 `--version` / `--help` 而无命令：仍合法（`dsh-graph --version`）。
   if (commandRaw === undefined) {

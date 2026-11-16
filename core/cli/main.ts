@@ -59,6 +59,7 @@ const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读
   sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段
   claim <goal-id>  认领目标：把状态推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）
   submit [goal-id] 提交：跑全量自检门禁 + Git 变更统计，把目标推进到 review 并写 review.requested
+  serve [...]      独立本地只读服务（Web App + Web API + localhost MCP）：init / status / uninstall / serve
   version          显示 dsh-graph 版本
   help             显示本帮助
 
@@ -84,6 +85,17 @@ sync（g-315）：
   把 .dsh-graph 的 standing 常驻记忆（稳定前缀）与未发布版本目标概览（动态段）投影到
   workspace 根的 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（<!-- dsh-graph:sync:begin/end -->）。
   区段外字节级不动；无标记时追加到末尾；无变更不写；有变更原子写；失败不写任何文件。
+
+serve（g-623）：
+  独立本地服务：**同一进程**同时提供 Web 静态入口（/）、Web API（/api/…）与 localhost MCP
+  endpoint（POST /mcp）。只读 MVP：只注册只读查询与安全附件引用，没有任何写/执行/人工审批路由。
+  只绑定数值回环 127.0.0.1（拒绝 0.0.0.0 / :: / LAN / 主机名），每个请求校验实际 peer、Host
+  与 Origin；MCP 每请求先验 token 再解析业务，token 只经 Authorization: Bearer 传递。
+  graphRoot（--root，只读看板）与 executionWorkspace（--workspace，执行目录）**显式分离**。
+  未初始化看板只报 E_NOT_INITIALIZED，**不**自动 init/claim。
+  动作：serve init（首次显式初始化：生成 ≥256bit token + 私有凭据 0600 + 运行配置）、
+  serve（前台启动，Ctrl-C 停止）、serve status（只读状态）、serve uninstall
+  （只删本服务自有凭据与运行配置，graph 数据不动）。CLI 不承载 Web UI，也不托管后台服务。
 
 claim（g-316）：
   唯一会写看板的命令。读取目标元信息与「质量判据」小节，经 core 状态机把
@@ -150,6 +162,20 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
       return { exitCode: EXIT_OK, stdout: jsonOut({ version: ctx.version, node: process.version }), stderr: "" };
     }
     return { exitCode: EXIT_OK, stdout: `dsh-graph ${ctx.version} (node ${process.version})\n`, stderr: "" };
+  }
+
+  // g-623：`serve` **不**承担 UI、也**不**承担服务生命周期托管 —— 它只把 argv 交给独立服务模块
+  // 执行一次显式动作（init/status/uninstall/serve 前台），因此不参与 graph root 定位，
+  // 也不读 `--root` 的既有语义（服务用显式 `--graph-root`/`--workspace`，见 serve.ts）。
+  if (args.command === "serve") {
+    const { runServeCommand } = await import("../service/serve.ts");
+    const out: string[] = [];
+    const err: string[] = [];
+    const exitCode = await runServeCommand((args as any).serveArgv ?? [], {
+      out: (s) => void out.push(s),
+      err: (s) => void err.push(s),
+    });
+    return { exitCode, stdout: out.join(""), stderr: err.join("") };
   }
 
   // 其余命令都需要定位 graph root。
