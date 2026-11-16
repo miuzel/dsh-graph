@@ -15,15 +15,15 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.2.2--rc.3%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.24.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v1.0.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）、内嵌 DSH Web 的二维泳道看板，以及独立的 `dsh-graph` 命令行工具。
 
-**最新亮点（v0.24.0）**
+**最新亮点（v1.0.0）**
 
-- **专家子代理可承接新目标**：`graph_start_attempt` 支持把**空闲**专家子代理（如 Agent Teams 成员）带上下文接到另一个目标上，免去重建与重读；运行中的一律拒绝，同一专家不会被两个未交付目标同时占用。
-- **关照唤醒不再连续打扰**：多个子代理的关照到期时间相近时合并为一次唤醒批量投递，不再隔几十秒连续叫醒主管；先到期任务最多顺延一个合并窗口。
-- **关照纪律不再重复注入**：唤醒正文改为「首次全量、后续精简」，多目标巡检时省下的篇幅随目标数放大（10 目标约省 85%）；精简版仍保留判据定义与两条防误判纪律，可用 `supervisor.care_wake_compact: false` 一键退回旧行为。
-- **支持 DSH 0.2.2 宿主**：v0.25.0 起声明范围收窄为 `>=0.2.2-rc.3 <0.2.3-0`，并在 `0.2.2-rc.3` 上完成安装、启动、派发、子代理生命周期与看板读写验证（升级说明见 [docs/host-compat-v0.25.0.md](docs/host-compat-v0.25.0.md)）。**`0.2.2-rc.1` / `rc.2` 已不在支持范围**：其所需的嵌套 activation spec 分支已删除。
-- **测试基线恢复全绿**：修复真实宿主测试夹具对新宿主的适配，全量自证由 142 例漂移失败恢复为 2920+ 全绿。
+- **命令行工具 `dsh-graph`**：`info` / `status` / `goal` / `version` 只读查询，`sync` 投影常驻事实与目标概览到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，`claim` 认领目标并注入判据，`submit` 跑全量自检后把成果闭环到看板。命令原称 `dsh-cli`，本版统一为 `dsh-graph`，不保留旧名。
+- **独立本地只读服务**：`dsh-graph serve` 在同一进程提供 Web 页面、Web API 与 localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。MVP 只暴露只读查询，写/审批类能力在该入口**根本不存在**。
+- **大看板 `status` 提速约 2 倍**：事件流增量索引让 18750 事件看板的中位耗时从约 179ms 降到约 89ms；索引以大小 + inode + 头部指纹三重校验，截断/改写/替换一律回退全量并告警，绝不返回错误计数。
+- **宿主支持面收窄**：`engines.dsh` 与 peer 一并改为 `>=0.2.2-rc.3 <0.2.3-0`，删除仅为更早宿主保留的兼容分支。**`0.2.2-rc.1` / `rc.2` 及更早版本将无法安装**，本版不提供版本豁免；升级说明见 [docs/host-compat-v0.25.0.md](docs/host-compat-v0.25.0.md)。
+- **测试分层**：日常回归层（`shakedown`，约 49s）⊊ `integration` ⊊ `full` ⊊ `everything`（全量约 96s）；安全/鉴权/隔离/门禁自证类测试强制留在日常层。发布门禁仍是无参全量。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。
 
