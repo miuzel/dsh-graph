@@ -38,7 +38,7 @@ function harness() {
       if (name === "connection") return ownerConnectionStub();
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
       if (name === "agents") return { get: () => ({ id: "sess-super" }) };
-      if (name === "subagents") return { list: () => ["spawn"], listChildren: async () => [], getProvider: () => ({ prepareContinuable: () => {} }), startContinuable: async () => { spawned++; return { childId: "child-" + spawned, parentSessionId: "sess-super" }; } };
+      if (name === "subagents") return { list: () => ["spawn"], listChildren: async () => [], getProvider: () => ({ prepareContinuable: () => {} }), startActivation: async () => { spawned++; return { childId: "child-" + spawned, parentSessionId: "sess-super" }; } };
       return undefined;
     },
     effect: (fn: () => unknown) => fn(), webServer: stub.webServer,

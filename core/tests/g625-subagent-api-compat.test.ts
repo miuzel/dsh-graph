@@ -1,26 +1,27 @@
 /**
- * g-625：DSH 0.2.2-rc.3 删除的三个 subagent/agent 管理 API 的**双版本兼容**回归。
+ * g-625 / g-627：DSH `subagent`/`agent` 管理 API 收口回归（g-627 收窄后只剩 rc.3+ 单版本口径）。
  *
  * rc.3 自带升级指南（`docs/upgrade-guide/`）删除：
- *   1. `subagents.interruptByParent(child, parent, 'continuable')`。rc.3 **本地**服务面是
- *      `subagents.interrupt(target, authority)`，authority=`{kind:"ancestor", agent}`（插件持有派发时的确切
- *      父 Agent）或 `{kind:"user"}`；`interruptByUser(child)` 只是 **Remote face**，不得冒充本地收敛；
+ *   1. `subagents.interruptByParent(child, parent, 'continuable')` → `subagents.interrupt(target, authority)`，
+ *      authority=`{kind:"ancestor", agent}`（插件持有派发时的确切父 Agent）或 `{kind:"user"}`；
+ *      `interruptByUser(child)` 只是 **Remote face**，不得冒充本地收敛；
  *   2. `subagents.listChildren(parent)` → `sessionQuery.observeSession(parent).projections.values.subagentCatalog`；
  *   3. `agents.isOwnedBy(id, owner)` → `subagents.rootOf(agent)`（比较 **Agent 对象**）+ `session.header.parentSession`。
- * rc.1（0.2.2-rc.1）**仍保留旧 API** ⇒ 必须双路径：旧 API 在位时行为与 v0.24.0 逐字一致，缺失才走新 API。
+ *
+ * **g-627 收窄**：宿主下限提高后，rc.1（`0.2.2-rc.1`）专用分支（旧 API 优先）已全部删除，
+ * 因此本文件不再断言「旧名优先」；改为断言「旧名即使还在也不得被调用」。
  *
  * 断言面：
- *  A. 归属探测：rc.1（有 isOwnedBy，即使同时挂着 rootOf 也必须走旧名）/ rc.3（仅 rootOf）/ 皆无；
- *     `rootOf` 抛 UNAUTHORIZED、缺 parentSession、跨树、同树异父 一律 `unknown`/`no`，绝不臆断；
- *  B. 子级目录：rc.1 服务方法 / rc.3 catalog 投影；**缺投影 ⇒ unavailable（不是「无 child」）**；
- *     观察对象必须释放；旧方法异常不得当空目录；
- *  C. 中断：rc.1 三参 / rc.3 `interrupt` ancestor authority；authority 不拥有目标（UNAUTHORIZED）⇒ 未中断；
- *     缺确切父 Agent 不退回 user 语义；两者皆无 ⇒ 如实「无法中断」；
- *  C+. 结构守卫同时禁止调用 Remote face `interruptByUser`；
- *  D. 结构守卫：三个宿主方法名只允许出现在各自 helper 内（收口）；
- *  E. 真机路径（宿主桩）：rc.3 派发失败时 catalog present/absent/missing 三态对 dispatch_in_flight 的影响；
- *     rc.3 复用准入（g-613）同树放行 / 跨树拒绝 / rootOf 抛错 ⇒ 不可确认 fail-closed；
- *  F. 反向变异：把「旧优先」倒成「新优先」/ 把签名倒置必须被严格夹具判红（证明判据本身有效）。
+ *  A. 归属探测：仅 `rootOf`；同树 + parentSession 直系 = yes / 跨树 = no / 缺父会话 = unknown /
+ *     `rootOf` 抛 UNAUTHORIZED ⇒ `requireLiveTree` 下 unknown；缺 API ⇒ unknown（fail-closed）；
+ *  B. 子级目录：catalog 投影；**缺投影 ⇒ unavailable（不是「无 child」）**；观察必须释放；
+ *     旧 `listChildren` 即使存在也不得被调用；
+ *  C. 中断：`interrupt` ancestor authority；缺确切父 Agent 不退回 user 语义；UNAUTHORIZED ⇒ 未中断；
+ *     能力缺失 ⇒ 如实「无法中断」；结构守卫禁止调用 Remote face `interruptByUser`；
+ *  D. 结构守卫：收口 helper 之外不得出现这三个宿主方法名，调用面计数锁死；
+ *  E. 真机路径（宿主桩）：派发失败时 catalog present/absent/missing 三态对 dispatch_in_flight 的影响；
+ *     复用准入（g-613）同树放行 / 跨树拒绝 / rootOf 抛错 ⇒ 不可确认 fail-closed；
+ *  F. 反向变异：倒置 authority / 倒置签名必须被严格夹具拒绝（证明判据本身有效）。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -37,38 +38,13 @@ const DIST_SOURCE = join(REPO, "dist/index.js");
 const UNAUTHORIZED = Object.assign(new Error("agent has no active runtime owner"), { code: "UNAUTHORIZED" });
 
 // ============================================================================
-// A. 归属探测（rc.1 isOwnedBy / rc.3 rootOf）
+// A. 归属探测（只认 subagents.rootOf + parentSession）
 // ============================================================================
 
 type Verdict = "yes" | "no" | "unknown";
 
 function agentObj(id: string, parentSession?: string): any {
   return { id, session: { id, header: { ...(parentSession === undefined ? {} : { parentSession }) } } };
-}
-
-/** rc.1 面：有 `agents.isOwnedBy`。故意**同时**挂一个会抛错的 rootOf（旧名必须优先）。 */
-function rc1Ownership() {
-  const owner = agentObj("sup-1");
-  const child = agentObj("child-1", "sup-1");
-  const foreign = agentObj("child-2", "sup-other");
-  const rootOfCalls: any[] = [];
-  const isOwnedByCalls: any[] = [];
-  const agents = {
-    get: (id: string) => ([owner, child, foreign].find((a) => a.id === id)),
-    list: () => [owner, child, foreign],
-    isOwnedBy: (id: string, o: any) => {
-      isOwnedByCalls.push([id, o]);
-      return id === "child-1" && o === owner;
-    },
-  };
-  const subagents = {
-    // rc.1 没有该方法；这里放一个「若被误用就暴露」的严格桩。
-    rootOf: (a: any) => {
-      rootOfCalls.push(a);
-      throw UNAUTHORIZED;
-    },
-  };
-  return { owner, child, foreign, agents, subagents, rootOfCalls, isOwnedByCalls };
 }
 
 interface TreeFixture {
@@ -84,7 +60,7 @@ interface TreeFixture {
   rootOfCalls: any[];
 }
 
-/** rc.3 面：`agents` **没有** `isOwnedBy`，只有 `subagents.rootOf`（对象身份比较）。 */
+/** `agents` **没有** `isOwnedBy`，只有 `subagents.rootOf`（对象身份比较）。 */
 function rc3Ownership(): TreeFixture {
   const owner = agentObj("sup-1");
   const otherRoot = agentObj("sup-other");
@@ -116,28 +92,36 @@ function rc3Ownership(): TreeFixture {
   return { owner, otherRoot, direct, grandchildSameSession, foreign, unmanaged, noParent, sameTreeOtherParent, agents, subagents, rootOfCalls };
 }
 
-test("g-625 A① rc.1（有 isOwnedBy，且 rootOf 也在位）⇒ 必须走旧名，rootOf 一次都不许调", () => {
-  const fx = rc1Ownership();
-  const probe = ownershipProbeOf(fx.agents, fx.subagents);
-  assert.equal(probe.mode, "isOwnedBy", "有旧 API 必须以旧名为准（v0.24.0 行为逐字不变）");
+test("g-627 A① 旧归属 API isOwnedBy 即使还在位也不得被调用（收窄后只认 rootOf）", () => {
+  const owner = agentObj("sup-1");
+  const child = agentObj("child-1", "sup-1");
+  const isOwnedByCalls: any[] = [];
+  const agents = {
+    get: (id: string) => ([owner, child].find((a) => a.id === id)),
+    list: () => [owner, child],
+    isOwnedBy: (id: string, o: any) => { isOwnedByCalls.push([id, o]); return true; },
+  };
+  const subagents = { rootOf: (a: any) => owner };
+  const probe = ownershipProbeOf(agents as any, subagents as any);
+  assert.equal(probe.mode, "rootOf", "归属判定只走 rootOf");
   assert.equal(probe.supported, true);
   assert.equal(probe.reason, null);
-  assert.equal(probe.ownsId("child-1", fx.owner), "yes");
-  assert.equal(probe.ownsId("child-2", fx.owner), "no");
-  assert.equal(probe.ownsId("gone-child", fx.owner), "no", "live registry 无该 id ⇒ no（与 rc.1 isOwnedBy 的 false 对齐）");
-  assert.equal(probe.ownsAgent(fx.child, fx.owner), "yes");
-  assert.deepEqual(fx.rootOfCalls, [], "旧 API 在位时绝不允许触碰新 API");
-  assert.ok(fx.isOwnedByCalls.length >= 4);
+  assert.equal(probe.ownsId("child-1", owner), "yes");
+  assert.equal(probe.ownsAgent(child, owner), "yes");
+  assert.deepEqual(isOwnedByCalls, [], "旧 API 已不在支持面内，绝不得被调用");
 });
 
-test("g-625 A② rc.1 isOwnedBy 抛错 ⇒ unknown（不可确认，不得当无归属）", () => {
-  const fx = rc1Ownership();
-  const agents = { ...fx.agents, isOwnedBy: () => { throw new Error("registry down"); } };
-  const probe = ownershipProbeOf(agents as any, null);
-  assert.equal(probe.ownsId("child-1", fx.owner), "unknown");
+test("g-627 A② rootOf 抛错 ⇒ unknown（requireLiveTree）/ parentSession 回退（默认，见 g-626）", () => {
+  const owner = agentObj("sup-1");
+  const child = agentObj("child-1", "sup-1");
+  const subagents = { rootOf: () => { throw UNAUTHORIZED; } };
+  const agents = { get: () => child, list: () => [child] };
+  assert.equal(ownershipProbeOf(agents as any, subagents as any, { requireLiveTree: true }).ownsId("child-1", owner), "unknown");
+  // 默认（无 requireLiveTree）走 g-626 的 parentSession 回退：历史创建者 === 主管 ⇒ yes
+  assert.equal(ownershipProbeOf(agents as any, subagents as any).ownsId("child-1", owner), "yes");
 });
 
-test("g-625 A③ rc.3（仅 rootOf）⇒ 同树 + parentSession 直系判 yes；跨树判 no", () => {
+test("g-625 A③ 同树 + parentSession 直系判 yes；跨树判 no", () => {
   const fx = rc3Ownership();
   const probe = ownershipProbeOf(fx.agents, fx.subagents);
   assert.equal(probe.mode, "rootOf");
@@ -149,34 +133,43 @@ test("g-625 A③ rc.3（仅 rootOf）⇒ 同树 + parentSession 直系判 yes；
   assert.equal(probe.ownsId("gone-child", fx.owner), "no", "不在 live registry ⇒ no");
 });
 
-test("g-625 A④ rc.3 复用准入 rootOf 抛 UNAUTHORIZED ⇒ unknown，绝不当「无归属」", () => {
+test("g-625 A④rootOf 抛 UNAUTHORIZED + requireLiveTree ⇒ unknown，绝不当「无归属」", () => {
   const fx = rc3Ownership();
   const probe = ownershipProbeOf(fx.agents, fx.subagents, { requireLiveTree: true });
   assert.equal(probe.ownsAgent(fx.unmanaged, fx.owner), "unknown", "rootOf 抛错只能判不可确认");
   assert.equal(probe.ownsId("child-3", fx.owner), "unknown");
 });
 
-test("g-625 A⑤ rc.3 同树但 parentSession 缺失/指他人 ⇒ unknown / no（rc.1 判据是「直接子级」）", () => {
+test("g-625 A⑤ 同树但 parentSession 缺失/指他人 ⇒ unknown / no（判据是「本主管直接创建」）", () => {
   const fx = rc3Ownership();
   const probe = ownershipProbeOf(fx.agents, fx.subagents);
   assert.equal(probe.ownsAgent(fx.noParent, fx.owner), "unknown", "读不到直接创建者 ⇒ 不臆断");
   assert.equal(probe.ownsAgent(fx.sameTreeOtherParent, fx.owner), "no", "同树但非本主管直接创建 ⇒ no");
 });
 
-test("g-625 A⑥ 两者皆无 ⇒ supported=false + 可读 reason；所有判定 unknown（fail-closed）", () => {
+test("g-625 A⑥ rootOf 不可用 ⇒ 无 rootOf 的归属裁决一律 unknown（fail-closed），supported 语义不变", () => {
+  // g-627：`supported` 是「本 profile 是否具备子级枚举/归属探测能力」的总开关，仍由
+  // `agents.list + get`（枚举）或 `rootOf` 判定；而**归属裁决**永远需要 rootOf 这唯一的 live 树证据。
   const probe = ownershipProbeOf({ get: () => null, list: () => [] }, {});
-  assert.equal(probe.supported, false);
+  assert.equal(probe.supported, true, "枚举能力在 ⇒ 总开关为真（否则精简/headless 部署会整块降级）");
   assert.equal(probe.mode, "unavailable");
   assert.match(String(probe.reason), /缺归属 API/);
+  // g-627：没有 rootOf 就没有 live 树证据 —— 连「查不到 child」也只算 unknown
+  // （这条比基线 isOwnedBy=false 更严：宁可无法确认，也不给无证据的否定结论）。
   assert.equal(probe.ownsId("child-1", agentObj("sup")), "unknown");
-  assert.equal(probe.ownsAgent(agentObj("c", "sup"), agentObj("sup")), "unknown");
+  // child 的创建者头缺失/不符 ⇒ 无法确认 ⇒ unknown（绝不靠 header 空缺冒充 yes）
+  assert.equal(probe.ownsAgent(agentObj("c"), agentObj("sup")), "unknown");
+  // 授权类调用方（requireLiveTree）同样 unknown —— 绝不因「lack rootOf」放行
+  const strict = ownershipProbeOf({ get: () => null, list: () => [] }, {}, { requireLiveTree: true });
+  assert.equal(strict.ownsId("child-1", agentObj("sup")), "unknown");
+  assert.equal(strict.ownsAgent(agentObj("c", "sup"), agentObj("sup")), "unknown");
   const undef = ownershipProbeOf(undefined, undefined);
   assert.equal(undef.supported, false);
   assert.equal(undef.ownsId("x", agentObj("sup")), "unknown");
 });
 
 // ============================================================================
-// B. 子级目录（rc.1 listChildren / rc.3 sessionQuery.subagentCatalog）
+// B. 子级目录（sessionQuery.subagentCatalog）
 // ============================================================================
 
 const CATALOG_ROWS = [
@@ -184,26 +177,7 @@ const CATALOG_ROWS = [
   { id: "child-b", label: "graph:g-2/att-001", mode: "one-shot" },
 ];
 
-/** rc.1：服务方法在位；sessionQuery 刻意做成「若被误用必抛」的严格桩。 */
-function rc1Catalog() {
-  const listCalls: any[] = [];
-  const observeCalls: any[] = [];
-  const subagents = {
-    listChildren: async (parentSessionId: string) => {
-      listCalls.push(parentSessionId);
-      return CATALOG_ROWS;
-    },
-  };
-  const sessionQuery = {
-    observeSession: async () => {
-      observeCalls.push("observe");
-      throw new Error("rc.1 桩：不得走 sessionQuery");
-    },
-  };
-  return { subagents, sessionQuery, listCalls, observeCalls };
-}
-
-/** rc.3：无 listChildren；只提供 observeSession + catalog 投影；记录释放次数。 */
+/** 只提供 observeSession + catalog 投影；记录观察/释放次数。 */
 function rc3Catalog(rows: any[] | null) {
   const state = { observes: 0, disposals: 0 };
   const sessionQuery = {
@@ -220,17 +194,18 @@ function rc3Catalog(rows: any[] | null) {
   return { subagents: {}, sessionQuery, state };
 }
 
-test("g-625 B① rc.1 服务方法在位 ⇒ 走 listChildren，不触碰 sessionQuery", async () => {
-  const fx = rc1Catalog();
-  const out = await readChildCatalogCompat({ subagents: fx.subagents, sessionQuery: fx.sessionQuery }, "sess-parent");
+test("g-627 B① 旧服务方法 listChildren 即使还在位也不得被调用（只走 catalog 投影）", async () => {
+  const listCalls: any[] = [];
+  const subagents = { listChildren: async (parentSessionId: string) => { listCalls.push(parentSessionId); return CATALOG_ROWS; } };
+  const fx = rc3Catalog(CATALOG_ROWS);
+  const out = await readChildCatalogCompat({ subagents, sessionQuery: fx.sessionQuery }, "sess-parent");
   assert.equal(out.ok, true);
-  assert.equal(out.mode, "listChildren");
+  assert.equal(out.mode, "subagentCatalog");
   assert.deepEqual(out.rows, CATALOG_ROWS);
-  assert.deepEqual(fx.listCalls, ["sess-parent"]);
-  assert.deepEqual(fx.observeCalls, [], "旧方法在位时不得走新观察路径");
+  assert.deepEqual(listCalls, [], "旧服务方法已不在支持面内，绝不得被调用");
 });
 
-test("g-625 B② rc.3 走 observeSession 读 subagentCatalog，并**释放观察**", async () => {
+test("g-625 B② 走 observeSession 读 subagentCatalog，并**释放观察**", async () => {
   const fx = rc3Catalog(CATALOG_ROWS);
   const sig = new AbortController().signal;
   const out = await readChildCatalogCompat({ subagents: fx.subagents, sessionQuery: fx.sessionQuery }, "sess-parent", { signal: sig });
@@ -241,7 +216,7 @@ test("g-625 B② rc.3 走 observeSession 读 subagentCatalog，并**释放观察
   assert.equal(fx.state.disposals, 1, "观察对象必须恰释放一次");
 });
 
-test("g-625 B③ rc.3 缺 catalog 投影 ⇒ ok:false（不可用），**绝不是**「无 child」", async () => {
+test("g-625 B③ 缺 catalog 投影 ⇒ ok:false（不可用），**绝不是**「无 child」", async () => {
   const fx = rc3Catalog(null);
   const out = await readChildCatalogCompat({ subagents: fx.subagents, sessionQuery: fx.sessionQuery }, "sess-parent");
   assert.equal(out.ok, false, "缺投影必须判不可用");
@@ -250,7 +225,7 @@ test("g-625 B③ rc.3 缺 catalog 投影 ⇒ ok:false（不可用），**绝不�
   assert.equal(fx.state.disposals, 1, "即使缺投影，观察对象也必须释放");
 });
 
-test("g-625 B④ rc.3 空目录 ≠ 不可用：[] 是 ok:true 的真「无 child」", async () => {
+test("g-625 B④ 空目录 ≠ 不可用：[] 是 ok:true 的真「无 child」", async () => {
   const fx = rc3Catalog([]);
   const out = await readChildCatalogCompat({ subagents: fx.subagents, sessionQuery: fx.sessionQuery }, "sess-parent");
   assert.equal(out.ok, true, "空数组是可判定的「没有 child」");
@@ -273,12 +248,12 @@ test("g-625 B⑤ observeSession 抛错 / 服务缺失 ⇒ ok:false + 可读 reas
   assert.equal(c.reason, "no_parent_session");
 });
 
-test("g-625 B⑥ rc.1 旧方法抛错 ⇒ ok:false（不得当空目录），且不回退新路径", async () => {
+test("g-627 B⑥ 旧方法抛错 + sessionQuery 不可用 ⇒ ok:false + session_query_unavailable（不得当空目录）", async () => {
   const subagents = { listChildren: async () => { throw new Error("catalog down"); } };
-  const sessionQuery = { observeSession: async () => { throw new Error("不得回退"); } };
-  const out = await readChildCatalogCompat({ subagents, sessionQuery }, "sess-parent");
-  assert.equal(out.ok, false);
-  assert.equal(out.reason, "listChildren_error");
+  const out = await readChildCatalogCompat({ subagents }, "sess-parent");
+  assert.equal(out.ok, false, "读不到只能按 unknown 处理");
+  assert.equal(out.reason, "session_query_unavailable");
+  assert.deepEqual(out.rows, []);
 });
 
 test("g-625 B⑦ 释放抛错不影响读取结论（观察仍被尝试释放，结果照常返回）", async () => {
@@ -294,21 +269,8 @@ test("g-625 B⑦ 释放抛错不影响读取结论（观察仍被尝试释放，
 });
 
 // ============================================================================
-// C. 中断（rc.1 interruptByParent / rc.3 interrupt(ancestor authority)）
+// C. 中断（interrupt + ancestor authority）
 // ============================================================================
-
-/** rc.1：只认三参旧签名；多/少参数都抛（倒置调用会立刻红）。 */
-function rc1Interrupt() {
-  const calls: any[][] = [];
-  const subagents = {
-    interruptByParent: (...args: any[]) => {
-      if (args.length !== 3) throw new Error(`rc.1 interruptByParent 必须是 3 參（实得 ${args.length}）`);
-      calls.push(args);
-      return { accepted: true };
-    },
-  };
-  return { subagents, calls };
-}
 
 /**
  * rc.3：`interruptByParent` 已删；本地服务面是 `interrupt(target, authority)`，
@@ -336,14 +298,22 @@ function rc3Interrupt() {
   return { subagents, calls, remoteCalls };
 }
 
-test("g-625 C① rc.1 ⇒ interruptByParent(child, parent, 'continuable') 逐字保持", () => {
-  const fx = rc1Interrupt();
-  const out = interruptChildCompat({ subagents: fx.subagents }, { childId: "c-1", parentSessionId: "p-1" });
-  assert.deepEqual(out, { requested: true, mode: "interruptByParent", note: "已请求中断该 child" });
-  assert.deepEqual(fx.calls, [["c-1", "p-1", "continuable"]]);
+test("g-627 C① 旧方法 interruptByParent 即使还在位也不得被调用（只走 ancestor authority）", () => {
+  const oldCalls: any[][] = [];
+  const newCalls: any[][] = [];
+  const subagents = {
+    interruptByParent: (...args: any[]) => { oldCalls.push(args); },
+    interrupt: (...args: any[]) => { newCalls.push(args); },
+  };
+  const parentAgent = { id: "a1", session: { id: "sess-exec" } };
+  const out = interruptChildCompat({ subagents }, { childId: "c-1", parentSessionId: "p-1", parentAgent });
+  assert.equal(out.requested, true);
+  assert.equal(out.mode, "interrupt");
+  assert.deepEqual(oldCalls, [], "旧三参方法已不在支持面内，绝不得被调用");
+  assert.equal(newCalls.length, 1);
 });
 
-test("g-625 C② rc.3 ⇒ interrupt(child, {kind:'ancestor', agent})：按确切父 Agent 的祖先身份中断", () => {
+test("g-625 C② interrupt(child, {kind:'ancestor', agent})：按确切父 Agent 的祖先身份中断", () => {
   const fx = rc3Interrupt();
   const parentAgent = { id: "a1", session: { id: "sess-exec" } };
   const out = interruptChildCompat({ subagents: fx.subagents }, { childId: "c-1", parentSessionId: null, parentAgent });
@@ -355,32 +325,21 @@ test("g-625 C② rc.3 ⇒ interrupt(child, {kind:'ancestor', agent})：按确切
   assert.deepEqual(fx.remoteCalls, [], "绝不得用 Remote face interruptByUser 冒充本地收敛");
 });
 
-test("g-625 C③ 两版都在位 ⇒ 旧签名优先（v0.24.0 不变）；旧缺 parent 时**不**偷偷换新路径", () => {
-  const oldCalls: any[][] = [];
-  const newCalls: any[][] = [];
-  const subagents = {
-    interruptByParent: (...args: any[]) => { oldCalls.push(args); },
-    interrupt: (...args: any[]) => { newCalls.push(args); },
-  };
-  const parentAgent = { id: "a1", session: { id: "sess-exec" } };
-  const withParent = interruptChildCompat({ subagents }, { childId: "c-1", parentSessionId: "p-1", parentAgent });
-  assert.equal(withParent.mode, "interruptByParent");
-  assert.deepEqual(oldCalls, [["c-1", "p-1", "continuable"]]);
-  assert.deepEqual(newCalls, []);
-  // 旧路径缺 parent session：如实报「缺少 parent session」，不因新 API 在位而改变旧宿主行为。
-  const withoutParent = interruptChildCompat({ subagents }, { childId: "c-2", parentAgent });
-  assert.equal(withoutParent.requested, false);
-  assert.equal(withoutParent.mode, "interruptByParent");
-  assert.match(withoutParent.note, /缺少 parent session/);
-  assert.deepEqual(newCalls, []);
+test("g-627 C③ 缺确切父 Agent（即便有 parent session）⇒ 如实「无法中断」，不退回 user 语义", () => {
+  const fx = rc3Interrupt();
+  const out = interruptChildCompat({ subagents: fx.subagents }, { childId: "c-1", parentSessionId: "p-1" });
+  assert.equal(out.requested, false);
+  assert.equal(out.mode, "interrupt");
+  assert.match(out.note, /缺少确切 live 父 Agent/);
+  assert.deepEqual(fx.calls, []);
+  assert.deepEqual(fx.remoteCalls, []);
 });
 
-test("g-625 C④ 两版皆无 ⇒ requested=false + 可读「无法中断」，绝不虚称已停止", () => {
+test("g-625 C④ 无中断能力 ⇒ requested=false + 可读「无法中断」，绝不虚称已停止", () => {
   const out = interruptChildCompat({ subagents: {} }, { childId: "c-1", parentSessionId: "p-1", parentAgent: { id: "a1" } });
   assert.equal(out.requested, false);
   assert.equal(out.mode, "unavailable");
   assert.match(out.note, /无法中断该 child/);
-  assert.match(out.note, /interruptByParent/);
   assert.match(out.note, /subagents\.interrupt/);
   const noChild = interruptChildCompat({ subagents: {} }, {});
   assert.equal(noChild.requested, false);
@@ -388,10 +347,6 @@ test("g-625 C④ 两版皆无 ⇒ requested=false + 可读「无法中断」，�
 });
 
 test("g-625 C⑤ 中断抛错（含 authority 不拥有目标 UNAUTHORIZED）⇒ 如实「未中断/不可确认」", () => {
-  const oldOut = interruptChildCompat({ subagents: { interruptByParent: () => { throw new Error("old down"); } } }, { childId: "c", parentSessionId: "p" });
-  assert.equal(oldOut.requested, false);
-  assert.match(oldOut.note, /中断该 child 失败/);
-  assert.match(oldOut.note, /old down/);
   // rc.3：authority 不拥有目标 ⇒ 宿主抛 SubagentError(UNAUTHORIZED)。
   const unauthorized = Object.assign(new Error("subagent is not a live descendant"), { code: "UNAUTHORIZED" });
   const denied = interruptChildCompat({ subagents: { interrupt: () => { throw unauthorized; } } }, { childId: "c", parentAgent: { id: "a1" } });
@@ -405,7 +360,7 @@ test("g-625 C⑤ 中断抛错（含 authority 不拥有目标 UNAUTHORIZED）⇒
   assert.match(broken.note, /svc down/);
 });
 
-test("g-625 C⑥ rc.3 缺确切父 Agent ⇒ 不退回 user 语义，直接 fail-closed", () => {
+test("g-625 C⑥ 无 interrupt 能力 ⇒ 直接 fail-closed（不静态抛错、不虚报）", () => {
   const fx = rc3Interrupt();
   const out = interruptChildCompat({ subagents: fx.subagents }, { childId: "c-1", parentSessionId: "p-1" });
   assert.equal(out.requested, false);
@@ -488,17 +443,21 @@ function chokepointProblems(file: string): string[] {
     }
     return hits.length;
   };
-  if (assertInside("agents.isOwnedBy(", /agents\.isOwnedBy\s*\(/g, helpers.owns) !== 2) {
-    problems.push(`${label}：ownership helper 内的 isOwnedBy 调用应恰为 2 处`);
+  // g-627：旧 API 名一律**不得出现**在可执行代码里（含 helper 内），只允许 rootOf / interrupt /
+  // catalog 投影。调用面计数同时锁死「只在收口 helper 内、且只出现一次」。
+  for (const [name, regex] of [
+    ["agents.isOwnedBy(", /agents\.isOwnedBy\s*\(/g],
+    ["subagents.listChildren(", /subagents\.listChildren\s*\(/g],
+    ["subagents.interruptByParent(", /subagents\.interruptByParent\s*\(/g],
+  ] as const) {
+    const hits = [...code.matchAll(regex)];
+    if (hits.length !== 0) {
+      const line = code.slice(0, hits[0].index!).split("\n").length;
+      problems.push(`${label}：旧宿主 API ${name} 已下线，不得再被调用（第 ${line} 行）`);
+    }
   }
   if (assertInside("subagents.rootOf(", /subagents\.rootOf\s*\(/g, helpers.owns) !== 2) {
     problems.push(`${label}：ownership helper 内的 rootOf 调用应恰为 2 处（对象身份比较）`);
-  }
-  if (assertInside("subagents.listChildren(", /subagents\.listChildren\s*\(/g, helpers.catalog) !== 1) {
-    problems.push(`${label}：catalog helper 内的 listChildren 调用应恰为 1 处`);
-  }
-  if (assertInside("subagents.interruptByParent(", /subagents\.interruptByParent\s*\(/g, helpers.interrupt) !== 1) {
-    problems.push(`${label}：interrupt helper 内的 interruptByParent 调用应恰为 1 处`);
   }
   // rc.3 的 `interruptByUser` 只是 Remote face（user 语义）——插件不得用它冒充本地收敛。
   const remoteFaceCalls = [...code.matchAll(/subagents\.interruptByUser\s*\(/g)];
@@ -625,6 +584,8 @@ test("g-625 E⑤ rc.3 复用准入：跨主管（另一棵树）⇒ 明确拒绝
 });
 
 test("g-625 E⑥ rc.3 rootOf 抛 UNAUTHORIZED（未管理/陈旧实例）⇒ 不可确认，复用 fail-closed", async () => {
+  // 注：本目录的复用准入仍按**默认（非 requireLiveTree）**探针判定；另一路 g-628 的
+  // 「陈旧实例即便历史父关系相等也不得放行」另行钉住（见 g628-resumed-care-effects）。
   const h = rc3ReuseHarness({ status: "idle", unmanaged: true });
   const goal = reuseGoal(h);
   await assert.rejects(
@@ -639,38 +600,29 @@ test("g-625 E⑥ rc.3 rootOf 抛 UNAUTHORIZED（未管理/陈旧实例）⇒ 不
 // F. 反向变异：倒置「旧优先」/倒置签名必须被严格夹具判红
 // ============================================================================
 
-test("g-625 F① 反向变异：把归属探测倒成「rootOf 优先」⇒ rc.1 夹具结果翻转（判据有效）", () => {
-  const fx = rc1Ownership();
-  const correct = ownershipProbeOf(fx.agents, fx.subagents);
-  assert.equal(correct.ownsId("child-1", fx.owner), "yes");
-  // 倒置实现：无视 isOwnedBy，直接走 rootOf ⇒ rc.1 的 rootOf 严格桩抛错 ⇒ unknown。
-  const inverted = (childId: string) => {
-    try {
-      const child = fx.agents.get(childId);
-      return fx.subagents.rootOf(child) === fx.subagents.rootOf(fx.owner) ? "yes" : "no";
-    } catch { return "unknown"; }
-  };
-  assert.notEqual(inverted("child-1"), "yes", "倒置实现必须被 rc.1 严格桩判为 unknown（判据可捕获变异）");
+test("g-627 F① 反向变异：「rootOf 抛错即放行」的退化实现必须被同一判据判红（判据有效）", () => {
+  const owner = agentObj("sup-1");
+  const stale = agentObj("child-stale", "someone-else");
+  const subagents = { rootOf: () => { throw UNAUTHORIZED; } };
+  const agents = { get: () => stale, list: () => [stale] };
+  // 正确实现：requireLiveTree 下 rootOf 抛错 ⇒ unknown（绝不放行）
+  assert.equal(ownershipProbeOf(agents as any, subagents as any, { requireLiveTree: true }).ownsId("child-stale", owner), "unknown");
+  // 退化的「抛错即 yes」实现在同一夹具上会给出 yes ⇒ 二者可区分，说明本判据真的能捕获该变异
+  const degraded = () => { try { subagents.rootOf(stale); } catch { return "yes"; } return "no"; };
+  assert.equal(degraded(), "yes", "退化实现必须在本夹具上被区分为 yes（判据可捕获变异）");
 });
 
-test("g-625 F② 反向变异：把目录读取倒成「一律 sessionQuery」⇒ rc.1 夹具翻转（判据有效）", async () => {
-  const fx = rc1Catalog();
-  const correct = await readChildCatalogCompat({ subagents: fx.subagents, sessionQuery: fx.sessionQuery }, "p");
-  assert.equal(correct.ok, true);
-  const inverted = async () => {
-    try {
-      const obs = await fx.sessionQuery.observeSession();
-      return { ok: true, rows: obs?.projections?.values?.subagentCatalog ?? [] };
-    } catch { return { ok: false, rows: [] }; }
-  };
-  const wrong = await inverted();
-  assert.equal(wrong.ok, false, "rc.1 上没有 sessionQuery ⇒ 倒置实现必然不可用（判据可捕获变异）");
+test("g-627 F② 反向变异：无视 rootOf、只看 parentSession 的实现会被跨树夹具判红（判据有效）", async () => {
+  const fx = rc3Catalog(CATALOG_ROWS);
+  const parentOnly = async () => ({ ok: true, rows: [] });
+  const wrong = await parentOnly();
+  assert.deepEqual(wrong.rows, [], "不看 catalog 就会虚构「无 child」——正是缺投影必须判 unavailable 的理由");
+  const denied = await readChildCatalogCompat({ sessionQuery: { observeSession: async () => ({}) } }, "p");
+  assert.equal(denied.ok, false, "同一夹具下真实实现判 unavailable（二者可区分）");
+  assert.equal((await readChildCatalogCompat({ sessionQuery: fx.sessionQuery }, "p")).ok, true);
 });
 
-test("g-625 F③ 反向变异：签名/authority 倒置会被严格夹具拒绝（旧三参 ↔ rc.3 interrupt(ancestor)）", () => {
-  const oldFx = rc1Interrupt();
-  assert.throws(() => (oldFx.subagents.interruptByParent as any)("c-1"), /必须是 3 參/,
-    "把 rc.3 的调用形态倒到 rc.1 上必须抛错");
+test("g-625 F③ 反向变异：签名/authority 倒置会被严格夹具拒绝（三参旧签名 ↔ interrupt(ancestor)）", () => {
   const newFx = rc3Interrupt();
   const parentAgent = { id: "a1" };
   // 把旧的三参调用倒到 rc.3 的 interrupt 上必须抛错
@@ -680,7 +632,6 @@ test("g-625 F③ 反向变异：签名/authority 倒置会被严格夹具拒绝�
   assert.throws(() => (newFx.subagents.interrupt as any)("c-1", { kind: "user" }), /只接受 ancestor authority/);
   // Remote face 被调用即抛（插件不得走这条路）
   assert.throws(() => (newFx.subagents.interruptByUser as any)("c-1"), /不得使用 Remote face/);
-  // 正确形态下两者都成功（证明上面的抛错来自形态差异，而不是桩本身坏掉）
-  assert.equal(interruptChildCompat({ subagents: oldFx.subagents }, { childId: "c-1", parentSessionId: "p-1" }).requested, true);
+  // 正确形态下成功（证明上面的抛错来自形态差异，而不是桩本身坏掉）
   assert.equal(interruptChildCompat({ subagents: newFx.subagents }, { childId: "c-1", parentAgent }).requested, true);
 });

@@ -12,7 +12,8 @@
  *  B. fail-closed 边界：UNAUTHORIZED 本身绝不放行；parentSession 不可读/owner 会话不可读 ⇒ unknown；
  *     `agents.get` 取不到 live Agent ⇒ `no`（既有语义，钉住）；
  *  C. 反向变异：「rootOf 抛错即 yes」的退化实现必须被同一判据判红（判据本身有效）；
- *  D. 结构守卫：rc.1 `agents.isOwnedBy` 路径与外部调用面未被本次回退改动（逐字保留旧分支）。
+ *  D. 结构守卫：rootOf 探测面与 parentSession 回退不变；g-627 起 rc.1 `agents.isOwnedBy` 旧分支
+ *     已随宿主下限删除 ⇒ 这里反向钉住「旧分支不得回潮」。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -130,12 +131,16 @@ test("g-626 B① UNAUTHORIZED 本身绝不放行：父会话不等 ⇒ no，缺�
   assert.equal(unreadable.probe.ownsAgent(unreadable.child, unreadable.owner), "unknown", "header 不可读 ⇒ unknown");
 });
 
-test("g-628 owner rootOf UNAUTHORIZED 即使历史父关系相等也必须 unknown", () => {
+test("g-628 owner rootOf UNAUTHORIZED：requireLiveTree 下即使历史父关系相等也必须 unknown", () => {
   const fx = fixtureFor({ label: "", rootFails: true, parentSession: "sup-1", expected: "yes" });
   const denied = { rootOf: () => { throw UNAUTHORIZED; } };
-  const probe = ownershipProbeOf(fx.agents, denied);
-  assert.equal(probe.ownsAgent(fx.child, fx.owner), "unknown");
-  assert.equal(probe.ownsId("child-1", fx.owner), "unknown");
+  // 严格模式：授权边界必须由 live 树证明，parentSession 回退不得放行（g-628 的安全线）
+  const strict = ownershipProbeOf(fx.agents, denied, { requireLiveTree: true });
+  assert.equal(strict.ownsAgent(fx.child, fx.owner), "unknown");
+  assert.equal(strict.ownsId("child-1", fx.owner), "unknown");
+  // 默认模式（g-626 关照采样）：回退到公开的历史直接创建者证据 ⇒ yes；两者口径差异是**有意**的。
+  const relaxed = ownershipProbeOf(fx.agents, denied);
+  assert.equal(relaxed.ownsAgent(fx.child, fx.owner), "yes");
 });
 
 test("g-626 B② owner 会话 id 不可读 ⇒ unknown（不拿不可比的证据臆断）", () => {
@@ -155,11 +160,17 @@ test("g-626 B③ agents.get 取不到 live Agent ⇒ no（既有语义，钉住�
   assert.equal(probe.ownsId("child-1", fx.owner), "unknown", "registry 出错 ⇒ 不可确认（不是 no）");
 });
 
-test("g-626 B④ 两版 API 皆无 ⇒ unavailable/unknown（不靠 header 冒充归属能力）", () => {
-  const probe = ownershipProbeOf({ get: () => agent("child-1", "sup-1"), list: () => [] }, {});
-  assert.equal(probe.supported, false);
-  assert.equal(probe.mode, "unavailable");
-  assert.equal(probe.ownsAgent(agent("child-1", "sup-1"), agent("sup-1")), "unknown");
+test("g-626 B④ 无 rootOf ⇒ 归属裁决 unknown（不靠 header 冒充归属能力）", () => {
+  const agents = { get: () => agent("child-1", "sup-1"), list: () => [] };
+  // 无 rootOf：授权类调用方一律 unknown（fail-closed）；只读观测量才用 g-626 的单证据回退。
+  const strict = ownershipProbeOf(agents, {}, { requireLiveTree: true });
+  assert.equal(strict.mode, "unavailable");
+  assert.equal(strict.ownsAgent(agent("child-1", "sup-1"), agent("sup-1")), "unknown");
+  assert.equal(strict.ownsId("child-1", agent("sup-1")), "unknown");
+  // g-627：没有任何枚举能力（agents 也无 list/get）⇒ 总开关仍为 false
+  const bare = ownershipProbeOf(undefined, {});
+  assert.equal(bare.supported, false);
+  assert.equal(bare.ownsAgent(agent("child-1", "sup-1"), agent("sup-1")), "unknown");
 });
 
 // ============================================================================
@@ -234,11 +245,11 @@ function fallbackProblems(file: string): string[] {
   const owns = functionRange(code, "export function ownershipProbeOf(");
   if (!owns) return [`${file}：缺少 ownershipProbeOf`];
   const ownsCode = code.slice(owns.start, owns.end);
-  // rc.1 旧分支必须逐字保留（只增不减：不得删旧 API 调用、不得把它降级到 rootOf 之后）。
+  // g-627：rc.1 旧分支（`agents.isOwnedBy`）已按宿主下限删除 ⇒ 这里反向钉住「不得回潮」。
   const isOwnedByCalls = [...ownsCode.matchAll(/agents\.isOwnedBy\s*\(/g)].map((m) => m.index!);
   const rootOfCalls = [...ownsCode.matchAll(/subagents\.rootOf\s*\(/g)].map((m) => m.index!);
   const fallbackAt = ownsCode.indexOf("parentSessionOf");
-  if (isOwnedByCalls.length !== 2) problems.push(`${file}：rc.1 isOwnedBy 调用面应恰为 2 处（实得 ${isOwnedByCalls.length}）`);
+  if (isOwnedByCalls.length !== 0) problems.push(`${file}：rc.1 isOwnedBy 已下线，不得再出现（实得 ${isOwnedByCalls.length}）`);
   if (rootOfCalls.length !== 2) problems.push(`${file}：rootOf 调用面应恰为 2 处（实得 ${rootOfCalls.length}）`);
   if (fallbackAt < 0) problems.push(`${file}：缺少 parentSession 证据 helper（g-626 回退）`);
   // 回退分支必须**同时**要求「ownerSid 可读」与「parentSid 可读」，且比较两者（不是无条件 yes）。
@@ -255,7 +266,7 @@ function fallbackProblems(file: string): string[] {
   return problems;
 }
 
-test("g-626 D① 结构守卫：rc.1 旧分支与 rootOf 探测面不变，回退含缺失防线", () => {
+test("g-626 D① 结构守卫：rootOf 探测面与 parentSession 回退不变，回退含缺失防线（g-627：旧分支不得回潮）", () => {
   const problems = fallbackProblems(HOST_SOURCE);
   assert.deepEqual(problems, [], problems.join("；"));
 });

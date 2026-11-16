@@ -244,7 +244,7 @@ function boardHarness(ws: string, root: string) {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             spawnedAt.push({ label: opts.label, trees: registeredTrees(ws) });
             return { childId: "child-" + Math.random().toString(36).slice(2, 8), parentSessionId: "sess-super" };
           },

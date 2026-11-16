@@ -179,6 +179,7 @@
         "g624-provider-compat.test.ts",
         "g625-subagent-api-compat.test.ts",
         "g626-ownership-parent-fallback.test.ts",
+        "g627-host-compat-narrowing.test.ts",
         "g628-resumed-care-effects.test.ts",
         "g629-tier-manifest.test.ts",
         "goal-markdown.test.ts",

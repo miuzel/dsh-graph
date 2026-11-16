@@ -111,8 +111,8 @@ function setupCtx(root: string) {
     get: (name: string) => name === "subagents" ? {
       list: () => ["spawn"],
       getProvider: () => ({ prepareContinuable: () => {} }),
-      startContinuable: async (opts: any) => {
-        capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+      startActivation: async (opts: any) => {
+        capturedPrompt = opts.prompt?.[0]?.text ?? "";
         return { childId: "test-child", parentSessionId: "parent" };
       },
     } : undefined,

@@ -12,7 +12,7 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
-  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.2.2--rc.3%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
 **当前版本 v0.24.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
@@ -22,7 +22,7 @@
 - **专家子代理可承接新目标**：`graph_start_attempt` 支持把**空闲**专家子代理（如 Agent Teams 成员）带上下文接到另一个目标上，免去重建与重读；运行中的一律拒绝，同一专家不会被两个未交付目标同时占用。
 - **关照唤醒不再连续打扰**：多个子代理的关照到期时间相近时合并为一次唤醒批量投递，不再隔几十秒连续叫醒主管；先到期任务最多顺延一个合并窗口。
 - **关照纪律不再重复注入**：唤醒正文改为「首次全量、后续精简」，多目标巡检时省下的篇幅随目标数放大（10 目标约省 85%）；精简版仍保留判据定义与两条防误判纪律，可用 `supervisor.care_wake_compact: false` 一键退回旧行为。
-- **支持 DSH 0.2.2 宿主**：声明范围调整为 `>=0.1.5-rc.2 <0.2.3-0`，并在 `0.2.2-rc.1` 上完成安装、启动与看板读写验证。
+- **支持 DSH 0.2.2 宿主**：v0.25.0 起声明范围收窄为 `>=0.2.2-rc.3 <0.2.3-0`，并在 `0.2.2-rc.3` 上完成安装、启动、派发、子代理生命周期与看板读写验证（升级说明见 [docs/host-compat-v0.25.0.md](docs/host-compat-v0.25.0.md)）。**`0.2.2-rc.1` / `rc.2` 已不在支持范围**：其所需的嵌套 activation spec 分支已删除。
 - **测试基线恢复全绿**：修复真实宿主测试夹具对新宿主的适配，全量自证由 142 例漂移失败恢复为 2920+ 全绿。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。

@@ -22,13 +22,14 @@ export function createHarness() {
  *
  * 宿主 `@deepseek-ai/dsh-subagent` 在 `0.2.1-alpha.2` 把 `startContinuable` 改名为
  * `startActivation`，故派发口径必须两版可测：
- *   · `legacy`（默认，= g-374 以来的既有桩行为）：只有 `startContinuable`；
- *   · `activation`：只有 `startActivation`（**且 receipt 刻意不带 `parentSessionId`**，
- *     与真实新宿主一致 ⇒ 顺带钉住 `?? null` 兜底）；
- *   · `both`：两版同时挂着（用于断言「新名优先」）；
+ *   · `activation`（**默认**，g-627 起 = 当前支持面）：只有 `startActivation`（扁平 spec，
+ *     receipt **刻意不带 `parentSessionId`**，与真实新宿主一致 ⇒ 顺带钉住 `?? null` 兜底）；
+ *   · `legacy`：只有 `startContinuable`——只用于「低于下限宿主」的负向夹具（插件必须 fail-closed，
+ *     绝不得回退旧名）；
+ *   · `both`：两版同时挂着（用于断言旧名**绝不被调用**）；
  *   · `none`：两版皆无（用于断言 fail-closed，不得静默回退）。
  *
- * `capturedRequests` 的既有元素形状（原始 spec，`.request.prompt` / `.label` 可直接读）**逐字不变**；
+ * `capturedRequests` 的既有元素形状（原始 spec；g-627 起是**扁平** spec，`.prompt` / `.label` 直接可读）；
  * 新增的 `capturedVia` 平行记录本次实际走的是哪个方法名。
  */
 export type HarnessDispatchApi = "legacy" | "activation" | "both" | "none";
@@ -81,7 +82,10 @@ export function createHarnessWith(opts: {
    */
   childCatalog?: () => any[] | null;
 }) {
-  const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "legacy";
+  // g-627：宿主下限提到 >=0.2.2-rc.1 ⇒ 默认桩必须是**当前唯一支持面**（只有 startActivation）。
+  // 旧的 `legacy`（只有 startContinuable）不再是默认值；显式传 `"legacy"` 仍可构造「低于下限的宿主」
+  // 负向夹具（用于断言插件会 fail-closed，而不是静默回退旧名）。
+  const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "activation";
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-h-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
   writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n.worktrees/\n");
@@ -120,7 +124,10 @@ export function createHarnessWith(opts: {
   }
   const sentMessages: Array<{ parentId: string; targetId: string; content: any[] }> = [];
   const childRegistry = opts.reuse?.childRegistry ?? null;
-  const ownershipApi = opts.ownershipApi ?? "legacy";
+  // g-627：缺省走 **rc.3 归属形态**（`rootOf`）。旧 `legacy`（`agents.isOwnedBy`）分支的生产侧读取已在
+  // g-627 删除 —— 若仍以 legacy 为缺省，用例会以为在测「归属拒绝」，实际恒为 `unknown`（静默误测）。
+  // 仅**显式**传 `ownershipApi: "legacy"` 时才搭旧桩，用于「旧分支不得回潮」的负向对照。
+  const ownershipApi = opts.ownershipApi ?? "rootOf";
   if (childRegistry) {
     service.sendMessage = async (parent: any, targetId: string, content: any[]) => {
       sentMessages.push({ parentId: String(parent?.id ?? ""), targetId: String(targetId), content });

@@ -279,8 +279,8 @@
           }
           const rt = sessionsRt ?? appCtx?.get?.("sessions");
           if (rt && supervisorSession) {
-            // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
-            openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
+            // 会话导航统一走 openSessionTarget（uiWorkspace.openSession）
+            openSessionTarget(supervisorSession);
             activateChatTab();
           }
           // 复制失败也必须给出可见结论（不再静默成功路径）。

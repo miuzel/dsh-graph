@@ -71,7 +71,7 @@ function createHarness({ gitRepo = false } = {}) {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             spawnedAt.push(opts.label);
             return { childId: "child-" + Math.random().toString(36).slice(2, 8), parentSessionId: "sess-super" };
           },

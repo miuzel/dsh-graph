@@ -160,7 +160,7 @@ function makeHarness() {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             captured.push(opts);
             return { childId: `child-${captured.length}`, parentSessionId: "sess-super" };
           },
@@ -227,7 +227,7 @@ async function startViaHttp(h: Harness, goal: string) {
   const res = await restCall(routeOf(h, "/api/dsh-graph/start-execution"), { goal, workspace: h.ws });
   assert.equal(res.code, 200, `HTTP 入口必须照常派发（实际：${JSON.stringify(res.payload)}）`);
   assert.equal(res.payload.ok, true, "HTTP 派发必须成功");
-  const request = h.captured[before]?.request;
+  const request = h.captured[before];
   assert.ok(request, "必须捕获到恰好一次子代理派发请求");
   return { payload: res.payload, prompt: String(request.prompt?.[0]?.text ?? "") };
 }
@@ -275,7 +275,7 @@ test("g-405 判据 1/3：英文派发空描述兜底的最终 prompt 零内置�
   const toolRes = await tool.execute({ goal: toolGoal, worktree: false, task_type: "fix" }, h.exec);
   assert.equal(toolRes.brief_source, "fallback", "planning 空描述仍走 g-236 兜底路径");
   assert.equal(toolRes.brief, EN_FALLBACK, "en 下 planning 兜底同样取英文表");
-  const toolPrompt = String(h.captured[before]?.request?.prompt?.[0]?.text ?? "");
+  const toolPrompt = String(h.captured[before]?.prompt?.[0]?.text ?? ""); // g-627：扁平 spec
   assert.ok(toolPrompt.includes(EN_FALLBACK), "en 工具入口兜底必须落英文文案");
   assert.ok(!toolPrompt.includes(ZH_FALLBACK), "en 工具入口不得出现中文兜底文案");
 });

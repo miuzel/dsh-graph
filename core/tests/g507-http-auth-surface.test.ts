@@ -122,7 +122,7 @@ function makeEntry(opts: { withConnection?: boolean } = {}) {
   const subagents = {
     list: () => ["spawn"],
     getProvider: () => ({ prepareContinuable: () => {} }),
-    startContinuable: async () => {
+    startActivation: async () => {
       calls.spawns++;
       return { childId: `child-${calls.spawns}` };
     },
@@ -392,7 +392,7 @@ test("g-507 A6：有效凭证但非 owner ⇒ 403（不进入业务、零触达�
     get: (name: string) =>
       name === "webServer" ? webServer
       : name === "connection" ? { admit: () => ({ peer: { principal: { kind: "remote" } } }) }
-      : name === "subagents" ? { list: () => ["spawn"], getProvider: () => ({}), startContinuable: async () => { calls.spawns++; return {}; } }
+      : name === "subagents" ? { list: () => ["spawn"], getProvider: () => ({}), startActivation: async () => { calls.spawns++; return {}; } }
       : undefined,
     effect: (fn: () => unknown) => fn(),
     webServer,

@@ -151,8 +151,8 @@ test("g-113 graph_start_attempt 注入目标相对路径以 workspace 根为基�
     get: (name: string) => name === "subagents" ? {
       list: () => ["spawn"],
       getProvider: () => ({ prepareContinuable: () => {} }),
-      startContinuable: async (opts: any) => {
-        capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+      startActivation: async (opts: any) => {
+        capturedPrompt = opts.prompt?.[0]?.text ?? "";
         return { childId: "child-x" };
       },
     } : undefined,
@@ -191,7 +191,7 @@ test("g-202 graph_start_attempt：无 card 创建并绑定 Goal attempt、ready�
   const ctx = {
     get: (name: string) => name === "subagents" ? {
       list: () => ["spawn"], getProvider: () => ({ prepareContinuable: () => {} }),
-      startContinuable: async () => ({ childId: "exec-child", parentSessionId: "parent" }),
+      startActivation: async () => ({ childId: "exec-child", parentSessionId: "parent" }),
     } : undefined,
     effect: (fn: () => unknown) => fn(),
     tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
@@ -214,7 +214,7 @@ test("g-202 graph_start_attempt：合法 card 用标准 prompt 派发并绑定�
   const ctx = {
     get: (name: string) => name === "subagents" ? {
       list: () => ["spawn"], getProvider: () => ({ prepareContinuable: () => {} }),
-      startContinuable: async (opts: any) => { request = opts; return { childId: "collect-child", parentSessionId: "parent" }; },
+      startActivation: async (opts: any) => { request = opts; return { childId: "collect-child", parentSessionId: "parent" }; },
     } : undefined,
     effect: (fn: () => unknown) => fn(),
     tools: { register: (d: any) => { registered.push(d); return () => {}; }, get: () => ({}) },
@@ -227,8 +227,8 @@ test("g-202 graph_start_attempt：合法 card 用标准 prompt 派发并绑定�
   const out = await byName.get("graph_start_attempt")!.execute({ goal, card, provider: "p", model: "m", attempt_brief: brief }, exec);
   assert.deepEqual(Object.keys(out).sort(), ["card", "child_id", "child_error", "model_route"].sort());
   assert.equal(out.child_id, "collect-child");
-  assert.match(request.request.prompt[0].text, new RegExp(`graph_fill_card\\(goal=\\"${goal}\\", card=\\"${card}`));
-  assert.ok(request.request.prompt[0].text.includes(brief), "card 收集 prompt 应保留 attempt_brief");
+  assert.match(request.prompt[0].text, new RegExp(`graph_fill_card\\(goal=\\"${goal}\\", card=\\"${card}`));
+  assert.ok(request.prompt[0].text.includes(brief), "card 收集 prompt 应保留 attempt_brief");
   assert.equal(loadGoal(findGoalFile(root, goal)).meta.status, "planning");
   const cardFile = loadCard(root, goal, card).file;
   assert.equal(loadGoal(cardFile).meta.status, "collecting");

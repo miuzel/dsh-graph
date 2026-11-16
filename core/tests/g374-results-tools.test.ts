@@ -55,7 +55,7 @@ function createHarness() {
         return {
           list: () => ["spawn"],
           getProvider: (n: string) => (n === "spawn" ? { prepareContinuable: () => {} } : {}),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             capturedRequests.push(opts);
             return { childId: "child-fixed-1", parentSessionId: "sess-super" };
           },
@@ -446,7 +446,7 @@ test("g-374 零 token 自证：新增的提示面不得进入 graph_start_attemp
   const h = createHarness();
   const { goal } = prepare(h);
   await dispatch(h, goal);
-  const prompt = h.capturedRequests[0]?.request?.prompt?.[0]?.text ?? "";
+  const prompt = h.capturedRequests[0]?.prompt?.[0]?.text ?? ""; // g-627：扁平 spec
   assert.ok(prompt.length > 0, "必须捕获到派发 prompt（零 token 对照的锚点）");
   // 新工具的存在只在「告知 agent」的提示面出现；派发给执行子代理的注入文本必须逐字不变 ⇒
   // 本目标不增加任何派发期 token（对照 cf7c66d 的字节同一性由交付证据给出）。

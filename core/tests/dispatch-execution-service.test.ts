@@ -53,12 +53,15 @@ function createHarness({
   providers = ["spawn"],
   providerHasPrepareContinuable = true,
   spawnError = null,
+  spawnErrorCode = null,
   gitRepo = true,
 }: {
   customWorkspace?: string;
   providers?: string[];
   providerHasPrepareContinuable?: boolean;
   spawnError?: string | null;
+  /** g-627：spawn 失败时附带的结构化错误码（如 `ACTIVATION_LIMIT_REACHED`）。 */
+  spawnErrorCode?: string | null;
   gitRepo?: boolean;
 } = {}) {
   const ws = customWorkspace ?? mkdtempSync(join(tmpdir(), "dsh-graph-g241-ws-"));
@@ -98,9 +101,15 @@ function createHarness({
             }
             return {};
           },
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             capturedRequests.push(opts);
-            if (spawnError) throw new Error(spawnError);
+            if (spawnError) {
+              // g-627：允许夹具指定结构化错误码（宿主在发布 child 之前的拒绝，如槽位/深度上限）。
+              const err = spawnErrorCode
+                ? Object.assign(new Error(spawnError), { code: spawnErrorCode })
+                : new Error(spawnError);
+              throw err;
+            }
             return { childId: "child-" + Math.random().toString(36).slice(2, 8), parentSessionId: "sess-super" };
           },
         };
@@ -136,6 +145,21 @@ function createHarness({
 // 质量判据 1：工具与 HTTP 入口语义等价性、身份保留与 targetContext 注入
 // ============================================================================
 
+/**
+ * 等待「首次 spawn 已结算」在 attempt.md 上可见（最多 ~2s）。
+ * g-627：宿主先写 `attempt.dispatch_failed` 事件、再落盘 attempt.md ⇒ 测试若紧接着发起下一次派发，
+ * 可能被准入闸门按**旧的** dispatch_in_flight 拒绝（409）。这是既有事件先行纪律的正常表现，
+ * 故测试侧显式等待持久化完成，而不是放宽宿主的 fail-closed 判定。
+ */
+async function untilAttemptSettled(root: string, goalId: string, timeoutMs = 2000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const pending = goalDetail(root, goalId).attempts.some((a: any) => a.dispatch_in_flight === true);
+    if (!pending) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 test("g-241 判据 1：工具与 HTTP 均注入 targetContext 且语义等价，入口身份各自分立", async () => {
   const { ws, root, toolsByName, registeredRoutes, execContext, capturedRequests } = createHarness();
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
@@ -151,7 +175,7 @@ test("g-241 判据 1：工具与 HTTP 均注入 targetContext 且语义等价，
   assert.ok(toolRes.attempt.startsWith("att-"));
   assert.ok(toolRes.child_id);
 
-  const toolPrompt = capturedRequests[0].request.prompt[0].text;
+  const toolPrompt = capturedRequests[0].prompt[0].text;
   assert.ok(toolPrompt.includes("## 目标描述"), "工具入口 prompt 必须包含目标描述");
   assert.ok(toolPrompt.includes("## 质量判据"), "工具入口 prompt 必须包含质量判据");
   assert.ok(toolPrompt.includes("判据 A：实现统一服务"), "工具入口 prompt 包含判据内容");
@@ -177,7 +201,7 @@ test("g-241 判据 1：工具与 HTTP 均注入 targetContext 且语义等价，
   assert.equal(res._body.ok, true);
   assert.ok(res._body.child_id);
 
-  const httpPrompt = capturedRequests[1].request.prompt[0].text;
+  const httpPrompt = capturedRequests[1].prompt[0].text;
   assert.ok(httpPrompt.includes("## 目标描述"), "HTTP 入口 prompt 必须包含目标描述");
   assert.ok(httpPrompt.includes("## 质量判据"), "HTTP 入口 prompt 必须包含质量判据");
   assert.ok(httpPrompt.includes("判据 B：测试通过"), "HTTP 入口 prompt 包含判据内容");
@@ -361,7 +385,7 @@ test("g-241 判据 3：attempt meta 与事件记录 template_version、context_v
 
   // 验证注入清单与 prompt 实际注入内容来自同一快照
   assert.deepEqual(toolRes.injected_cards, [c1]);
-  const promptText = capturedRequests[0].request.prompt[0].text;
+  const promptText = capturedRequests[0].prompt[0].text;
   assert.ok(promptText.includes(c1));
   assert.ok(promptText.includes("卡片正文详情"));
 });
@@ -371,9 +395,10 @@ test("g-241 判据 3：attempt meta 与事件记录 template_version、context_v
 // ============================================================================
 
 test("g-241 判据 4：无 prepareContinuable provider 时工具与 HTTP 均明确报错，绝不回退虚构 spawn", async () => {
-  // 创建只有无 prepareContinuable 能力的 provider（或空 provider 列表）的环境
+  // 创建**两个官方默认名都**没有 prepareContinuable 能力的宿主（g-627：provider 枚举已下线，
+  // 探测只查具名 getProvider("spawn"/"fork") ⇒ 负向夹具必须让两者都无能力才算「无可用 provider」）。
   const { ws, root, toolsByName, registeredRoutes, execContext, capturedRequests } = createHarness({
-    providers: ["plain-spawn", "mock-agent"],
+    providers: ["spawn", "fork"],
     providerHasPrepareContinuable: false,
   });
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
@@ -387,7 +412,9 @@ test("g-241 判据 4：无 prepareContinuable provider 时工具与 HTTP 均明�
     execContext,
   );
   assert.equal(toolRes.child_id, null);
-  assert.ok(toolRes.child_error?.includes("需 prepareContinuable 能力"), "工具入口上报明确错误");
+  // g-627：错误文案必须点名「缺 prepareContinuable 能力」与已查询的默认 provider 名（可操作）
+  assert.match(String(toolRes.child_error ?? ""), /无可用默认 subagent provider/, "工具入口上报明确错误");
+  assert.match(String(toolRes.child_error ?? ""), /prepareContinuable|spawn、fork/, "错误须点名能力与已查询的 provider");
   assert.equal(capturedRequests.length, 0, "绝不调用 startContinuable");
 
   // 2. HTTP 入口
@@ -400,7 +427,8 @@ test("g-241 判据 4：无 prepareContinuable provider 时工具与 HTTP 均明�
 
   assert.equal(res._code, 200);
   assert.equal(res._body.child_id, null);
-  assert.ok(res._body.child_error?.includes("需 prepareContinuable 能力"), "HTTP 入口上报明确错误");
+  assert.match(String(res._body.child_error ?? ""), /无可用默认 subagent provider/, "HTTP 入口上报明确错误");
+  assert.match(String(res._body.child_error ?? ""), /prepareContinuable|spawn、fork/, "错误须点名能力与已查询的 provider");
   assert.equal(capturedRequests.length, 0, "绝不调用 startContinuable");
 });
 
@@ -480,7 +508,7 @@ test("g-241 判据 5：空 action 协同回归（g-236 语义）——缺失 bri
   const res1 = await toolsByName.get("graph_start_attempt")!.execute({ goal: goalId }, execContext);
   assert.equal(res1.brief, "执行目标描述和质量判据中的任务");
   assert.equal(res1.brief_source, "fallback");
-  const prompt1 = capturedRequests[0].request.prompt[0].text;
+  const prompt1 = capturedRequests[0].prompt[0].text;
   assert.ok(prompt1.includes("执行目标描述和质量判据中的任务"));
   assert.ok(!prompt1.includes("（未提供）\n> 未提供原因：本次请求未传 attempt_brief"));
 
@@ -555,7 +583,7 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
     { goal: patchGoal, worktree: true, attempt_brief: "强制隔离补丁" },
     execContext,
   );
-  const prompt1 = capturedRequests[0].request.prompt[0].text;
+  const prompt1 = capturedRequests[0].prompt[0].text;
   assert.ok(prompt1.includes("【强制 worktree 隔离】"), "显式 worktree=true 必须强制隔离");
   assert.ok(!prompt1.includes("豁免独立 worktree 隔离"), "显式 worktree=true 不得包含豁免说明");
 
@@ -565,7 +593,7 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
     { goal: patchGoal, attempt_brief: "轻量通道补丁" },
     execContext,
   );
-  const prompt2 = capturedRequests[1].request.prompt[0].text;
+  const prompt2 = capturedRequests[1].prompt[0].text;
   assert.ok(prompt2.includes("【微小改动/轻量任务快速通道】"));
   assert.ok(prompt2.includes("豁免独立 worktree 隔离"));
 
@@ -575,14 +603,17 @@ test("g-241 判据 5：显式隔离优先级协同回归（g-218 规则）——
     { goal: patchGoal, worktree: false, attempt_brief: "完全豁免" },
     execContext,
   );
-  const prompt3 = capturedRequests[2].request.prompt[0].text;
+  const prompt3 = capturedRequests[2].prompt[0].text;
   assert.ok(!prompt3.includes("【强制 worktree 隔离】"));
   assert.ok(prompt3.includes("【微小改动/轻量任务快速通道】"), "patch 显式 worktree=false → minor-task 豁免指引");
 });
 
 test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时 attempt 成功审计，child_error 明确上报，无无主运行 child", async () => {
+  // g-627：本用例走 headless mock（无 sessionQuery）⇒ 用**结构化**的槽位上限错误（发布前拒绝）。
+  // 不带 code 的普通 Error 只能判「无法证明无 child」并保持阻断（那是正确的 fail-closed）。
   const { ws, root, toolsByName, registeredRoutes, execContext } = createHarness({
     spawnError: "LLM quota exceeded or model overloaded",
+    spawnErrorCode: "ACTIVATION_LIMIT_REACHED",
   });
   writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
 
@@ -600,6 +631,9 @@ test("g-241 判据 5：绑定与派发失败收敛——子代理启动异常时
   assert.ok(toolRes.note?.includes("subagent 派发失败（attempt 已本地创建）"));
 
   // 2. HTTP 入口派发失败
+  // 同一目标上的**第二次**派发：先等首次 spawn 的结算在磁盘上完成（事件先行、落盘可能稍后）。
+  // 宿主的准入闸门按 attempt.md 的 dispatch_in_flight 判定，读到旧值就会 409（正确行为，不是缺陷）。
+  await untilAttemptSettled(root, goalId);
   const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
   const req = fakeReq("POST", "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws), {
     goal: goalId,
@@ -656,7 +690,7 @@ test("g-270: 目标描述含闭合围栏内 ## 伪标题时，prompt 目标描�
   );
   assert.ok(toolRes.attempt.startsWith("att-"));
 
-  const promptText = capturedRequests[0].request.prompt[0].text;
+  const promptText = capturedRequests[0].prompt[0].text;
   assert.ok(promptText.includes("正文前言"), "prompt 必须包含正文前言");
   assert.ok(promptText.includes("## 围栏内伪小节标题"), "prompt 必须完整保留代码围栏内的 ## 标题");
   assert.ok(promptText.includes("正文后记，确保不被截断"), "prompt 目标描述不应在围栏内 ## 处截断");

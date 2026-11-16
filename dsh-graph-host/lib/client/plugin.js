@@ -50,15 +50,12 @@
           if (rec && typeof rec === "object" && Object.prototype.hasOwnProperty.call(rec, sid)) return rec[sid];
           return itemList ? itemList.find((s) => s && (s.sessionId === sid || s.id === sid)) : undefined;
         };
-        // g-244：子 → 直接父 反查表（子代理目录 + currentAddress 导航地址）。
+        // g-244：子 → 直接父 反查表（来自子代理目录）。
         // g-351：目录 entry 的形状探测（旧带 kind / 新无 kind）统一走 catalogParentIndex，
         //        与子会话导航、地址构造共用同一判定函数；此处不再内联 kind 谓词。
+        // g-627：`snap.currentAddress`（0.1.5-rc.2 的导航地址）补丁已删除 —— 低于宿主下限的版本
+        //        不再支持，子→父关系由目录与条目自身的 parentId/parentSessionId 提供。
         const parentIndex = catalogParentIndex(catalogsByParent);
-        const addr = snap.currentAddress;
-        if (addr && typeof addr.childSessionId === "string" && typeof addr.parentSessionId === "string"
-          && !parentIndex.has(addr.childSessionId)) {
-          parentIndex.set(addr.childSessionId, addr.parentSessionId);
-        }
         const parentOf = (sid) => {
           const item = byId(sid);
           if (typeof item?.parentId === "string" && item.parentId) return item.parentId;
@@ -97,9 +94,10 @@
           return null;
         }
         // With no session selected, only the runtime's current session is eligible.
-        // g-321：会话激活判断双向兼容——0.1.5-rc.2 用 snap.current / snap.currentAddress；
-        // 0.1.6-alpha.2 移除了二者，改为「本地引用计数里 mainView > 0 的那一行」
+        // 会话激活判定 =「本地引用计数里 mainView > 0 的那一行」
         // （与 DSH 自身 ui-workspace / ui-settings-general 的判定同源）。
+        // g-627：`snap.current` / `snap.currentAddress` 口径（0.1.5-rc.2 专用）已删除 ——
+        // 低于宿主下限的版本不再支持，且该口径会把被保留但未激活的会话判成当前会话。
         const retainedMainViewId = (() => {
           const list = Array.isArray(snap.items)
             ? snap.items
@@ -111,12 +109,7 @@
           }
           return null;
         })();
-        const current = typeof snap.current === "string" && snap.current
-          ? snap.current
-          : (typeof snap.currentAddress?.childSessionId === "string" && snap.currentAddress.childSessionId
-            ? snap.currentAddress.childSessionId
-            : retainedMainViewId);
-        const resolved = current ? pathOf(current) : null;
+        const resolved = retainedMainViewId ? pathOf(retainedMainViewId) : null;
         if (resolved) { setLastGoodWorkspace(resolved); return resolved; }
         return null;
       } catch { return null; }
@@ -154,31 +147,24 @@
       }));
     }
     const openingChildSessions = new Set();
-    // g-321：会话导航双向兼容（0.1.6 起导航职责从 sessions 服务迁移到 uiWorkspace）。
+    // 会话导航：uiWorkspace.openSession(target)（NavigationService 单一入口）。
     // uiWorkspace 由 ui-workspace 插件声明在 Context 上，按可选能力经 ctx.get 探测取得；
-    // 缺失（0.1.5-rc.2 或未激活该插件的精简 profile）时回退到 sessions.open/openSubagent，
-    // 绝不把 uiWorkspace 列为硬 inject——那会让旧 profile 的整个看板 client apply 被阻断。
+    // 绝不把它列为硬 inject——精简 profile 未激活该插件时，整个看板 client apply 不能被阻断。
+    // g-627：`sessions.open` / `sessions.openSubagent` 回退（0.1.5-rc.2 专用）已删除。
     function uiWorkspaceRt() {
       // g-425：受保护读取（g-425 统一口径）——旧写法 `appCtx?.uiWorkspace` 在 uiWorkspace 服务
       // 缺席时同样会撞 cordis 注入门禁抛错，只是外层 try/catch 把它吞成了 null（结果相同，
       // 但把「服务缺失」与「读取异常」混为一谈）；改走 optionalService 后语义显式且零抛错。
       return optionalService(appCtx, "uiWorkspace");
     }
-    // 统一跳转：优先 uiWorkspace.openSession(target)（0.1.6），回退 legacyFn（0.1.5 的 sessions.*）。
-    // target 是 SessionId 或 SubagentAddress，两种版本共用同一份 address 形状。
-    function openSessionTarget(target, legacyFn) {
+    // 统一跳转：uiWorkspace.openSession(target)。target 是 SessionId 或 SubagentAddress。
+    // 能力缺失/调用抛错一律返回 false，由调用方如实告警 —— 绝不假装导航成功。
+    function openSessionTarget(target) {
       const uw = uiWorkspaceRt();
-      if (uw && typeof uw.openSession === "function") {
-        try { uw.openSession(target); return true; }
-        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
-        catch (e) { console.warn("[dsh-graph-host] uiWorkspace.openSession 失败，回退 sessions.*", e); }
-      }
-      if (typeof legacyFn === "function") {
-        try { if (legacyFn() !== false) return true; }
-        // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
-        catch (e) { console.warn("[dsh-graph-host] 旧版会话导航 API 失败", e); }
-      }
-      return false;
+      if (!uw || typeof uw.openSession !== "function") return false;
+      try { uw.openSession(target); return true; }
+      // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
+      catch (e) { console.warn("[dsh-graph-host] uiWorkspace.openSession 失败", e); return false; }
     }
     async function openChildSession(parentSessionId, childId) {
       if (!parentSessionId || !childId) return;
@@ -195,24 +181,23 @@
         //  点「↗ 转到对话」静默退化为打开父会话）。
         const entry = catalogChildEntry(subagentCatalogEntries(rt, parentSessionId), childId);
         if (entry) {
-          // g-321：0.1.5 走 sessions.openSubagent(address)；0.1.6 该 API 已移除，
-          // 由 uiWorkspace.openSession(address) 一步完成「选中会话 + 切到对话」。
+          // uiWorkspace.openSession(address) 一步完成「选中会话 + 切到对话」。
           const address = { parentSessionId, childSessionId: childId, mode: catalogAddressMode(entry) };
-          if (!openSessionTarget(address, typeof rt.openSubagent === "function" ? () => rt.openSubagent(address) : null)) {
+          if (!openSessionTarget(address)) {
             // i18n-keep(category-a)：开发者控制台诊断日志（console.warn），非 UI 文案。
-            console.warn("[dsh-graph-host] 无可用子会话导航 API（uiWorkspace.openSession / sessions.openSubagent 均缺失）：", childId);
+            console.warn("[dsh-graph-host] 无可用子会话导航 API（uiWorkspace.openSession 缺失）：", childId);
           }
           activateChatTab();
         } else {
           // 目录里没有（不健康/已清理）：退化为打开父会话
           console.warn("[dsh-graph-host] child not in catalog, opening parent:", childId);
-          openSessionTarget(parentSessionId, typeof rt.open === "function" ? () => rt.open(parentSessionId) : null);
+          openSessionTarget(parentSessionId);
           activateChatTab();
         }
       } catch (e) {
         console.warn("[dsh-graph-host] openSubagent failed", e);
         try {
-          openSessionTarget(parentSessionId, typeof rt?.open === "function" ? () => rt.open(parentSessionId) : null);
+          openSessionTarget(parentSessionId);
           activateChatTab();
         } catch { /* 静默 */ }
       } finally {

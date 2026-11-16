@@ -17,7 +17,8 @@
  *
  *  验证边界：subagent 服务为计数 mock，**未运行真实 worker**；因此"孤儿 worker 仍在写卡"的
  *  危害属代码推论（依据：旧序在拒绝前已启动 child 且未中断、未保留 child_id）。真实中断效果
- *  依赖宿主 interruptByParent 能力，本测试只断言"是否请求中断/是否如实上报"。
+ *  依赖宿主 interrupt(ancestor authority) 能力（g-627：旧 interruptByParent 已下线），
+ *  本测试只断言"是否请求中断/是否如实上报"。
  */
 
 import { test } from "node:test";
@@ -45,14 +46,14 @@ const HOST_SRC = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/in
 
 type InterruptMode = "ok" | "missing" | "throw";
 
-/** 计数 mock：记录 spawn 次数与 interruptByParent 调用参数；可注入 onSpawn 钩子（竞态模拟）。 */
+/** 计数 mock：记录 spawn 次数与 `interrupt(child, authority)` 调用参数；可注入 onSpawn 钩子（竞态模拟）。 */
 function mkSubagents(opts: { onSpawn?: (n: number) => void; interrupt?: InterruptMode } = {}) {
   const spawnedIds: string[] = [];
   const interruptCalls: any[][] = [];
   const svc: any = {
     list: () => ["spawn"],
     getProvider: () => ({ prepareContinuable() {} }),
-    startContinuable: async () => {
+    startActivation: async () => {
       const childId = `child-${spawnedIds.length + 1}`;
       spawnedIds.push(childId);
       opts.onSpawn?.(spawnedIds.length);
@@ -61,9 +62,10 @@ function mkSubagents(opts: { onSpawn?: (n: number) => void; interrupt?: Interrup
   };
   const mode: InterruptMode = opts.interrupt ?? "ok";
   if (mode !== "missing") {
-    svc.interruptByParent = (...args: any[]) => {
+    // g-627：只提供 rc.3 的本地服务面 `interrupt(target, {kind:"ancestor", agent})`。
+    svc.interrupt = (childId: string, authority: any) => {
       if (mode === "throw") throw new Error("interrupt service down");
-      interruptCalls.push(args);
+      interruptCalls.push([childId, authority?.agent?.session?.id ?? authority?.agent?.id ?? null, authority?.kind]);
     };
   }
   return { svc, spawnedIds, interruptCalls };
@@ -192,8 +194,10 @@ test("g-388 ④工具入口：spawn 成功但 bind 失败 ⇒ 请求中断并保
   assert.match(String(r.child_error), /child-1/);
   assert.match(String(r.child_error), /已请求中断/, "必须请求中断刚启动的 child");
   assert.equal(r.child_interrupted, true);
-  assert.equal(m.interruptCalls.length, 1, "interruptByParent 恰被调用一次");
-  assert.deepEqual(m.interruptCalls[0].slice(0, 2), ["child-1", "parent"]);
+  assert.equal(m.interruptCalls.length, 1, "interrupt 恰被调用一次");
+  assert.equal(m.interruptCalls[0][2], "ancestor", "必须用祖先身份（绝不退回 user 语义）");
+  // target 是 child，authority 是派发时的**确切父 Agent**（同一个对象，不是按 id 重新找）
+  assert.equal(m.interruptCalls[0][0], "child-1");
   // 失败收敛不得改动其它生命周期：卡仍绑定抢先的收集者、事件仍只有那 1 条
   const evs = collectingEvents(host.root, goal, card);
   assert.equal(evs.length, 1);
@@ -229,7 +233,8 @@ test("g-388 ⑤中断本身失败：如实上报失败原因，不得虚称已�
 
   const r = await host.registered.get("graph_start_attempt").execute({ goal, card }, exFor(ws));
   assert.equal(r.child_id, "child-1");
-  assert.match(String(r.child_error), /中断该 child 失败/);
+  // g-627：收口语义未变（「中断失败：<原因>」），外层如实上报「无法中断该 child」
+  assert.match(String(r.child_error), /无法中断该 child（中断失败：/);
   assert.match(String(r.child_error), /interrupt service down/);
   assert.equal(r.child_interrupted, undefined);
 });
@@ -250,7 +255,8 @@ test("g-388 ④REST 入口：spawn 成功但 bind 失败 ⇒ 同一套收敛（�
   assert.match(String(r._body.child_error), /绑定失败/);
   assert.match(String(r._body.child_error), /已请求中断/);
   assert.equal(m.interruptCalls.length, 1);
-  assert.deepEqual(m.interruptCalls[0].slice(0, 2), ["child-1", "sess-g388"]);
+  assert.equal(m.interruptCalls[0][0], "child-1");
+  assert.equal(m.interruptCalls[0][2], "ancestor");
 });
 
 // ---------------------------------------------------------------- ⑥ 核心层同源
@@ -315,18 +321,20 @@ test("g-388 ⑦负向对照：两入口均为「先准入后 spawn」，收集�
   const convStart = HOST_SRC.indexOf("const bindCollectWithConvergence =");
   const convEnd = HOST_SRC.indexOf("// 枚举派发选项（重新执行选择器用）");
   const convSrc = HOST_SRC.slice(convStart, convEnd > convStart ? convEnd : convStart + 3000);
-  // g-625：中断原语收口到 interruptChildCompat（rc.1 interruptByParent / rc.3 interruptByUser）——
+  // g-625 / g-627：中断原语收口到 interruptChildCompat（rc.3 起唯一路径是 interrupt + ancestor）——
   // 收敛策略仍必须请求中断、仍必须如实上报，但**不得**再直连宿主方法（收口收严，不是放宽）。
   assert.ok(convSrc.includes("interruptChildCompat("), "收敛策略必须经中断收口请求中断");
-  assert.ok(!convSrc.includes("interruptByParent"), "收敛策略不得绕过中断收口直连宿主方法");
+  assert.ok(!convSrc.includes("subagents.interrupt"), "收敛策略不得绕过中断收口直连宿主方法");
   const interruptHelper = HOST_SRC.slice(
     HOST_SRC.indexOf("export function interruptChildCompat("),
     HOST_SRC.indexOf("// g-505：主管会话上下文缓存的智能保活"),
   );
-  assert.ok(interruptHelper.includes("interruptByParent"), "中断收口必须保留 rc.1 interruptByParent 路径");
+  // g-627：rc.1 的 interruptByParent 回退已下线（宿主下限抬高）⇒ 反向钉住不得回潮。
+  assert.ok(!interruptHelper.includes("interruptByParent"), "中断收口不得再保留 rc.1 interruptByParent 路径");
   assert.ok(interruptHelper.includes("subagents.interrupt("), "中断收口必须提供 rc.3 本地 interrupt(ancestor) 路径");
   assert.ok(!/subagents\.interruptByUser\s*\(/.test(interruptHelper), "不得用 Remote face interruptByUser 冒充本地收敛");
   assert.ok(interruptHelper.includes("无法中断该 child"), "中断能力缺失必须如实上报");
-  assert.ok(interruptHelper.includes("中断该 child 失败"), "中断失败必须如实上报");
-  assert.ok(convSrc.includes("child_id: childId"), "收敛结果必须保留 child_id");
+  // g-627：失败文案统一为「无法中断该 child（中断失败：<原因>）」，仍如实点名失败原因
+  assert.ok(interruptHelper.includes("中断失败："), "中断失败必须如实上报");
+  assert.ok(/child_id:\s*childId/.test(convSrc), "收敛结果必须保留 child_id");
 });

@@ -18,22 +18,27 @@ import { relative, join, resolve, dirname, basename, isAbsolute } from "node:pat
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
-// rc.1 exposes enumeration; rc.3 exposes only named provider lookup.
+/**
+ * 选出一个具备 `prepareContinuable` 能力的 subagent provider（g-627 收窄后为**单版本**探测）。
+ *
+ * g-627 把宿主下限提到 `>=0.2.2-rc.3`：该线起 `subagents.list()`（provider 枚举）已被删除，
+ * 官方只保留**具名查询** `getProvider(name)`，默认 provider 名固定为 `spawn` / `fork`。
+ * 旧的 `list()` 枚举分支（`0.2.2-rc.2` 及更早）因此删除 —— 只在高于下限的宿主上才会用到，
+ * 且走的是同一条 `getProvider` 能力判定，不改变任何仍受支持宿主的行为。
+ *
+ * 明确保留：`getProvider` 缺失 / 抛错 / 两个默认名都无能力 ⇒ 一律返回 `{provider:null, error}`
+ * （**不可确认**），由调用方如实上报，绝不猜一个 provider 名去派发。
+ */
 export function probeContinuableProvider(subagents) {
   if (typeof subagents?.getProvider !== "function") return { provider: null, error: "无法确认 subagent provider：getProvider API 不可用" };
-  let names;
-  const enumerable = typeof subagents.list === "function";
   try {
-    names = enumerable ? subagents.list() : ["spawn", "fork"];
-    if (!Array.isArray(names) || names.some((name) => typeof name !== "string")) throw new Error("list 返回非字符串数组");
-    for (const name of names) {
+    for (const name of ["spawn", "fork"]) {
       if (typeof subagents.getProvider(name)?.prepareContinuable === "function") return { provider: name, error: null };
     }
   } catch (error) {
     return { provider: null, error: `无法确认 subagent provider：查询异常（${String(error?.message ?? error)}）` };
   }
-  if (!enumerable) return { provider: null, error: "无可用默认 subagent provider（已查询 spawn、fork；自定义 provider 无法枚举）" };
-  return { provider: null, error: `无可用 subagent provider（需 prepareContinuable 能力，已注册：${names.join(",") || "无"}）` };
+  return { provider: null, error: "无可用默认 subagent provider（已查询 spawn、fork；自定义 provider 无法枚举）" };
 }
 // g-454：读旧 settings.yaml 的 `dsh-graph` 节。`yaml` 是本包**已声明**的运行时依赖
 // （package.json dependencies；core/ops.ts 早已在加载期 import 它，故非新增第三方依赖）。
@@ -691,113 +696,84 @@ export const name = "dsh-graph-host";
 export const inject = ["tools"];
 
 /**
- * g-469：宿主 subagent 派发 API 的**双版本兼容收口**（唯一入口）。
+ * 宿主 subagent 派发收口（**唯一入口**）。
  *
- * 背景：DSH `0.2.1-alpha.2` 把 subagent 服务方法 `startContinuable(spec)` 改名为
- * `startActivation(spec)`（`0.2.0-rc.2` / `0.2.1-alpha.1` 只有旧名，`0.2.1-alpha.2` 只有新名）。
- * 不兼容直接表现为 5 处派发点全部 `subagents.startContinuable is not a function`
- * ——安装+启动可用、**派发完全不可用**。
+ * 历史：DSH `0.2.1-alpha.2` 把 `startContinuable(spec)` 改名为 `startActivation(spec)`；
+ * `0.2.2-rc.3` 又把 spec 的 `request` 嵌套层扁平化（`docs/upgrade-guide/v0.2.1-rc.2/
+ * subagent-activation-options`：`request: task` 换成 `...task`，label/signal 保留在 spread 之后）。
  *
- * 收口要求：`dsh-graph-host/index.js` 内**所有**子代理启动都必须经本 helper，
- * 禁止任何调用点直连 `subagents.startActivation(...)` / `subagents.startContinuable(...)`。
- *   · 新宿主（≥ 0.2.1-alpha.2）具备 `startActivation` ⇒ 走新名；
- *   · 旧宿主（≤ 0.2.1-alpha.1）只具备 `startContinuable` ⇒ 走旧名；
- *   · 两者皆无 ⇒ **fail-closed**：抛出可追溯、可操作的错误。绝不静默回退到别的路径、
- *     绝不虚构 childId / 返回「无 child」冒充派发成功。
+ * g-627 收窄（宿主下限 = `>=0.2.2-rc.3`，见 `dsh-graph-host/package.json` 的 `engines.dsh`）：
+ *   · `startContinuable` 旧名回退**删除** —— 只有它能用的宿主是 `≤ 0.2.1-alpha.1`，已在声明范围外；
+ *   · 嵌套 `request` 形态**删除** —— 最后用到它的是 `0.2.2-rc.2`，同样在声明范围外。
+ * 现只剩一条路径：`startActivation` + **扁平** spec。缺 `startActivation` ⇒ **fail-closed**：
+ * 抛出可追溯、可操作的错误（提示宿主版本过低），绝不静默回退、绝不虚构 childId 冒充派发成功。
  *
- * g-624：收口点**同时**负责构建 `SubagentActivationSpec` 的形态。rc.3 起 spec 的
- * `request` 嵌套层被移除，本 helper 是唯一知道「哪种形态」的地方；5 个调用点只提交
- * **扁平 payload**（`provider` / `label` / `signal` + `prompt` / `parent` / 可选执行设置），
- * 不得各自拼形态。
+ * 调用点约定：5 处派发点只提交**扁平 payload**（`provider` / `label` / `signal` + `prompt` /
+ * `parent` / 可选执行设置），形态只在本 helper 里拼，禁止各自拼形态或直连
+ * `subagents.startActivation(...)`。
  *
- * 形态判别（可核实的能力探测，不猜版本号）：
- *   · 嵌套形态（`{ provider, label, request: { prompt, parent, ... }, signal }`）：
- *     `typeof subagents.list === "function"`，或根本没有 `startActivation`。
- *     —— rc.3 在同一版删除了 `list()`（rc.3 自带 `docs/upgrade-guide/v0.2.1-rc.2/
- *     subagent-service-methods`），而所有嵌套形态的宿主（0.2.0-rc.2 / 0.2.1-alpha.1 /
- *     0.2.2-rc.1）都暴露 `list()`；只有 `startContinuable` 的宿主（≤ 0.2.1-alpha.1）
- *     全部早于扁平化（g469 夹具两版真实实现的 spec 读取面都只有 `spec.request.*`）。
- *   · 扁平形态（`{ provider, label, prompt, parent, ..., signal }`）：只剩 `startActivation`
- *     且无 `list()`（rc.3+）。官方迁移说明：`request: task` 换成 `...task`，label/signal
- *     保持在 spread 之后（`docs/upgrade-guide/v0.2.1-rc.2/subagent-activation-options`）。
- *
- * 两形态都显式传 `delivery: "parent"`：rc.1 与 rc.3 的声明都把 `delivery` 标为必填
- * （rc.1 未传时 `spec.delivery === "caller"` 恒假、恰好退化成 parent；显式传值把这条
- * 依赖不再成立），语义仍是「子代理结果通知父代理」，绝不改成 `caller`（不通知）。
+ * 显式传 `delivery: "parent"`：宿主声明里该字段必填，语义是「子代理结果通知父代理」，
+ * 绝不改成 `caller`（不通知）。
  *
  * 返回契约（`childId` 必在）见 `core/tests/fixtures/g469-host-subagent-api.json`
  * （由 `core/tests/fixtures/g469-host-subagent-api.mjs` 从真实宿主包提取）。
  *
  * @param subagents 宿主 `ctx.get("subagents")` 服务（可能为 undefined）
- * @param spec 扁平派发 payload（见上；也兼容旧的 `{ request: {...} }` 分组形态）
+ * @param spec 扁平派发 payload
  * @returns 宿主 receipt（含 `childId`）
- * @throws 两版 API 皆缺时抛错（交由既有 `subagentSpawnErrorText` 映射为可操作文案）
+ * @throws `startActivation` 缺失时抛错（交由既有 `subagentSpawnErrorText` 映射为可操作文案）
  */
-function buildSubagentActivationSpec(subagents, payload, hasActivation) {
-  const source = payload ?? {};
-  const { provider, label, signal } = source;
-  // 任务字段 = payload 去掉派发控制字段（provider/label/signal）。兼容旧调用方仍按
-  // g-469 的 `request` 分组传入——只作为「任务包」使用，最终形态仍由本 helper 决定。
-  let task;
-  if (source.request !== undefined) {
-    task = source.request;
-  } else {
-    task = {};
-    for (const [key, value] of Object.entries(source)) {
-      if (key === "provider" || key === "label" || key === "signal" || key === "request") continue;
-      if (value !== undefined) task[key] = value;
-    }
+function buildSubagentActivationSpec(payload) {
+  const { provider, label, signal } = payload ?? {};
+  const task = {};
+  for (const [key, value] of Object.entries(payload ?? {})) {
+    if (key === "provider" || key === "label" || key === "signal") continue;
+    if (value !== undefined) task[key] = value;
   }
-  const nested = typeof subagents?.list === "function" || !hasActivation;
-  if (nested) return { provider, label, request: task, signal, delivery: "parent" };
   return { provider, label, ...task, signal, delivery: "parent" };
 }
 
 export async function startSubagentCompat(subagents, spec) {
-  const hasActivation = subagents && typeof subagents.startActivation === "function";
-  const hasContinuable = subagents && typeof subagents.startContinuable === "function";
-  if (hasActivation) return subagents.startActivation(buildSubagentActivationSpec(subagents, spec, hasActivation));
-  if (hasContinuable) return subagents.startContinuable(buildSubagentActivationSpec(subagents, spec, hasActivation));
+  if (subagents && typeof subagents.startActivation === "function") {
+    return subagents.startActivation(buildSubagentActivationSpec(spec));
+  }
   let registered = "未知";
   try {
-    if (typeof subagents?.list === "function") {
-      registered = (subagents.list() ?? []).join(",") || "无";
-    } else if (typeof subagents?.getProvider === "function") {
+    if (typeof subagents?.getProvider === "function") {
       const known = ["spawn", "fork"].filter((n) => subagents.getProvider(n) !== undefined);
-      // 注意：这里刻意用字符串拼接而非模板字面量 —— g469 结构守卫用「花括号配平」截取 helper 体，
-      // 嵌套模板里的 `${…}` 会干扰该配平（历史实现只在末尾有一个 `${}`）。
+      // 注意：这里刻意用字符串拼接而非模板字面量 —— g469 结构守卫用「花括号配平」截取 helper 体。
       registered = known.length
-        ? known.join(",") + "（无枚举 API，仅探测官方默认名）"
-        : "无（无枚举 API，仅探测官方默认名 spawn/fork）";
+        ? known.join(",") + "（仅探测官方默认名）"
+        : "无（仅探测官方默认名 spawn/fork）";
     }
   } catch { /* 探测失败不影响 fail-closed 结论 */ }
   throw new Error(
-    "subagents 服务缺少派发 API（需 startActivation（DSH ≥ 0.2.1-alpha.2）"
-    + "或 startContinuable（DSH ≤ 0.2.1-alpha.1）之一，当前两者皆不可用）："
+    "subagents 服务缺少派发 API（需 startActivation，DSH ≥ 0.2.2-rc.3；"
+    + "本插件已不再支持更早宿主）："
     + `无法启动子代理，已注册 provider：${registered}`,
   );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
-// g-625：DSH 0.2.2-rc.3 删除的三个 subagent/agent 管理 API 的**双版本收口**
+// 宿主 subagent/agent 管理 API 的**单版本**收口（g-625 收口点；g-627 按宿主下限收窄）
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 //
-// rc.3 自带升级指南（`docs/upgrade-guide/v0.2.1-rc.2/subagent-service-methods`、
-// `.../v0.2.1-rc.2/subagent-user-controls`、`.../v0.2.1-rc.3/subagent-runtime-ownership`）删除：
-//   1. `subagents.interruptByParent(childId, parentSessionId, 'continuable')` 被删除。rc.3 **本地**服务面是
-//      `subagents.interrupt(targetSessionId, authority)`，authority = `{kind:"ancestor", agent}`（插件派出
-//      child 时持有确切父 Agent）或 `{kind:"user"}`。`interruptByUser(childId)` 只是 **Remote face**
-//      （Gateway 授权，user 语义），**不得**拿来冒充本地收敛；本收口只用 ancestor 身份；
-//   2. `subagents.listChildren(parentSessionId)` → `ctx.sessionQuery.observeSession(parentSessionId)`
-//      读 `observation.projections.values.subagentCatalog`（直接子级、catalog 事件序、排除 fork 继承）；
-//      缺投影必须当**不可用/unknown**，不得当「无 child」；递归发现可用仍存在的 `listDescendants()`；
-//   3. `agents.isOwnedBy(childId, owner)` → `ctx.subagents.rootOf(agent)`（比较 **Agent 对象**，
-//      不是 id）+ `session.header.parentSession`（直接创建者）。
-// rc.1（0.2.2-rc.1）**仍保留旧 API** ⇒ 一律「旧 API 优先、缺失才走新 API」，不得只为 rc.3 删旧路径；
-// 旧 API 在位时行为与 v0.24.0 一致。g-626 候选在 rootOf 抛错时按历史 parentSession 回退；
-// 创建关系能否证明实时归属尚未验证，不得将此回退当作已证实的授权边界。
+// 背景：`0.2.2-rc.3`（自带 `docs/upgrade-guide/v0.2.1-rc.2/subagent-service-methods`、
+// `.../v0.2.1-rc.2/subagent-user-controls`、`.../v0.2.1-rc.3/subagent-runtime-ownership`）删除了三个
+// 旧 API，本模块早期为「同时支持 rc.1 与 rc.3」保留了双路径（旧 API 优先、缺失才走新 API）。
 //
-// **使用点登记**（旧代码 19 处文本面 = 5 处真实调用 + 能力探测 + 注释；收敛为 8 个功能面）：
+// g-627：宿主下限提到 `>=0.2.2-rc.3` ⇒ `0.2.2-rc.1` / `rc.2` 已不在
+// 声明范围内 ⇒ 删除 rc.1 专用分支，只保留 rc.3 及之后的公开面：
+//   1. 中断：`subagents.interrupt(target, {kind:"ancestor", agent})`（插件派出 child 时持有确切
+//      父 Agent）。`interruptByUser` 只是 **Remote face**（user 语义），**不得**冒充本地收敛 ——
+//      本收口只用 ancestor 身份；
+//   2. 子级目录：`ctx.sessionQuery.observeSession(parent)` 读
+//      `observation.projections.values.subagentCatalog`（直接子级、catalog 事件序、排除 fork 继承）；
+//      缺投影必须当**不可用/unknown**，不得当「无 child」；
+//   3. 归属：`ctx.subagents.rootOf(agent)`（比较 **Agent 对象**，不是 id）+
+//      `session.header.parentSession`（直接创建者，g-626 在 `rootOf` 抛错时回退到它）。
+//
+// **使用点登记**（8 个功能面，全部经本段收口）：
 //   ① keepalive `sampleRunningChildren`：按归属过滤 live Agent 后计 running；
 //   ② keepalive `capabilityOf`：agentsOk 能力探测；
 //   ③ keepalive keepaliveStatusProjection：与 ② 同口径的能力探测；
@@ -812,88 +788,153 @@ export async function startSubagentCompat(subagents, spec) {
  * @typedef {"yes" | "no" | "unknown"} OwnershipVerdict
  */
 /**
- * 建立一次归属探测（g-625 唯一收口）。
+ * 建立一次归属探测（唯一收口；g-626 增加 `rootOf` 抛错时的 parentSession 回退）。
  *
- * 旧宿主（有 `agents.isOwnedBy`）⇒ 原样调用，逐字保持 v0.24.0 语义（id + 精确 owner Agent）。
- * 新宿主（只有 `subagents.rootOf`）⇒ 两次 `rootOf` **比较 Agent 对象**判同树，再用公开
- * `session.header.parentSession` 收紧到「直接创建者」（rc.1 `isOwnedBy` 的语义是直接运行时子级）。
- * g-626 候选：rootOf 抛错时回退 parentSession；该历史证据的授权安全性尚待真宿主验证。
+ * 两次 `rootOf` **比较 Agent 对象**判同树，再用公开 `session.header.parentSession` 收紧到
+ * 「直接创建者」（直接运行时子级）。
+ *
+ * **g-626**：`rootOf` 对夹具/未管理/陈旧实例会抛 `SubagentError(UNAUTHORIZED)`（身份严格比对），
+ * 此时**不**直接判 unknown，而是回退到已在手的强证据 `session.header.parentSession`：
+ *   · 存在且 `=== ownerSessionId` ⇒ `yes`（直接创建者）；
+ *   · 存在但不等 ⇒ `no`；
+ *   · 缺失/不可读、或 owner 会话 id 不可读 ⇒ `unknown`（仍然 fail-closed）。
+ * UNAUTHORIZED 本身不是放行理由；`rootOf` **成功**时口径是对象身份 + 父会话收紧。
+ * `agents.get` 取不到 live Agent ⇒ `no`（ownsId）。
+ *
+ * g-627 明确保留：`ownershipProbeOf(..., { requireLiveTree: true })` 的**更严格**模式 ——
+ * 该模式禁止 parentSession 回退（授权边界必须由 live 树证明）。按术语要求逐项复核后，本次
+ * **不改动**任何生产调用点的该开关：它不是旧宿主分支，而是「陈旧/未管理实例不得靠历史 header
+ * 继承归属」的既有安全判定；是否收窄（要求所有公开面都走 live 树）留给负责人裁决，见交付报文。
+ * 缺归属 API ⇒ `unknown`（fail-closed），绝不臆断。
  *
  * @param agents 宿主 `agents` 注册表服务（可能为 undefined）
  * @param subagents 宿主 `subagents` 服务（可能为 undefined）
- * @returns {{ supported: boolean, mode: "isOwnedBy" | "rootOf" | "unavailable", reason: string | null,
+ * @param options `{ requireLiveTree?: boolean }`：为 true 时不允许 parentSession 回退
+ * @returns {{ supported: boolean, mode: "rootOf" | "unavailable", reason: string | null,
  *   ownsAgent: (child: any, owner: any) => OwnershipVerdict,
  *   ownsId: (childId: string, owner: any) => OwnershipVerdict }}
  */
 export function ownershipProbeOf(agents, subagents, options = null) {
-  const oldSupported = !!agents && typeof agents.isOwnedBy === "function";
-  const newSupported = !!subagents && typeof subagents.rootOf === "function";
-  const mode = oldSupported ? "isOwnedBy" : (newSupported ? "rootOf" : "unavailable");
-  const reason = oldSupported || newSupported
-    ? null
-    : "缺归属 API（agents.isOwnedBy 与 subagents.rootOf 皆不可用）";
+  // g-627：`agents.isOwnedBy` 分支已删除（rc.3 删除了该方法），归属只走 `subagents.rootOf`。
+  // **但 `supported` 的语义保持不变**：它是「本 profile 是否具备子级枚举/归属探测能力」的总开关，
+  // 由 `agents.list + agents.get` 的枚举能力或 `rootOf` 判定 —— 若这里改成只认 rootOf，
+  // 所有在无 subagents 服务的精简/headless 组合下都会退化成「无能力」，连带把关照巡检判成
+  // capability_missing（真实回归，g-616 实测捕获）。归属**裁决**依旧分级严格：无 rootOf 时
+  // 授权类调用方（`requireLiveTree:true`）一律 `unknown`（fail-closed）；只读观测量退回 g-626 的
+  // `session.header.parentSession` 单一证据，绝不因为 supported 为真就放行。
+  const servicePresent = !!subagents;
+  const rootOfReady = !!subagents && typeof subagents.rootOf === "function";
+  const enumerable = !!agents && typeof agents.list === "function" && typeof agents.get === "function";
+  const supported = enumerable || rootOfReady;
+  const mode = rootOfReady ? "rootOf" : "unavailable";
+  const reason = rootOfReady ? null : "缺归属 API（subagents.rootOf 不可用 ⇒ 授权判定一律 unknown）";
   const sessionIdOf = (agent) => {
     const sid = agent?.session?.id ?? agent?.id;
     return sid === undefined || sid === null || sid === "" ? null : String(sid);
   };
   const parentSessionOf = (agent) => {
     try {
-      const raw = agent?.session?.header?.parentSession;
-      return raw === undefined || raw === null || raw === "" ? null : String(raw);
+      // g-627：同一份「直接创建者」证据在各宿主上的公开位置不同，按确定顺序取第一个非空值：
+      //   ① `session.header.parentSession`（rc.3 起的会话头字段）
+      //   ② `agent.meta.parentSessionId`（子代理注册表条目上的创建者记录，g-616 夹具与
+      //      board 的 `attempt_binding.parent_session_id` 同源）
+      // 两者都缺 ⇒ null（调用方据此判 unknown，不猜）。
+      const head = agent?.session?.header?.parentSession;
+      if (head !== undefined && head !== null && head !== "") return String(head);
+      const meta = agent?.meta?.parentSessionId;
+      if (meta !== undefined && meta !== null && meta !== "") return String(meta);
+      return null;
     } catch { return null; }
   };
   const ownsViaRootOf = (childAgent, ownerAgent) => {
     const ownerSid = sessionIdOf(ownerAgent);
+    if (!rootOfReady) {
+      // g-627：rc.3 删除了 `agents.isOwnedBy`，归属面只剩 `subagents.rootOf`。两种情形必须分开：
+      //   · `subagents` 服务**存在但没有 rootOf** ⇒ 无任何 live 树证据 ⇒ 一律 unknown（fail-closed，
+      //     与「rootOf 抛错」同处理）。
+      //   · `subagents` 服务**整体缺席**（headless / 精简 profile）⇒ 该部署本来就没有子代理面，
+      //     由调用方按能力缺失判红；此处的只读观测量沿用 g-626 的单证据（`parentSession`）。
+      if (servicePresent) return "unknown";
+      const parentSid0 = parentSessionOf(childAgent);
+      if (ownerSid === null || parentSid0 === null) return "unknown";
+      return parentSid0 === ownerSid ? "yes" : "no";
+    }
     const parentSid = parentSessionOf(childAgent);
     let ownerRoot = null;
     let childRoot = null;
+    let rootFailed = false;
     // An unauthorized caller is not the exact live runtime object.  Its historical
     // session id cannot establish authority, even when the child's header matches.
-    try { ownerRoot = subagents.rootOf(ownerAgent); } catch { return "unknown"; }
-    let childRootFailed = false;
-    try { childRoot = subagents.rootOf(childAgent); } catch { childRootFailed = true; }
-    if (childRootFailed) {
+    try { ownerRoot = subagents.rootOf(ownerAgent); } catch { rootFailed = true; }
+    if (!rootFailed) {
+      try { childRoot = subagents.rootOf(childAgent); } catch { rootFailed = true; }
+    }
+    if (rootFailed) {
+      // g-626 回退：只认「公开的直接创建者」这一条证据；缺任一或不等都不得放行。
+      // g-627：`requireLiveTree` 的调用方拒绝该回退 —— 授权边界必须由 live 树证明。
       if (options?.requireLiveTree === true) return "unknown";
       if (ownerSid === null || parentSid === null) return "unknown";
       return parentSid === ownerSid ? "yes" : "no";
     }
+    // 官方迁移口径：比较 **Agent 对象**（不是 id）。
     if (!ownerRoot || childRoot !== ownerRoot) return childRoot && ownerRoot ? "no" : "unknown";
     if (ownerSid === null || parentSid === null) return "unknown";
     return parentSid === ownerSid ? "yes" : "no";
   };
   const ownsAgent = (childAgent, ownerAgent) => {
-    if (!oldSupported && !newSupported) return "unknown";
+    if (!supported) return "unknown";
     if (!childAgent || !ownerAgent) return "unknown";
-    if (oldSupported) {
-      const childId = sessionIdOf(childAgent);
-      if (childId === null) return "unknown";
-      try { return agents.isOwnedBy(childId, ownerAgent) === true ? "yes" : "no"; } catch { return "unknown"; }
-    }
     return ownsViaRootOf(childAgent, ownerAgent);
   };
   const ownsId = (childId, ownerAgent) => {
-    if (!oldSupported && !newSupported) return "unknown";
+    if (!supported) return "unknown";
     if (!ownerAgent || childId === undefined || childId === null || childId === "") return "unknown";
-    if (oldSupported) {
-      try { return agents.isOwnedBy(String(childId), ownerAgent) === true ? "yes" : "no"; } catch { return "unknown"; }
-    }
     let childAgent = null;
     try { childAgent = typeof agents?.get === "function" ? agents.get(String(childId)) : null; } catch { return "unknown"; }
-    // 已不在 live registry ⇒ 可确定「不是当前 live 归属」（与 rc.1 isOwnedBy 的 false 对齐）。
-    if (!childAgent) return "no";
+    // 已不在 live registry ⇒ 可确定「不是当前 live 归属」。
+    // g-627：但**授权类**调用方（requireLiveTree）只接受 live 树证据 —— 没有 rootOf 就无从证明
+    // 「该 child 属于这个父」，registry 里查不到也不构成授权结论 ⇒ 一律 unknown（fail-closed）。
+    if (!childAgent) return rootOfReady ? "no" : "unknown";
     return ownsViaRootOf(childAgent, ownerAgent);
   };
-  return { supported: oldSupported || newSupported, mode, reason, ownsAgent, ownsId };
+  return { supported, mode, reason, ownsAgent, ownsId };
 }
 
 /**
- * 读取某父会话的**直接子级目录**（g-625 唯一收口）。
+ * spawn 失败是否**结构上**证明「本 attempt 没有 child」（g-627，配合 dispatch_in_flight 结算）。
  *
- * 旧宿主（服务方法 `subagents.listChildren` 在位）⇒ 原样调用（rc.1 行为不变）。
- * 新宿主（rc.3 删除了服务方法）⇒ `sessionQuery.observeSession(parentSessionId)` 读
- * `projections.values.subagentCatalog`，读后立即释放观察（`Symbol.dispose`）。
- * **缺 catalog 投影 / observe 抛错 / 旧方法抛错 ⇒ `ok:false`**：调用方只能按 unknown 处理，
- * 绝不把「读不到」当成「没有 child」。
+ * 适用面：宿主没有 durable 子级目录（`sessionQuery` 未接线的 headless / 精简 profile），
+ * 而 `catalog === "unknown"` 时 —— 既有实现一律保持 `dispatch_in_flight`，导致这类部署下
+ * 「一次因槽位上限失败的派发」永久阻断该目标，只能靠主管显式 abandon。
+ *
+ * 判据**只认两族结构化上限错误**，它们由宿主在**发布 child 之前**同步拒绝（见
+ * `subagentSpawnErrorText` 的同源口径与 g-321 的历史真机证据）：
+ *   · `ACTIVATION_LIMIT_REACHED`（活跃 continuable 子代理达上限）—— 拒绝发生在建立 child 之前；
+ *   · `SUBAGENT_DEPTH_EXCEEDED`（delegation 深度上限）—— 同样在任何发布之前拒绝。
+ * **其余一切异常（provider 失败、超时、未知码、无 code 的普通 Error）一律返回 false** ⇒ 保持阻断。
+ * 绝不按异常文案猜「未创建 child」：判定只看 `code` 与 `details.reason` 两个结构化字段。
+ *
+ * @param error spawn 抛出的异常（任意值）
+ * @returns `true` 仅当该异常属于「发布前拒绝」的上限族
+ */
+function spawnErrorProvesNoChild(error) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const reason = typeof error?.details?.reason === "string" ? error.details.reason : "";
+  return code === "ACTIVATION_LIMIT_REACHED" || reason === "ACTIVATION_LIMIT_REACHED"
+    || code === "SUBAGENT_DEPTH_EXCEEDED" || reason === "SUBAGENT_DEPTH_EXCEEDED";
+}
+
+/**
+ * 读取某父会话的**直接子级目录**（唯一收口）。
+ *
+ * `sessionQuery.observeSession(parentSessionId)` 读 `projections.values.subagentCatalog`，
+ * 读后立即释放观察（`Symbol.dispose`）。
+ * **缺 catalog 投影 / observe 抛错 / sessionQuery 不可用 ⇒ `ok:false`**：调用方只能按 unknown
+ * 处理，绝不把「读不到」当成「没有 child」。
+ *
+ * g-627：旧服务方法 `subagents.listChildren()`（rc.1 专用）分支已删除 —— 它在 rc.3 之前被移除，
+ * 且下限（`0.2.2-rc.3`）之上的宿主都不再暴露它。`services.subagents` 仍作为参数保留，
+ * 因为调用点传的是同一份服务包（仅不再读取该属性）。
  *
  * @param services `{ subagents?, sessionQuery? }`（分别来自 `ctx.get("subagents")` / `ctx.get("sessionQuery")`）
  * @param parentSessionId 父（主管）会话 id
@@ -901,22 +942,12 @@ export function ownershipProbeOf(agents, subagents, options = null) {
  * @returns {Promise<{ ok: boolean, mode: string, rows: any[], reason: string | null, detail?: string }>}
  */
 export async function readChildCatalogCompat(services, parentSessionId, options) {
-  const subagents = services?.subagents ?? null;
   const sessionQuery = services?.sessionQuery ?? null;
   const parentId = parentSessionId === undefined || parentSessionId === null || parentSessionId === ""
     ? null
     : String(parentSessionId);
   const fail = (mode, reason, detail) => ({ ok: false, mode, rows: [], reason, ...(detail ? { detail: String(detail) } : {}) });
   if (!parentId) return fail("unavailable", "no_parent_session");
-  if (subagents && typeof subagents.listChildren === "function") {
-    try {
-      const rows = await subagents.listChildren(parentId);
-      if (!Array.isArray(rows)) return fail("listChildren", "invalid_row_set");
-      return { ok: true, mode: "listChildren", rows, reason: null };
-    } catch (error) {
-      return fail("listChildren", "listChildren_error", error?.message ?? error);
-    }
-  }
   if (!sessionQuery || typeof sessionQuery.observeSession !== "function") {
     return fail("unavailable", "session_query_unavailable");
   }
@@ -943,17 +974,18 @@ export async function readChildCatalogCompat(services, parentSessionId, options)
 }
 
 /**
- * 请求中断一个刚启动的 child（g-625 唯一收口）。
+ * 请求中断一个刚启动的 child（唯一收口）。
  *
- * 旧宿主（rc.1，`interruptByParent` 在位）：`interruptByParent(childId, parentSessionId, 'continuable')`
- * —— 逐字保持 v0.24.0 语义。
- * rc.3：`interruptByParent` 已删除，但**本地服务面**仍是
- * `subagents.interrupt(targetSessionId, authority: SubagentInterruptAuthority)`，
+ * **本地服务面**是 `subagents.interrupt(targetSessionId, authority: SubagentInterruptAuthority)`，
  * authority 为 `{ kind: "ancestor", agent: <确切 live 父 Agent> }`（模型/祖先侧中断）或
  * `{ kind: "user" }`（受信宿主操作）。本收口**只用 ancestor 身份**，因为插件确实持有派发时的
  * 父 Agent，且 `interrupt` 会校验「该 Agent 是目标的真实祖先」（不拥有 ⇒ 抛 `SubagentError` UNAUTHORIZED）。
  * 绝不使用 `interruptByUser`：它只是 **Remote face**（Gateway 授权，`{kind:"user"}` 语义），
  * 拿它冒充本地收敛会绕过归属校验。
+ *
+ * g-627：旧服务方法 `interruptByParent(child, parent, "continuable")`（rc.1 专用、rc.3 已删除）
+ * 分支已删除 —— 只有它能用的宿主低于声明下限。
+ *
  * 缺 API / 缺确切父 Agent / 调用抛错（含 UNAUTHORIZED）⇒ `requested:false` + 可读 note；
  * 调用方只能如实上报「未中断/不可确认」，不得虚称已停止。
  *
@@ -965,23 +997,8 @@ export function interruptChildCompat(services, params) {
   const subagents = services?.subagents ?? null;
   const rawChild = params?.childId;
   const childId = rawChild === undefined || rawChild === null || rawChild === "" ? null : String(rawChild);
-  const rawParent = params?.parentSessionId;
-  const parentSessionId = rawParent === undefined || rawParent === null || rawParent === "" ? null : String(rawParent);
   const parentAgent = params?.parentAgent ?? services?.parentAgent ?? null;
   if (!childId) return { requested: false, mode: "unavailable", note: "无法中断该 child（缺少 child id）" };
-  const hasOld = !!subagents && typeof subagents.interruptByParent === "function";
-  // 旧宿主优先：`interruptByParent` 在位时按 v0.24.0 原路径，绝不被新 authority 形态替换。
-  if (hasOld) {
-    if (!parentSessionId) {
-      return { requested: false, mode: "interruptByParent", note: "无法中断该 child（缺少 parent session）" };
-    }
-    try {
-      subagents.interruptByParent(childId, parentSessionId, "continuable");
-      return { requested: true, mode: "interruptByParent", note: "已请求中断该 child" };
-    } catch (error) {
-      return { requested: false, mode: "interruptByParent", note: `中断该 child 失败：${error?.message ?? error}` };
-    }
-  }
   if (subagents && typeof subagents.interrupt === "function") {
     if (!parentAgent) {
       // 没有确切父 Agent ⇒ 无法以 ancestor 身份中断；**不**退回 `{kind:"user"}`/`interruptByUser`。
@@ -1002,7 +1019,7 @@ export function interruptChildCompat(services, params) {
   return {
     requested: false,
     mode: "unavailable",
-    note: "无法中断该 child（缺少 parent session / 确切父 Agent，或 subagents.interruptByParent、subagents.interrupt 能力）",
+    note: "无法中断该 child（缺少确切父 Agent，或 subagents.interrupt 能力）",
   };
 }
 
@@ -1027,8 +1044,8 @@ export function interruptChildCompat(services, params) {
 //   · 宿主只负责**采样真实运行态**、**runMaintenance 抢占真 idle**、**公开 prepareCall/stream 调用**。
 //
 // 采样口径（全部来自宿主公开面，绝不猜）：
-//   · `runningChildren`：live Agent 注册表 `list()` + 归属探测（g-625：rc.1 `isOwnedBy` /
-//     rc.3 `subagents.rootOf`，唯一收口 `ownershipProbeOf`）过滤出主管直接拥有的子代理，再按各自
+//   · `runningChildren`：live Agent 注册表 `list()` + 归属探测（`subagents.rootOf`，
+//     唯一收口 `ownershipProbeOf`）过滤出主管直接拥有的子代理，再按各自
 //     公开 `status === "running"` 计数（**不**用 `Activity`/mtime 冒充运行；不可确认 ⇒ null，不谎称 0）。
 //   · `idle`：主管 Agent 公开 `status === "idle"`。公开 idle 不等于「真 idle」⇒ ping 前仍必须
 //     `runMaintenance()` 同步抢占（忙则同步 throw），并检查 `inbox.nextTurn/nextStep` 为空。
@@ -1433,7 +1450,7 @@ export function createKeepAliveRuntime(options = {}) {
     const agents = getService("agents");
     const ownership = ownershipProbeOf(agents, getService("subagents"), { requireLiveTree: true });
     const llmOk = !!(llm && typeof llm.prepareCall === "function" && typeof llm.stream === "function");
-    // g-625：归属能力 = rc.1 `isOwnedBy` 或 rc.3 `rootOf`（唯一收口），缺 API 才判不具备。
+    // 归属能力 = `subagents.rootOf`（唯一收口），缺 API 才判不具备。
     const agentsOk = !!(agents && typeof agents.get === "function" && typeof agents.list === "function" && ownership.supported);
     const statusOk = !!agent && (agent.status === "idle" || agent.status === "running");
     const maintenanceOk = !!agent && typeof agent.runMaintenance === "function";
@@ -2039,7 +2056,7 @@ export function createKeepAliveRuntime(options = {}) {
     const snapProblem = board ? snapshotProblemForBoard(board, agent) : "no_supervisor";
     const llm = getService("llm");
     const agents = getService("agents");
-    // g-625：与调度器 capabilityOf 同一收口探测归属能力（rc.1 isOwnedBy / rc.3 rootOf）。
+    // 与调度器 capabilityOf 同一收口探测归属能力（`subagents.rootOf`）。
     const ownership = ownershipProbeOf(agents, getService("subagents"), { requireLiveTree: true });
     const ttlEntry = cfg?.supervisor?.keep_alive_ttl ?? null;
     const ttlMatched = routeMatchesTtl(ttlEntry, board?.snapshot?.route) ? ttlEntry : null;
@@ -2124,8 +2141,8 @@ export function createKeepAliveRuntime(options = {}) {
 // 采样口径（全部公开面，绝不猜）：
 //   · 主管：project.yaml 的 supervisor.session → `agents.get(sid)`（**必须**是同一 live Agent）；
 //   · 子代理任务：catalog（board payload 的 attempt_binding）∩ live registry
-//     （g-625：`agents.get(child)` + 归属探测收口 `ownershipProbeOf`（rc.1 `isOwnedBy` / rc.3
-//     `rootOf`）+ `status === "running"`）；归属不可确认一律按 unknown fail-closed。
+//     （`agents.get(child)` + 归属探测收口 `ownershipProbeOf`（宿主 `subagents.rootOf`）
+//     + `status === "running"`）；归属不可确认一律按 unknown fail-closed。
 //   · **绝不**用 mtime/size、durable 目录、隐藏思维或 `listDescendants.activity` 冒充运行/进展。
 //   · 进展证据只来自**主管**通过窄工具提交的有界证据摘要；`unknown`/未回复不计数。
 //
@@ -2976,6 +2993,10 @@ export function createCareRuntime(options = {}) {
    */
   const sampleTasks = (entry, agent) => {
     const agents = getService("agents");
+    // g-627：**必须保留** `requireLiveTree: true` —— 采样结果会驱动关照计时/投递/预算上限，
+    // 因此「归属无法由 live 树证明」的 child 绝不能计入（g-628 的独立恢复子代理防线就建在这里：
+    // 仅凭历史 `parentSession` 头相等就放行，会把已被 runtime 否认的会话当成在跑任务）。
+    // 无 `subagents` 服务的部署改由 `supported=false` 判能力缺失，不再依赖放宽本口径。
     const ownership = ownershipProbeOf(agents, getService("subagents"), { requireLiveTree: true });
     if (!agent || !agents || typeof agents.list !== "function" || typeof agents.get !== "function"
       || !ownership.supported) {
@@ -3713,7 +3734,7 @@ export function createCareRuntime(options = {}) {
   const capabilitiesOf = (agent, tasks = []) => {
     const agents = getService("agents");
     const subagents = getService("subagents");
-    // g-625：子级枚举/归属能力探测收口（rc.1 `isOwnedBy` / rc.3 `rootOf`），缺 API 才判不具备。
+    // 子级枚举/归属能力探测收口（`subagents.rootOf`），缺 API 才判不具备。
     const ownership = ownershipProbeOf(agents, subagents);
     // B7：进展读取必须来自**真实子代理 session**（不是主管自己的 session）。
     // 只有当前有可枚举的真实 child 且其 session 暴露消息/工具历史时才算可读。
@@ -7504,7 +7525,7 @@ export function apply(ctx, config) {
       return { agents, agent: null, error: `agents.get 失败：${e?.message ?? e}` };
     }
   };
-  /** 调用者（主管）是否**真的**拥有该 child（g-625 收口：rc.1 `isOwnedBy` / rc.3 `rootOf`；不看 child_id 自报）。 */
+  /** 调用者（主管）是否**真的**拥有该 child（收口：`subagents.rootOf`；不看 child_id 自报）。 */
   const callerOwnsChild = (agents, callerAgent, childId) => {
     if (!callerAgent) return "unknown";
     return ownershipProbeOf(agents, ctx.get?.("subagents"), { requireLiveTree: true }).ownsId(String(childId), callerAgent);
@@ -7538,7 +7559,7 @@ export function apply(ctx, config) {
     // ③ 归属：必须属于当前调用者（主管）——只用宿主公开归属能力（g-625 收口，不看 child_id 自报）。
     const owned = callerOwnsChild(live.agents, callerAgent, code);
     if (owned === "unknown") {
-      throw new GraphError(`无法确认 child ${code} 是否属于当前主管（isOwnedBy / subagents.rootOf 不可用或出错）：复用 fail-closed`);
+      throw new GraphError(`无法确认 child ${code} 是否属于当前主管（subagents.rootOf 不可用或出错）：复用 fail-closed`);
     }
     if (owned !== "yes") {
       throw new GraphError(`child ${code} 不属于当前主管会话（跨主管复用被拒绝）：不建 attempt、不迁移状态`);
@@ -7805,7 +7826,7 @@ export function apply(ctx, config) {
     }
   };
 
-  // GUI 派发的子代理需要真实 parent Agent：startContinuable 内部强解引用 parent
+  // GUI 派发的子代理需要真实 parent Agent：宿主 activation 内部强解引用 parent
   // 取 project.yaml supervisor.session 对应的 live Agent（AgentRegistry.get）；无则降级为仅本地建 attempt。
   const resolveSpawnParent = (rootForReq) => {
     try {
@@ -8271,7 +8292,7 @@ export function apply(ctx, config) {
           // 既有「请求中断」收敛（fire-and-forget，不作为停稳结论）。
           let interruptNote = "";
           if (!(bindErr instanceof GraphConflictError)) {
-            // g-625：中断能力收口（rc.1 interruptByParent / rc.3 interruptByUser）；能力缺失如实上报。
+            // 中断能力收口（ancestor authority）；能力缺失如实上报。
             const parentSessionIdForInterrupt = parentAgent?.session?.id ?? parentSessionId ?? started.parentSessionId ?? null;
             const interruptOutcome = interruptChildCompat({ subagents }, {
               childId: started.childId,
@@ -8309,8 +8330,8 @@ export function apply(ctx, config) {
       } catch (e) {
         // g-610 rev-02：
         //  - 已拿到 receipt（child 已真实启动）⇒ 绝不清 dispatch_in_flight；晚到/绑定失败保持阻断。
-        //  - 无 receipt ⇒ 用公开 durable 子代理目录（g-625 收口：rc.1 `listChildren` /
-        //    rc.3 `sessionQuery.subagentCatalog`）+ label 判定：确认无 child 才结算；
+        //  - 无 receipt ⇒ 用公开 durable 子代理目录（收口：`sessionQuery.subagentCatalog`）
+        //    + label 判定：确认无 child 才结算；
         //    目录不可用/查询失败/缺 catalog 投影 ⇒ 保持阻断（不按异常文案猜测“未创建 child”）。
         if (spawnReceipt?.childId) {
           process.stderr.write(`[dsh-graph-host] spawn 已返回 child=${spawnReceipt.childId} 但后续失败，保留 dispatch_in_flight：${e?.message ?? e}\n`);
@@ -8327,6 +8348,15 @@ export function apply(ctx, config) {
             }
           }
           if (catalog === "absent") {
+            try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: String(e?.message ?? e) }); }
+            catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
+          } else if (!parentSessionId) {
+            // g-627：**没有父会话就没有 durable 目录可查** ⇒ 结构上无法证明「无 child」，保持阻断。
+            process.stderr.write(`[dsh-graph-host] spawn 失败且缺父会话（无法查 durable 目录，catalog=${catalog}），保留 dispatch_in_flight：${e?.message ?? e}\n`);
+          } else if (spawnErrorProvesNoChild(e)) {
+            // g-627：没有 durable 目录（`sessionQuery` 未接线的 headless/精简组合）时，只有宿主在
+            // 「**发布 child 之前**」因槽位/深度上限拒绝，才在结构上等于「本 attempt 没有 child」。
+            // 其余异常（provider 失败、超时、未知码）依旧保持阻断 —— 本条绝不按异常文案猜「未创建」。
             try { settleAttemptDispatchInFlight(root, goal, attempt, { actor, error: String(e?.message ?? e) }); }
             catch (settleErr) { process.stderr.write(`[dsh-graph-host] settle dispatch_in_flight 失败（保持拒绝）：${settleErr?.message ?? settleErr}\n`); }
           } else {
@@ -10085,7 +10115,7 @@ export function apply(ctx, config) {
       });
       return { childId: started.childId, parentSessionId: supervisorId, parent, error: null, model_route: `${effProvider ?? "继承"}/${effModel ?? "继承"}` };
     } catch (e) {
-      // g-321：0.1.6 起 startContinuable 有并发槽位上限（默认 8），把 ACTIVATION_LIMIT_REACHED
+      // g-321：宿主 activation 有并发槽位上限（默认 8），把 ACTIVATION_LIMIT_REACHED
       // 翻译成可操作提示；其余错误原样透出 message（保留既有可追溯性）。
       return { childId: null, parentSessionId: null, error: subagentSpawnErrorText(e) };
     }

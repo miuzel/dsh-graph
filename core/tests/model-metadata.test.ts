@@ -225,7 +225,7 @@ test("g-194 ⑤ 三条 spawn 路径（graph_start_attempt / start-execution / st
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             return { childId: "child-mock-" + Math.random().toString(36).slice(2, 6) };
           },
         };

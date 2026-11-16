@@ -59,11 +59,11 @@ function routeOf(h: Harness, path: string) {
   return route;
 }
 
-/** 真实派发 prompt（工具/HTTP 均落在 startContinuable 捕获的请求上）。 */
+/** 真实派发 prompt（工具/HTTP 均落在宿主 startActivation 捕获的请求上；g-627 起 spec 为扁平形态）。 */
 function promptOf(h: Harness, index = 0): string {
   const req = h.capturedRequests[index];
   assert.ok(req, `第 ${index} 次派发未捕获到子代理请求`);
-  return req.request?.prompt?.[0]?.text ?? "";
+  return req.prompt?.[0]?.text ?? "";
 }
 
 /** action 来源切片：`**attempt brief（当前数据）**` → `**directive（当前数据）**`。

@@ -821,7 +821,7 @@ function createHarness(projectYaml: string): HostHarness {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (o: any) => {
+          startActivation: async (o: any) => {
             capturedRequests.push(o);
             return { childId: `child-${capturedRequests.length}`, parentSessionId: "sess-super" };
           },
@@ -859,7 +859,7 @@ async function dispatchPrompt(projectYaml: string, opts: { subagentPrompt?: stri
   assert.ok(t1, "graph_start_attempt 必须注册");
   await t1.execute({ goal, worktree: false, attempt_brief: "g-440 双态注入夹具 brief" }, hh.execContext);
   assert.equal(hh.capturedRequests.length, 1, "恰好派发一个执行子代理");
-  const parts = hh.capturedRequests[0].request.prompt;
+  const parts = hh.capturedRequests[0].prompt;
   return Array.isArray(parts) ? parts.map((p: any) => String(p?.text ?? "")).join("") : String(parts);
 }
 

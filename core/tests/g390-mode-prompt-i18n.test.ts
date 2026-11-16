@@ -120,7 +120,7 @@ function makeHarness() {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             captured.push(opts);
             return { childId: `child-${captured.length}`, parentSessionId: "sess-super" };
           },
@@ -161,7 +161,7 @@ interface DispatchOpts {
   projectMode?: "standard" | "minimal";
 }
 
-/** 经**真实** `graph_start_attempt` 派发，并捕获 `subagents.startContinuable` 的最终 prompt。 */
+/** 经**真实** `graph_start_attempt` 派发，并捕获宿主 startActivation 的扁平 spec 上的最终 prompt。 */
 async function dispatch(h: Harness, opts: DispatchOpts) {
   h.lang.value = opts.lang;
   if (opts.projectMode) writeProjectConfig(h.root, { executor: { mode: opts.projectMode } }, "human:test");
@@ -188,7 +188,7 @@ async function dispatch(h: Harness, opts: DispatchOpts) {
     h.exec,
   );
   assert.ok(res?.attempt, "派发必须产生 attempt（准入通过）");
-  const request = h.captured[before]?.request;
+  const request = h.captured[before];
   assert.ok(request, "必须捕获到恰好一次子代理派发请求");
   const attemptMeta = loadGoal(join(h.root, "versions", "v-g390", "goals", goal, "attempts", res.attempt, "attempt.md")).meta as any;
   return { goal, attempt: res.attempt as string, prompt: String(request.prompt?.[0]?.text ?? ""), toolFilter: request.toolFilter, attemptMeta };

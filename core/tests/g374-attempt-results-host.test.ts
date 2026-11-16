@@ -42,7 +42,7 @@ function createHarness({ providers = ["spawn"], withOn = true, withSubagents = t
         return {
           list: () => providers,
           getProvider: (n: string) => (providers.includes(n) ? { prepareContinuable: () => {} } : {}),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             capturedRequests.push(opts);
             return { childId: "child-fixed-1", parentSessionId: "sess-super" };
           },
@@ -102,7 +102,7 @@ test("g-374 F1+F6：零 token——派发链路无新增 LLM 调用/会话，除
 
   assert.ok(res.child_id, "派发成功并绑定 child");
   assert.equal(h.capturedRequests.length, 1, "一次派发只产生一次子代理会话（无额外 LLM 调用）");
-  const prompt = h.capturedRequests[0].request.prompt[0].text;
+  const prompt = h.capturedRequests[0].prompt[0].text;
   // F6：注入文本尾部新增「交回报文骨架」尾注块（单一真源 core/ops.ts），该块**允许**提到 results.md；
   // 其余部分仍是「严禁把写总结塞进子代理 prompt」的零 token 语义 ⇒ 剥离尾注块后判定。
   const stripped = stripAttemptReportSkeleton(prompt);

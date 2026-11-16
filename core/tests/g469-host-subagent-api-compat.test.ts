@@ -1,32 +1,22 @@
 /**
- * g-469：宿主 subagent **派发 API 双版本兼容**回归测试。
+ * g-469 / g-627：宿主 subagent **派发 API** 收口回归。
  *
- * 背景（真实现状）：DSH `0.2.1-alpha.2` 把 subagent 服务方法 `startContinuable(spec)` 改名为
- * `startActivation(spec)`（`0.2.0-rc.2` / `0.2.1-alpha.1` 只有旧名）。插件 5 处派发点原先直连
- * `subagents.startContinuable(...)` ⇒ 新宿主上全部 `subagents.startContinuable is not a function`
- * ——「安装 + 启动可用、**派发完全不可用**」。修复要求在 `dsh-graph-host/index.js` 内建立**唯一**
- * helper `startSubagentCompat(subagents, spec)`（新名优先、旧名回退、两者皆无则 fail-closed），
- * 5 处调用点全部改走它。
+ * 背景（真实现状）：DSH `0.2.1-alpha.2` 把 `startContinuable(spec)` 改名为 `startActivation(spec)`；
+ * `0.2.2-rc.3` 又扁平化了 spec。插件 5 处派发点原先直连 `subagents.startContinuable(...)`
+ * ⇒ 新宿主上「安装 + 启动可用、**派发完全不可用**」。修复要求在 `dsh-graph-host/index.js` 内建立
+ * **唯一** helper `startSubagentCompat(subagents, spec)`，5 处调用点全部改走它。
+ *
+ * **g-627 收窄**：宿主下限提高后，`startContinuable` 回退分支已删除 ⇒ 本文件断言「只有一条路径：
+ * `startActivation`；旧名即使还在位也不得被调用；缺失即 fail-closed」。
  *
  * 断言面：
- *  A. helper 三分支（新/旧/皆无）+ 同时在位时新名优先；spec 原样透传、receipt 原样透出；
+ *  A. helper 单路径 + fail-closed（缺失即抛错、绝不虚构 childId、绝不静默回退旧名）；
  *  B. 返回契约：`childId` 可读；`parentSessionId` 缺失时按既有 `?? null` 兜底不崩；
- *  C. g-321 错误码映射（ACTIVATION_LIMIT_REACHED / subagent/delivery-unavailable）在**两条路径**
- *     上语义一致（逐字相同），host 端 child_error 同样逐字相同且友好化；
- *  D. **结构性守卫**：5 处派发点全部经 helper，且 `index.js`（源与构建产物）内不存在绕过 helper
- *     的裸 `startActivation(` / `startContinuable(` 调用；
- *  E. **真实宿主契约核对**：以真实 `@deepseek-ai/dsh-subagent` tarball 提取的夹具
- *     （`fixtures/g469-host-subagent-api.json`，生成器同目录 `.mjs`）为证据 —— 断言所探测的方法名
- *     在真实实现中存在、spec 字段与 receipt 形状与我方调用一致。夹具离线可读 ⇒ 本测试不依赖
- *     tarball 在场、不联网、可复跑。
- *
- * 负向对照（「改坏就红」）：
- *  - helper 若删掉任一条分支（旧名或新名）⇒ A 的三分支用例必红；
- *  - helper 若在两版皆无时静默回退/虚构 childId ⇒ A③ 必红（断言必须 reject 且不得返回 receipt）；
- *  - 任一派发点改回直连 `subagents.startContinuable(` ⇒ D 的裸调用断言必红；
- *  - 夹具若被手改成与真实宿主不一致（方法名/spec/receipt）⇒ E 必红（含 sha256 自校验与版本交叉断言）。
+ *  C. g-321 错误码映射（ACTIVATION_LIMIT_REACHED / subagent/delivery-unavailable）语义一致；
+ *  D. **结构性守卫**：5 处派发点全部经 helper，`startContinuable(` 在代码里**零出现**；
+ *  E. **真实宿主契约核对**：以真实 `@deepseek-ai/dsh-subagent` tarball 提取的夹具为证据 ——
+ *     断言履约所需的字段/能力在真实实现中存在（夹具离线可读、不联网）。
  */
-
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -48,50 +38,49 @@ const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 // A. helper 三分支 + 优先级
 // ============================================================================
 
-test("g-469 A① 派发 helper：新 API（startActivation）可用时走新名，且不触碰旧名", async () => {
-  // g-624：调用点只提交**扁平 payload**；`request` 嵌套与否由 helper 按能力探测决定。
+test("g-469 A① 派发 helper：走 startActivation，扁平 spec + 显式 delivery=parent", async () => {
   const parent = {};
   const payload = { provider: "spawn", label: "graph:g-1/att-01", parent, prompt: [], signal: new AbortController().signal };
   const seen: any[] = [];
   const receipt = { childId: "child-new-1", result: {}, dispose: () => {} };
-  const svc = {
+  // 旧名刻意也在位（属性在、值为 undefined），并用 getter 记录**任何**读取：
+  // g-627 收窄后 helper 连碰都不许碰它（若判据按「属性存在」选路径，这里会立刻暴露）。
+  let legacyReads = 0;
+  const svc: any = {
     startActivation: async (s: any) => { seen.push(["startActivation", s]); return receipt; },
-    // 旧名刻意也在位（新宿主不会同时有，但若 helper 选错名这条会暴露）
-    startContinuable: async (s: any) => { seen.push(["startContinuable", s]); return { childId: "child-old-1" }; },
   };
+  Object.defineProperty(svc, "startContinuable", {
+    get() { legacyReads += 1; return undefined; },
+    enumerable: true,
+  });
   const got = await startSubagentCompat(svc, payload);
-  assert.deepEqual(seen.map((x) => x[0]), ["startActivation"], "必须走新名，且不得同时调用旧名");
-  // 无 list() 且仅有 startActivation ⇒ rc.3 扁平形态：任务字段必须上提到顶层，且显式 delivery=parent
+  assert.deepEqual(seen.map((x) => x[0]), ["startActivation"], "必须走 startActivation，且不得触碰旧名");
+  assert.equal(legacyReads, 0, "旧名属性绝不得被读取（回退路径已删除）");
   assert.deepEqual(seen[0][1], {
     provider: payload.provider, label: payload.label, parent, prompt: [], signal: payload.signal, delivery: "parent",
   }, "扁平形态：顶层 provider/label/parent/prompt/signal + delivery=parent，不得带 request 嵌套");
   assert.equal(got, receipt, "receipt 必须原样透出（childId 可读）");
 });
 
-test("g-469 A② 派发 helper：仅旧 API（startContinuable）可用时走旧名（0.2.0 系 / 0.2.1-alpha.1 回归）", async () => {
-  // 只有 startContinuable 的宿主全部早于 rc.3 扁平化 ⇒ 仍必须是嵌套 request 形态。
-  const parent = {};
-  const payload = { provider: "spawn", label: "graph:collect/g-1/c-1", parent, prompt: [], signal: new AbortController().signal };
+test("g-627 A② 只有 startContinuable 的宿主（≤0.2.1-alpha.1，低于下限）⇒ fail-closed，绝不走旧名", async () => {
   const seen: any[] = [];
   const svc = { startContinuable: async (s: any) => { seen.push(s); return { childId: "child-old", messageId: "m-1" }; } };
-  const got = await startSubagentCompat(svc, payload);
-  assert.deepEqual(seen, [{
-    provider: payload.provider, label: payload.label, request: { parent, prompt: [] }, signal: payload.signal, delivery: "parent",
-  }], "必须走旧名且保持嵌套 request 形态（+显式 delivery=parent）");
-  assert.equal(seen[0].request.parent, parent, "原 parent 引用不得被替换");
-  assert.equal(got.childId, "child-old");
-  assert.equal(got.parentSessionId ?? null, null, "旧宿主 receipt 无 parentSessionId ⇒ ?? null 兜底为 null，不崩");
+  await assert.rejects(
+    () => startSubagentCompat(svc, { provider: "spawn", label: "graph:collect/g-1/c-1", parent: {}, prompt: [] }),
+    /缺少派发 API/,
+  );
+  assert.deepEqual(seen, [], "旧名 startContinuable 绝不得被调用（回退已删除）");
 });
 
-test("g-469 A③ 派发 helper：两版 API 皆缺时 fail-closed 明确报错（绝不静默回退/虚构 childId 冒充成功）", async () => {
+test("g-469 A③ 派发 helper：API 缺失时 fail-closed 明确报错（绝不静默回退/虚构 childId 冒充成功）", async () => {
   let returned: any = "SENTINEL-NOT-CALLED";
   try {
     returned = await startSubagentCompat({ list: () => ["spawn", "fork"] }, { provider: "spawn" });
   } catch (e: any) {
     assert.match(String(e?.message ?? e), /缺少派发 API/, "必须给出明确的「缺少派发 API」错误");
-    assert.match(String(e?.message ?? e), /startActivation/, "错误须点名新版方法名（可操作）");
-    assert.match(String(e?.message ?? e), /startContinuable/, "错误须点名旧版方法名（可操作）");
-    assert.match(String(e?.message ?? e), /spawn,fork/, "错误须带已注册 provider 便于定位");
+    assert.match(String(e?.message ?? e), /startActivation/, "错误须点名所需方法名（可操作）");
+    assert.match(String(e?.message ?? e), /0\.2\.2-rc\.3/, "错误须点名最低支持宿主版本（可操作；下限为 rc.3）");
+    assert.match(String(e?.message ?? e), /已注册 provider/, "错误须带已注册 provider 便于定位");
     // 既有 g-321 友好化对「未知名错误」逐字透传 ⇒ 不吞掉可追溯信息
     assert.match(subagentSpawnErrorText(e), /缺少派发 API/);
     return;
@@ -99,7 +88,7 @@ test("g-469 A③ 派发 helper：两版 API 皆缺时 fail-closed 明确报错�
   assert.fail(`两版 API 皆缺时必须抛错，而不是返回 ${JSON.stringify(returned)}（静默回退/虚构 childId）`);
 });
 
-test("g-469 A④ 派发 helper：服务缺失（undefined/null）同样 fail-closed，不得抛 TypeError 之外的无信息错", async () => {
+test("g-469 A④ 派发 helper：服务缺失（undefined/null）同样 fail-closed，不得抛无信息错", async () => {
   for (const svc of [undefined, null]) {
     await assert.rejects(
       () => startSubagentCompat(svc as any, { provider: "spawn" }),
@@ -144,15 +133,16 @@ test("g-469 B② host 端（仅新 API）：graph_start_attempt 经新名派发�
   assert.ok(!("parentSessionId" in (h.capturedRequests[0] ?? {})), "spec 不得被 helper 增删字段");
 });
 
-test("g-469 B③ host 端（仅旧 API）：graph_start_attempt 回归走旧名（0.2.0 系不退化）", async () => {
+test("g-627 B③ host 端（只有旧 API = 低于下限）：派发如实失败，绝不经旧名派发", async () => {
   const h = createHarnessWith({ dispatchApi: "legacy" });
-  const { goal } = prepare(h, { title: "g-469 旧宿主回归" });
-  const res = await h.call("graph_start_attempt", { goal, attempt_brief: "旧宿主回归", task_type: "fix", worktree: false });
-  assert.ok(res.child_id, "旧宿主派发必须仍然可用");
-  assert.deepEqual(h.capturedVia, ["startContinuable"], "必须经旧名派发");
+  const { goal } = prepare(h, { title: "g-627 低于下限宿主" });
+  const res = await h.call("graph_start_attempt", { goal, attempt_brief: "低版本宿主", task_type: "fix", worktree: false });
+  assert.equal(res.child_id ?? null, null, "低版本宿主不得取得 child_id（不得虚构）");
+  assert.match(String(res.child_error ?? ""), /缺少派发 API/, "必须如实上报「缺少派发 API」");
+  assert.deepEqual(h.capturedVia, [], "绝不得经旧名 startContinuable 派发");
 });
 
-test("g-469 B④ host 端（两版皆无）：派发失败如实上报，绝不返回假 child_id", async () => {
+test("g-469 B④ host 端（无派发 API）：派发失败如实上报，绝不返回假 child_id", async () => {
   const h = createHarnessWith({ dispatchApi: "none" });
   const { goal } = prepare(h, { title: "g-469 无派发 API" });
   const res = await h.call("graph_start_attempt", { goal, attempt_brief: "无 API", task_type: "fix", worktree: false });
@@ -178,37 +168,25 @@ const G321_CASES: Array<{ name: string; err: unknown; expect: RegExp }> = [
   },
 ];
 
-test("g-469 C① g-321 映射在新旧两条派发路径上逐字相同", async () => {
+test("g-469 C① g-321 映射：error 原样透出（不得包装/吞掉 code）并给出友好化文案", async () => {
   assert.equal(G321_CASES.length, 2, "两族错误码都必须覆盖");
   for (const c of G321_CASES) {
-    const newSvc = { startActivation: async () => { throw c.err; } };
-    const oldSvc = { startContinuable: async () => { throw c.err; } };
-    const viaNew = await startSubagentCompat(newSvc, { provider: "spawn" }).then(() => null, (e) => e);
-    const viaOld = await startSubagentCompat(oldSvc, { provider: "spawn" }).then(() => null, (e) => e);
-    assert.ok(viaNew && viaOld, `${c.name}：两条路径都必须 reject`);
-    assert.equal(viaNew, c.err, "error 必须原样透出（不得包装/吞掉 code）");
-    assert.equal(viaOld, c.err);
-    const tNew = subagentSpawnErrorText(viaNew);
-    const tOld = subagentSpawnErrorText(viaOld);
-    assert.match(tNew, c.expect, `${c.name}：新路径必须给出友好化文案`);
-    assert.equal(tNew, tOld, `${c.name}：两条路径的映射文案必须逐字相同`);
+    const svc = { startActivation: async () => { throw c.err; } };
+    const via = await startSubagentCompat(svc, { provider: "spawn" }).then(() => null, (e) => e);
+    assert.ok(via, `${c.name}：必须 reject`);
+    assert.equal(via, c.err, "error 必须原样透出（不得包装/吞掉 code）");
+    assert.match(subagentSpawnErrorText(via), c.expect, `${c.name}：必须给出友好化文案`);
   }
 });
 
-test("g-469 C② g-321 映射（host 端）：新/旧 API 抛同码时 child_error 逐字相同且友好化", async () => {
+test("g-469 C② g-321 映射（host 端）：child_error 友好化且给出可操作动作", async () => {
   const err = Object.assign(new Error("subagent limit reached (active child limit: 8)"), { code: "ACTIVATION_LIMIT_REACHED" });
-  const collect: Array<{ api: "activation" | "legacy"; text: string }> = [];
-  for (const api of ["activation", "legacy"] as const) {
-    const h = createHarnessWith({ dispatchApi: api, dispatchError: err });
-    const { goal } = prepare(h, { title: `g-469 g321 ${api}` });
-    const res = await h.call("graph_start_attempt", { goal, attempt_brief: "g321", task_type: "fix", worktree: false });
-    assert.equal(res.child_id ?? null, null, `${api}：失败时不得给 child_id`);
-    assert.match(String(res.child_error ?? ""), /子代理激活已达上限/, `${api}：必须友好化 ACTIVATION_LIMIT_REACHED`);
-    assert.match(String(res.child_error ?? ""), /解绑|等待/, `${api}：必须给出可操作动作`);
-    collect.push({ api, text: String(res.child_error) });
-  }
-  assert.deepEqual(collect.map((c) => c.api), ["activation", "legacy"]);
-  assert.equal(collect[0].text, collect[1].text, "新旧路径的 child_error 必须逐字相同（语义一致）");
+  const h = createHarnessWith({ dispatchApi: "activation", dispatchError: err });
+  const { goal } = prepare(h, { title: "g-469 g321 activation" });
+  const res = await h.call("graph_start_attempt", { goal, attempt_brief: "g321", task_type: "fix", worktree: false });
+  assert.equal(res.child_id ?? null, null, "失败时不得给 child_id");
+  assert.match(String(res.child_error ?? ""), /子代理激活已达上限/, "必须友好化 ACTIVATION_LIMIT_REACHED");
+  assert.match(String(res.child_error ?? ""), /解绑|等待/, "必须给出可操作动作");
 });
 
 // ============================================================================
@@ -285,10 +263,14 @@ function dispatchChokepointViolations(file: string): string[] {
   const mentions = [...code.matchAll(/\bstartSubagentCompat\s*\(/g)].length;
   if (mentions !== 6) problems.push(`${label}：startSubagentCompat 提及应恰为 6（1 声明 + 5 调用），实得 ${mentions}`);
 
-  // ④ 裸 `startActivation(` / `startContinuable(` 只允许出现在 helper 体内，且恰为 2 处
-  const bare = [...code.matchAll(/\b(startActivation|startContinuable)\s*\(/g)].map((m) => ({ name: m[1], index: m.index! }));
-  if (bare.length !== 2) {
-    problems.push(`${label}：两版方法名的调用应恰为 2 处（均在 helper 内），实得 ${bare.length}：${bare.map((b) => b.name).join(",")}`);
+  // ④ `startContinuable(` 必须**零出现**（g-627：旧名回退已删除）；`startActivation(` 只允许在 helper 内、恰 1 处
+  const legacyCalls = [...code.matchAll(/\bstartContinuable\s*\(/g)];
+  if (legacyCalls.length !== 0) {
+    problems.push(`${label}：startContinuable( 已下线，不得再出现（实得 ${legacyCalls.length} 处）`);
+  }
+  const bare = [...code.matchAll(/\bstartActivation\s*\(/g)].map((m) => ({ name: m[1], index: m.index! }));
+  if (bare.length !== 1) {
+    problems.push(`${label}：startActivation 调用应恰为 1 处（在 helper 内），实得 ${bare.length}`);
   }
   for (const b of bare) {
     if (helper && !(b.index >= helper.start && b.index < helper.end)) {
@@ -296,11 +278,11 @@ function dispatchChokepointViolations(file: string): string[] {
     }
   }
 
-  // ⑤ 对原始服务方法的**属性访问**合计恰 4 处（helper 内 2 处 typeof 探测 + 2 处调用）——
-  //    任何调用点直连 `subagents.startActivation/startContinuable` 都会让计数漂移。
+  // ⑤ 对原始服务方法的**属性访问**合计恰 2 处（helper 内 1 处 typeof 探测 + 1 处调用）——
+  //    任何调用点直连 `subagents.startActivation` 都会让计数漂移。
   const touches = [...code.matchAll(/subagents\.(startActivation|startContinuable)\b/g)].map((m) => ({ name: m[1], index: m.index! }));
-  if (touches.length !== 4) {
-    problems.push(`${label}：subagents.<方法> 访问应恰为 4 处（helper 内），实得 ${touches.length}`);
+  if (touches.length !== 2) {
+    problems.push(`${label}：subagents.<方法> 访问应恰为 2 处（helper 内），实得 ${touches.length}：${touches.map((t) => t.name).join(",")}`);
   }
   for (const t of touches) {
     if (helper && !(t.index >= helper.start && t.index < helper.end)) {
@@ -308,13 +290,12 @@ function dispatchChokepointViolations(file: string): string[] {
     }
   }
 
-  // ⑥ 新名必须先于旧名探测（版本前移不得回退旧名），且两者皆无时必须抛错
+  // ⑥ 单路径：只探测 startActivation；缺失必须显式抛错（fail-closed）
   if (helper) {
     const body = code.slice(helper.start, helper.end);
-    const newAt = body.indexOf("typeof subagents.startActivation");
-    const oldAt = body.indexOf("typeof subagents.startContinuable");
-    if (!(newAt >= 0 && oldAt > newAt)) problems.push(`${label}：helper 必须先探测 startActivation 再回退 startContinuable`);
-    if (!/throw new Error\(/.test(body)) problems.push(`${label}：helper 必须在两版皆缺时显式抛错（fail-closed）`);
+    if (body.indexOf("typeof subagents.startActivation") < 0) problems.push(`${label}：helper 必须探测 startActivation`);
+    if (body.includes("startContinuable")) problems.push(`${label}：helper 不得再保留 startContinuable 回退`);
+    if (!/throw new Error\(/.test(body)) problems.push(`${label}：helper 必须在 API 缺失时显式抛错（fail-closed）`);
     if (/return\s*\{?\s*childId/.test(body)) problems.push(`${label}：helper 不得虚构 childId（fail-closed 分支不允许返回 receipt）`);
   }
 
@@ -344,27 +325,27 @@ test("g-469 D② 结构守卫：构建产物 dist/index.js 与源同形（派发
 // E. 真实宿主契约核对（夹具由真实 tarball 提取；离线可复跑）
 // ============================================================================
 
-/** 冻结的 tarball 指纹：证据必须来自这三份真实宿主包（换包时须显式更新本表并说明）。 */
+/**
+ * 冻结的 tarball 指纹：证据必须来自该份真实宿主包（换包时须显式更新本表并在提交说明里写清来源）。
+ * g-627：宿主下限提高后，契约证据只保留**当前最低支持线** `0.2.2-rc.3`（旧版 tarball 已不在
+ * 支持面内），因此不再登记 `0.2.0-rc.2` / `0.2.1-alpha.*`。
+ */
 const FROZEN_TARBALLS: Record<string, string> = {
-  "0.2.0-rc.2": "5ac1e9d817767bf5aca679e32e4e89abc9b6e2f718d6d18c7e2ae80eac5adc70",
-  "0.2.1-alpha.1": "739f8e12ec02fa1cf24f4a698f3842fd40d84bcd49165208dbea107d952751f7",
-  "0.2.1-alpha.2": "6f237826a51903c70c865cd210bb853a569e29e7ca3bf6ede3014d2f3fa075a9",
+  "0.2.2-rc.3": "6cf6401df4658d11a1398a7f38f7a5e610217be13bcf7c89b70d0d4fc019deef",
 };
 const EXPECTED: Record<string, { startActivation: boolean; startContinuable: boolean; impl: string }> = {
-  "0.2.0-rc.2": { startActivation: false, startContinuable: true, impl: "startContinuable" },
-  "0.2.1-alpha.1": { startActivation: false, startContinuable: true, impl: "startContinuable" },
-  "0.2.1-alpha.2": { startActivation: true, startContinuable: false, impl: "startActivation" },
+  "0.2.2-rc.3": { startActivation: true, startContinuable: false, impl: "startActivation" },
 };
 
 function readFixture(): any {
   return JSON.parse(readFileSync(FIXTURE, "utf8"));
 }
 
-test("g-469 E① 真实宿主契约：方法名边界两版互斥，且与冻结 tarball 指纹一致", () => {
+test("g-469 E① 真实宿主契约：最低支持线上只有 startActivation，且与冻结 tarball 指纹一致", () => {
   const fx = readFixture();
   assert.equal(fx.schema, "g469-host-subagent-api/v1");
   assert.equal(fx.generator, "core/tests/fixtures/g469-host-subagent-api.mjs", "夹具必须由仓内生成器从真实 tarball 提取");
-  assert.deepEqual(fx.probe_contract.dispatch_methods, ["startActivation", "startContinuable"]);
+  assert.deepEqual(fx.probe_contract.dispatch_methods, ["startActivation"], "派发方法只剩 startActivation");
   assert.equal(fx.probe_contract.provider_capability, "prepareContinuable");
   assert.deepEqual(Object.keys(FROZEN_TARBALLS).sort(), fx.versions.map((v: any) => v.host_version).sort());
 
@@ -381,52 +362,49 @@ test("g-469 E① 真实宿主契约：方法名边界两版互斥，且与冻结
     assert.ok(v.dispatch_impl.source.includes("spec."), `${v.host_version}：实现体必须读取 spec.*`);
     assert.equal(sha256(v.dispatch_impl.source), v.dispatch_impl.sha256, `${v.host_version}：派发实现体自校验 sha256`);
     assert.equal(sha256(v.manager_impl.source), v.manager_impl.sha256, `${v.host_version}：manager 实现体自校验 sha256`);
-    // 能力探测名两版都在（我方 4 处 prepareContinuable 探测不得随派发改名而变）
+    // 能力探测名仍在服务门面里（我方 provider 探测依赖它）
     assert.equal(v.provider_capability.name, "prepareContinuable");
     assert.equal(v.provider_capability.present_in_entry, true, `${v.host_version}：入口必须含 prepareContinuable`);
-    // 至少「本地/可续」建 child 的实现按 prepareContinuable 分流（外部后端分支按定义不需要它）
-    assert.ok(v.provider_capability.present_in_manager_impls.some((m: any) => m.has_capability === true),
-      `${v.host_version}：至少一处 manager 实现必须按 prepareContinuable 分流`);
-    assert.ok(!v.provider_capability.present_in_manager_impls.some((m: any) => m.method === "startExternal" && m.has_capability),
-      `${v.host_version}：startExternal（外部后端分支）不应引用 prepareContinuable`);
+    // 收窄证据：该版的服务方法表里**同时**包含 rootOf / interrupt（g-625 收口所依赖的单版本口径）
+    for (const needed of ["startActivation", "rootOf", "interrupt", "getProvider", "sendMessage"]) {
+      assert.ok(v.service_method_names.includes(needed), `${v.host_version}：服务方法表必须含 ${needed}`);
+    }
+    for (const gone of ["startContinuable", "interruptByParent", "listChildren", "isOwnedBy"]) {
+      assert.ok(!v.service_method_names.includes(gone), `${v.host_version}：${gone} 必须已从服务面删除（收窄理由）`);
+    }
   }
-  // 新增版（0.2.1-alpha.2）的 startActivation 内部按 prepareContinuable 选 local/external
-  const newest = fx.versions.find((v: any) => v.host_version === "0.2.1-alpha.2");
-  assert.equal(newest.provider_capability.capability_switch_expression, true,
-    "0.2.1-alpha.2 的 startActivation 必须含 prepareContinuable ? startExternal : startLocal 分流（我方能力探测的口径真源）");
-  assert.deepEqual(
-    newest.provider_capability.present_in_manager_impls,
-    [{ method: "startLocal", has_capability: true }, { method: "startExternal", has_capability: false }],
-    "0.2.1-alpha.2：本地分支按 prepareContinuable 取材，外部分支不需要该能力",
-  );
 });
 
-test("g-469 E② 真实宿主契约：我方 spec 字段与 receipt 读取被两版真实实现覆盖（parentSessionId 兜底必需）", () => {
+test("g-469 E② 真实宿主契约：我方扁平 spec 字段与 receipt 读取被真实实现覆盖（parentSessionId 兜底必需）", () => {
   const fx = readFixture();
   const ours: string[] = fx.probe_contract.call_spec_fields;
-  // g-624：这里是 g-469 时代的**嵌套形态基线字段**；两形态现在都额外显式传 delivery=parent，
-  // 扁平形态（rc.3+）把 prompt/parent 上提到顶层 —— 形态断言见 g624-activation-spec-compat.test.ts。
-  assert.deepEqual(ours, ["provider", "label", "request", "signal"], "g-469 嵌套形态的基线 spec 字段（逐字）");
+  // g-624 / g-627：这里是**扁平形态**基线字段；每处派发还显式传 delivery=parent。
+  // 形态断言见 g624-activation-spec-compat.test.ts。
+  assert.deepEqual(ours, ["provider", "label", "parent", "prompt", "signal"], "扁平 spec 的基线字段（逐字）");
   const specUnion = new Set<string>();
   for (const v of fx.versions) {
+    // 派发门面自身会读取的字段（parent/provider/signal…）在 spec_fields 里；其余字段由 provider
+    // 接管后隔着子调用读取，门面静态提取不到 —— 这类字段交给 E③ 的 .d.ts 声明层核对。
+    const FACADE_READ_FIELDS = ["provider", "parent"];
     for (const field of ours) {
-      assert.ok(v.spec_fields.includes(field),
-        `${v.host_version}：真实实现未读取 spec.${field} ⇒ 我方调用形态与该版不符（实得 ${JSON.stringify(v.spec_fields)}）`);
       specUnion.add(field);
+      if (!FACADE_READ_FIELDS.includes(field)) continue;
+      assert.ok(v.spec_fields.includes(field),
+        `${v.host_version}：派发门面未读取 spec.${field} ⇒ 我方调用形态与该版不符（实得 ${JSON.stringify(v.spec_fields)}）`);
     }
     // receipt：childId 必在；parentSessionId 两版都没有 ⇒ 调用点 `?? null` 兜底是必需契约
     assert.ok(v.receipt_keys.includes("childId"), `${v.host_version}：receipt 必须含 childId`);
     assert.ok(!v.receipt_keys.includes("parentSessionId"),
       `${v.host_version}：真实 receipt 不含 parentSessionId（若将来新增，需重估 ??: null 兜底与绑定来源）`);
   }
-  assert.equal(specUnion.size, 4);
+  assert.equal(specUnion.size, 5);
 
   // 我方源码：探测的方法名集合 == 夹具声明的候选集合（不多不少）
   // 注意：`codeOnly` 会清空字符串**内容**，故这里只匹配到开引号为止。
   const code = codeOnly(readFileSync(HOST_SOURCE, "utf8"));
   const probed = [...new Set([...code.matchAll(/typeof\s+subagents\.(start\w+)\s*===\s*"/g)].map((m) => m[1]))].sort();
-  assert.deepEqual(probed, [...fx.probe_contract.dispatch_methods].sort(),
-    "源码探测的派发方法名必须与夹具候选集合逐一相等（新增/改名即红）");
+  assert.deepEqual(probed, ["startActivation"], "源码只允许探测 startActivation（旧名回退已删除）");
+  assert.ok(fx.probe_contract.dispatch_methods.includes("startActivation"), "夹具必须覆盖 startActivation");
   // 能力探测名不得跟着改名（仍是 prepareContinuable）
   const caps = [...new Set([...code.matchAll(/getProvider\([^)]*\)\?\.(\w+)/g)].map((m) => m[1]))];
   assert.deepEqual(caps, [fx.probe_contract.provider_capability], "provider 能力探测名必须仍是 prepareContinuable");
@@ -435,7 +413,7 @@ test("g-469 E② 真实宿主契约：我方 spec 字段与 receipt 读取被两
 test("g-469 E③ 真实宿主契约（声明层）：.d.ts 声明的 spec/receipt 字段表覆盖我方调用形态", () => {
   const fx = readFixture();
   const ours: string[] = fx.probe_contract.call_spec_fields;
-  const REQUIRED_COMMON = ["provider", "label", "request", "signal"];
+  const REQUIRED_COMMON = ["provider", "label", "parent", "prompt", "signal"];
   for (const v of fx.versions) {
     const names = Object.keys(v.declared_types);
     const specName = names.find((n) => n.endsWith("Spec"));
@@ -444,16 +422,26 @@ test("g-469 E③ 真实宿主契约（声明层）：.d.ts 声明的 spec/receip
     assert.equal(sha256(v.declared_types[specName].source), v.declared_types[specName].sha256, "声明片段自校验 sha256");
 
     const specFields: Array<{ name: string; optional: boolean }> = v.declared_types[specName].fields;
+    // g-627：rc.3 的 `SubagentActivationSpec extends Omit<SubagentStartRequest, 'label'|'signal'>`，
+    // 因此 label/signal 由本接口声明，其余（prompt/parent/cwd/agentOptions…）继承自 SubagentStartRequest。
+    // 这里断言「必填的本地声明 + 声明了继承关系」两者共同覆盖我方必传字段。
+    const declared = new Set(specFields.map((d) => d.name));
+    const inherited = /extends\s+Omit<\s*SubagentStartRequest\s*,/.test(v.declared_types[specName].source);
     for (const f of REQUIRED_COMMON) {
-      const decl = specFields.find((d) => d.name === f);
-      assert.ok(decl, `${v.host_version}/${specName}：必须声明 ${f}`);
+      if (!declared.has(f)) {
+        assert.ok(inherited, `${v.host_version}/${specName}：既未声明 ${f}，也没有继承 SubagentStartRequest`);
+        continue;
+      }
+      const decl = specFields.find((d) => d.name === f)!;
       assert.equal(decl.optional, false, `${v.host_version}/${specName}：${f} 必须是必填（我方每处都传）`);
     }
     // 我方不传 childId（可选）——两版都声明为可选
     const childId = specFields.find((d) => d.name === "childId");
     assert.ok(childId?.optional === true, `${v.host_version}/${specName}：childId 必须是可选（我方不预留守卫）`);
-    // 我方调用传入的字段全部被声明覆盖（不多不少地落在声明字段集内）
-    for (const f of ours) assert.ok(specFields.some((d) => d.name === f), `${v.host_version}：未声明我方字段 ${f}`);
+    // 我方调用传入的字段全部被声明覆盖（本地声明 或 继承自 SubagentStartRequest）
+    for (const f of ours) {
+      assert.ok(specFields.some((d) => d.name === f) || inherited, `${v.host_version}：未声明我方字段 ${f}`);
+    }
 
     const receiptFields: Array<{ name: string; optional: boolean }> = v.declared_types[receiptName].fields;
     const rc = receiptFields.find((d) => d.name === "childId");
@@ -468,7 +456,7 @@ test("g-469 E③ 真实宿主契约（声明层）：.d.ts 声明的 spec/receip
         `${v.host_version}：声明必填的 delivery 必须有 'parent' 运行时默认，否则不传该字段会改变交付语义`);
     }
   }
-  assert.equal(fx.versions.find((v: any) => v.host_version === "0.2.1-alpha.2").optional_field_defaults.delivery, "parent");
+  assert.equal(fx.versions[0].optional_field_defaults.delivery, "parent", "delivery 的运行时默认仍是 parent");
 });
 
 // ============================================================================

@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
@@ -25,6 +25,9 @@ const hostRoot = join(import.meta.dirname, "../../dsh-graph-host");
 const clientRoot = join(hostRoot, "lib/client");
 const distRoot = join(import.meta.dirname, "../../dist");
 const readClient = (name: string) => readFileSync(join(clientRoot, `${name}.js`), "utf8");
+
+/** 客户端全部源模块（`_wrapper-*` 是拼接壳，不含可执行业务代码）。结构断言逐模块扫。 */
+const CLIENT_MODULES = readdirSync(clientRoot).map((f) => f.slice(0, -3)).filter((n) => !n.startsWith("_"));
 
 /**
  * g-351：子代理目录 entry 的**形状探测**族。子会话地址构造（subagentAddressOf）与
@@ -116,7 +119,7 @@ test("g-321 host 端 start-collection：startContinuable 抛 ACTIVATION_LIMIT_RE
   const subagentsService = {
     list: () => ["spawn"],
     getProvider: () => ({ prepareContinuable: () => {} }),
-    startContinuable: async () => {
+    startActivation: async () => {
       throw Object.assign(new Error("subagent limit reached (active child limit: 8)"), {
         code: "ACTIVATION_LIMIT_REACHED",
       });
@@ -171,172 +174,30 @@ test("g-321 host 端 start-collection：startContinuable 抛 ACTIVATION_LIMIT_RE
 
 // ---------------------------------------------------------------- 2. 会话导航 / 激活判断（源契约）
 
-test("g-321 客户端导航：uiWorkspace.openSession 优先，回退 sessions.openSubagent / sessions.open", () => {
+test("g-321 客户端导航：uiWorkspace.openSession 单一入口（g-627：sessions.* 回退已删除）", () => {
   const plugin = readClient("plugin");
-  // 特性探测取得 uiWorkspace（绝不做硬 inject，否则旧 profile 的 client apply 会被阻断）
+  // 特性探测取得 uiWorkspace（绝不做硬 inject，否则精简 profile 的 client apply 会被阻断）
   assert.match(plugin, /function uiWorkspaceRt\(\)/);
   // g-425：读取口径收敛到受保护 helper（ctx.get 优先 + 属性访问兜 try/catch，见 helpers.js）；
   // `appCtx?.uiWorkspace` 裸回退在 uiWorkspace 缺席时会撞 cordis 注入门禁抛错，故禁止裸读。
   assert.match(plugin, /optionalService\(appCtx, "uiWorkspace"\)/);
   assert.doesNotMatch(plugin, /\?\?\s*appCtx\s*\?\.\s*uiWorkspace/);
-  assert.match(plugin, /function openSessionTarget\(target, legacyFn\)/);
-  assert.match(plugin, /typeof uw\.openSession === "function"/);
-  // 子会话：address 形态在两版共用，0.1.5 回退 openSubagent
-  assert.match(plugin, /uiWorkspace\.openSession\(address\)|openSessionTarget\(address,/);
-  assert.match(plugin, /typeof rt\.openSubagent === "function" \? \(\) => rt\.openSubagent\(address\) : null/);
-  // 父会话退化路径同样走兼容层
-  assert.match(plugin, /openSessionTarget\(parentSessionId, typeof rt\?\.open === "function"/);
+  // g-627：签名收窄为单参数（不再有 legacyFn 回退口）
+  assert.match(plugin, /function openSessionTarget\(target\)/);
+  assert.doesNotMatch(plugin, /openSessionTarget\([^)]*,/, "不得再给 openSessionTarget 传旧 API 回调");
+  // 能力探测必须点名 openSession（函数形态检查），绝不按服务存在与否就直接调用
+  assert.match(plugin, /if \(!uw \|\| typeof uw\.openSession !== "function"\) return false;/);
+  // 子会话：address 形态经同一入口；父会话退化路径同样只在有地址时走
+  assert.match(plugin, /openSessionTarget\(address\)/);
+  assert.match(plugin, /openSessionTarget\(parentSessionId\)/);
   // 其它跳转点（主管会话）也不得再直连 sessions.open
   for (const mod of ["goal-actions", "drag-prompts", "supervisor-bar"]) {
     const src = readClient(mod);
     assert.doesNotMatch(src, /(?<!openSessionTarget\()\brt\?\.open\?\.\(/, `${mod} 不得残留 sessions.open 直连`);
-    assert.doesNotMatch(src, /sessionsRt\?\.open\?\.\(/, `${mod} 不得残留 sessions.open 直连`);
   }
+  assert.doesNotMatch(plugin, /rt\?\.openSubagent/, "plugin 不得再调用 sessions.openSubagent");
 });
 
-test("g-321 会话激活判断：兼容 0.1.5 的 current/currentAddress 与 0.1.6 的 retainedBy.mainView", () => {
-  const plugin = readClient("plugin");
-  assert.match(plugin, /snap\.current/);
-  assert.match(plugin, /snap\.currentAddress\?\.childSessionId/);
-  // 0.1.6：SessionListState 移除了 current/currentAddress，当前激活会话 = retainedBy.mainView > 0 那一行
-  assert.match(plugin, /s\.retainedBy\?\.mainView \?\? 0/);
-  // 兼容 byId 记录与旧 items 数组两种快照形状
-  assert.match(plugin, /Array\.isArray\(snap\.items\)/);
-  assert.match(plugin, /Object\.values\(snap\.byId\)/);
-});
-
-// ---------------------------------------------------------------- 2b. 导航兼容层行为矩阵
-
-function makeNavigationSandbox() {
-  const plugin = readClient("plugin");
-  const helpers = readClient("helpers");
-  const sandbox: any = { console, appCtx: null };
-  vm.runInNewContext(
-    // g-425：uiWorkspaceRt 改走 optionalService（同一工厂作用域 helper）⇒ 沙箱注入同源片段
-    `${extractFunction(helpers, "optionalService")}\n`
-    + `${extractFunction(plugin, "uiWorkspaceRt")}\n`
-    + `${extractFunction(plugin, "openSessionTarget")}\n`
-    + `this.openSessionTarget = openSessionTarget;`,
-    sandbox,
-  );
-  return sandbox as { appCtx: any; openSessionTarget: (t: any, legacyFn: any) => boolean };
-}
-
-test("g-321 openSessionTarget：0.1.6 有 uiWorkspace.openSession 时优先调用，绝不重复走 legacy", () => {
-  const box = makeNavigationSandbox();
-  const calls: any[] = [];
-  box.appCtx = { get: (n: string) => (n === "uiWorkspace" ? { openSession: (t: any) => calls.push(["uw", t]) } : undefined) };
-  const ok = box.openSessionTarget("child-1", () => { calls.push(["legacy"]); });
-  assert.equal(ok, true);
-  assert.deepEqual(calls, [["uw", "child-1"]]);
-});
-
-test("g-321 openSessionTarget：0.1.5 无 uiWorkspace 时回退 legacy（sessions.open/openSubagent）", () => {
-  const box = makeNavigationSandbox();
-  const calls: any[] = [];
-  box.appCtx = { get: () => undefined };
-  const ok = box.openSessionTarget({ parentSessionId: "p", childSessionId: "c", mode: "continuable" }, () => { calls.push(["legacy"]); });
-  assert.equal(ok, true);
-  assert.deepEqual(calls, [["legacy"]]);
-});
-
-test("g-321 openSessionTarget：新版 openSession 抛错时降级到 legacy，不把异常抛给调用方", () => {
-  const box = makeNavigationSandbox();
-  const calls: any[] = [];
-  box.appCtx = { get: (n: string) => (n === "uiWorkspace" ? { openSession: () => { throw new Error("navigation superseded"); } } : undefined) };
-  const ok = box.openSessionTarget("s-1", () => { calls.push(["legacy"]); });
-  assert.equal(ok, true);
-  assert.deepEqual(calls, [["legacy"]], "新版失败必须回退旧版，保证 0.1.6 下仍能跳转");
-});
-
-test("g-321 openSessionTarget：两版 API 都缺失时返回 false 且不抛（降级为不动，不崩看板）", () => {
-  const box = makeNavigationSandbox();
-  box.appCtx = { get: () => undefined };
-  assert.equal(box.openSessionTarget("s-1", null), false);
-  // appCtx 尚未注入（apply 之前）也不得抛
-  box.appCtx = null;
-  assert.equal(box.openSessionTarget("s-1", () => false), false);
-});
-
-// ---------------------------------------------------------------- 3. 排队状态：行为测试（两条版本路径）
-function makeQueueSandbox() {
-  const helpers = readClient("helpers");
-  const sandbox: any = { dgT: (key: string) => key, console };
-  vm.runInNewContext(
-    `${extractFunction(helpers, "sessionQueueState")}\nthis.sessionQueueState = sessionQueueState;`,
-    sandbox,
-  );
-  return sandbox.sessionQueueState as (s: any) => { pendingCount: number; queued: number; steering: number; source: string | null };
-}
-
-test("g-321 sessionQueueState：0.1.6 走 inbox 投影（next-turn + next-step）", () => {
-  const sessionQueueState = makeQueueSandbox();
-  const session = {
-    projections: {
-      faceOf: (key: string) => (key === "inbox"
-        ? { getSnapshot: () => ({ "next-turn": [{ id: 1 }, { id: 2 }], "next-step": [{ id: 3 }] }) }
-        : null),
-    },
-    getSnapshot: () => ({}),
-  };
-  // vm 跨 realm 的对象原型不同，逐个字段比对（deepEqual 会因原型不等而失败）
-  assert.deepEqual({ ...sessionQueueState(session) }, { pendingCount: 3, queued: 2, steering: 1, source: "inbox" });
-});
-
-test("g-321 sessionQueueState：0.1.6 快照无 queue 也不得抛（旧的直接解构会 TypeError）", () => {
-  const sessionQueueState = makeQueueSandbox();
-  // 真实的 0.1.6 SessionSnapshot：没有 queue 字段，只有 pendingSubmissions 等
-  const session = {
-    projections: { faceOf: () => undefined },
-    getSnapshot: () => ({ sessionId: "s", running: false, pendingSubmissions: [], blank: false }),
-  };
-  assert.deepEqual({ ...sessionQueueState(session) }, { pendingCount: 0, queued: 0, steering: 0, source: null });
-});
-
-test("g-321 sessionQueueState：投影缺失/抛错时回退 0.1.5 快照 queue（数组与 items 容器两种形状）", () => {
-  const sessionQueueState = makeQueueSandbox();
-  const noProjections = (queue: unknown) => ({ getSnapshot: () => ({ queue }) });
-  assert.equal(sessionQueueState(noProjections([{ id: 1 }])).pendingCount, 1);
-  assert.equal(sessionQueueState(noProjections([{ id: 1 }])).source, "snapshot");
-  assert.equal(sessionQueueState(noProjections({ items: [{ id: 1 }, { id: 2 }] })).pendingCount, 2);
-  // 投影 faceOf 抛错（未激活/未 seed）→ 不得冒泡
-  const throwing = {
-    projections: { faceOf: () => { throw new Error("face unavailable"); } },
-    getSnapshot: () => ({ queue: [{ id: 1 }, { id: 2 }, { id: 3 }] }),
-  };
-  assert.equal(sessionQueueState(throwing).pendingCount, 3);
-  // 空 session / null 安全
-  assert.equal(sessionQueueState(null).pendingCount, 0);
-});
-
-test("g-321 客户端源契约：排队状态只经 sessionQueueState，绝不直接解构 snapshot.queue", () => {
-  for (const mod of ["helpers", "live-panel", "goal-actions", "session-hooks"]) {
-    const src = readClient(mod);
-    assert.deepEqual(codeMatches(src, /getSnapshot\(\)\.queue/), [], `${mod} 不得直接读 snapshot.queue`);
-    assert.deepEqual(codeMatches(src, /const\s*\{[^}]*\bqueue\b[^}]*\}\s*=\s*[^;]*getSnapshot/), [], `${mod} 不得解构 snapshot.queue`);
-  }
-  const live = readClient("live-panel");
-  assert.match(live, /useSessionQueueDepth\(session\)/);
-  assert.match(live, /sessionQueueState\(session\)\.pendingCount/);
-  const actions = readClient("goal-actions");
-  assert.match(actions, /sessionQueueState\(session\)\.pendingCount/);
-  assert.match(actions, /subagentDispatchErrorText\(res\?\.error\)/);
-  const hooks = readClient("session-hooks");
-  assert.match(hooks, /function useSessionQueueDepth\(session\)/);
-  assert.match(hooks, /projections\?\.faceOf\?\.\("inbox"\)/);
-  // getSnapshot 必须返回按值稳定的原语，否则 useSyncExternalStore 无限重渲染
-  assert.match(hooks, /sessionQueueState\(session\)\.pendingCount, \[session\]/);
-  // 组件构建顺序：helpers（定义）必须先于 session-hooks / live-panel / goal-actions
-  const script = readFileSync(join(import.meta.dirname, "../../scripts/build-client.sh"), "utf8");
-  const order = ["helpers", "session-hooks", "live-panel", "goal-actions", "plugin"].map((p) => script.indexOf(`"${p}"`));
-  assert.ok(order.every((i) => i > 0), "build-client PARTS 含全部相关模块");
-  assert.deepEqual([...order].sort((a, b) => a - b), order, "PARTS 顺序保证 helpers 在消费方之前");
-});
-
-// ---------------------------------------------------------------- 5. bundle 装载 + apply 冒烟（双版本 API 面）
-
-/** 在 vm 里真实装载 dist/lib/client.js，取出工厂并 apply —— 捕获 bundle 级引用/TDZ 错误，
- *  这是 `node --check` 与源契约断言都覆盖不到的一层。 */
 function loadAndApplyClient(surface: { uiWorkspace?: unknown; sessions: unknown }) {
   const bundle = readFileSync(join(distRoot, "lib/client.js"), "utf8");
   let factory: any = null;
@@ -409,7 +270,7 @@ function loadAndApplyClient(surface: { uiWorkspace?: unknown; sessions: unknown 
   return { mod, registered };
 }
 
-test("g-321 bundle 冒烟：0.1.6 API 面（只有 uiWorkspace.openSession，sessions 无 open/openSubagent）下 client apply 不抛", () => {
+test("g-321 bundle 冒烟：rc.3 宿主 API 面（uiWorkspace.openSession，无 sessions.open）下 client apply 不抛", () => {
   const uiWorkspace = { openSession: () => {} };
   const sessions = {
     list: { getSnapshot: () => ({ ids: ["s1"], byId: { s1: { id: "s1", retainedBy: { mainView: 1 } } }, subagentsByParent: {} }) },
@@ -426,15 +287,15 @@ test("g-321 bundle 冒烟：0.1.6 API 面（只有 uiWorkspace.openSession，ses
   assert.ok(registered.length >= 1, "至少注册了看板 conversation.view 槽");
 });
 
-test("g-321 bundle 冒烟：0.1.5 API 面（无 uiWorkspace，sessions 有 open/openSubagent）下 client apply 不抛（向下兼容）", () => {
+test("g-627 bundle 冒烟：uiWorkspace 缺失时 client apply 仍不抛（能力缺失如实降级，不再依赖 sessions.* 回退）", () => {
   const sessions = {
-    list: { getSnapshot: () => ({ current: "s1", items: [{ sessionId: "s1", cwd: "/tmp" }], subagentsByParent: {} }) },
+    list: { getSnapshot: () => ({ items: [{ sessionId: "s1", cwd: "/tmp", retainedBy: { mainView: 1 } }], subagentsByParent: {} }) },
     open: () => {}, openSubagent: () => {}, binding: () => undefined,
     setSubagentCatalogOpen: () => {}, refreshSubagents: async () => {},
   };
   const { mod, registered } = loadAndApplyClient({ uiWorkspace: undefined, sessions });
   assert.equal(mod.name, "dsh-graph");
-  assert.ok(registered.length >= 1);
+  assert.ok(registered.length >= 1, "看板槽照常注册：导航能力缺失不得拖死整个 client apply");
 });
 
 test("g-321 bundle 冒烟：sessions 服务整体缺失（最小 profile）时 apply 仍不抛", () => {
@@ -446,7 +307,7 @@ test("g-321 bundle 冒烟：sessions 服务整体缺失（最小 profile）时 a
 
 test("g-321 bundle 落地：dist/lib/client.js 含兼容层与 inbox 探测，且无 snapshot.queue 直读", () => {
   const bundle = readFileSync(join(distRoot, "lib/client.js"), "utf8");
-  assert.match(bundle, /function openSessionTarget\(target, legacyFn\)/);
+  assert.match(bundle, /function openSessionTarget\(target\)/);
   assert.match(bundle, /retainedBy\?\.mainView/);
   assert.match(bundle, /function sessionQueueState\(session\)/);
   assert.match(bundle, /"inbox"/);

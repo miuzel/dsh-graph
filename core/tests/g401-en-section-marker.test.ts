@@ -205,7 +205,7 @@ function makeHarness() {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             captured.push(opts);
             return { childId: `child-${captured.length}`, parentSessionId: "sess-super" };
           },
@@ -287,7 +287,7 @@ async function startAttempt(h: Harness, goal: string, brief: string): Promise<st
   assert.ok(tool, "graph_start_attempt 必须已注册");
   const res = await tool.execute({ goal, worktree: false, attempt_brief: brief, task_type: "fix" }, h.exec);
   assert.ok(res?.attempt, "派发必须产生 attempt（准入通过）");
-  const request = h.captured[before]?.request;
+  const request = h.captured[before];
   assert.ok(request, "必须捕获到恰好一次子代理派发请求");
   return String(request.prompt?.[0]?.text ?? "");
 }

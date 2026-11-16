@@ -848,8 +848,8 @@ test("start-collection 有 subagents：验证使用 formatCollectPrompt 生成�
   const subagentsService = {
     list: () => ["spawn"],
     getProvider: () => ({ prepareContinuable: () => {} }),
-    startContinuable: async (opts: any) => {
-      capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+    startActivation: async (opts: any) => {
+      capturedPrompt = opts.prompt?.[0]?.text ?? "";
       return { childId: "c-test", parentSessionId: "p-test" };
     },
   };
@@ -908,8 +908,8 @@ test("start-collection 用户 prompt 作为附加要求追加，不可替代强�
   const subagentsService = {
     list: () => ["spawn"],
     getProvider: () => ({ prepareContinuable: () => {} }),
-    startContinuable: async (opts: any) => {
-      capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+    startActivation: async (opts: any) => {
+      capturedPrompt = opts.prompt?.[0]?.text ?? "";
       return { childId: "c-user", parentSessionId: "p-user" };
     },
   };
@@ -1349,7 +1349,7 @@ test("g-148 GUI 两步执行链：force ready→in_progress + start-execution �
   const subagentsService = {
     list: () => ["spawn"],
     getProvider: () => ({ prepareContinuable: () => {} }),
-    startContinuable: async () => ({ childId: "c-g148", parentSessionId: "p-g148" }),
+    startActivation: async () => ({ childId: "c-g148", parentSessionId: "p-g148" }),
   };
   { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
   const ctx: any = {
@@ -1540,8 +1540,8 @@ test("g-113 start-execution 注入目标相对路径以请求 workspace 为基�
       if (name === "subagents") return {
         list: () => ["spawn"],
         getProvider: () => ({ prepareContinuable: () => {} }),
-        startContinuable: async (opts: any) => {
-          capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+        startActivation: async (opts: any) => {
+          capturedPrompt = opts.prompt?.[0]?.text ?? "";
           return { childId: "c-x" };
         },
       };
@@ -3758,7 +3758,7 @@ function loadRealWorkspaceResolver() {
 const wsSnap = (items: any) => ({ list: { getSnapshot: () => ({ items }) } });
 const sessSnap = (state: any) => ({ list: { getSnapshot: () => state } });
 
-test("g-244 子代理会话解析：parentId/items 双形状、subagentsByParent 反查、currentAddress 与多层回溯", () => {
+test("g-244 子代理会话解析：parentId/items 双形状、subagentsByParent 反查与多层回溯（g-627：currentAddress 口径已删除）", () => {
   const resolve = loadRealWorkspaceResolver();
   const workspacesRt = wsSnap([
     { path: "/repo-alpha", sessionIds: ["s-a"] },
@@ -3808,10 +3808,10 @@ test("g-244 子代理会话解析：parentId/items 双形状、subagentsByParent
   });
   assert.equal(resolve("grand-3", { workspacesRt, sessionsRt: nestedRt }), "/repo-beta", "多层谱系回溯");
 
-  // 5. 只有 currentAddress 导航地址时也能定位直接父
+  // 5. g-627 负向对照：只有 currentAddress 导航地址（0.1.5-rc.2 口径）时**不再**据它补父关系
   const addrRt = sessSnap({ byId: {}, currentAddress: { parentSessionId: "s-a", childSessionId: "child-4", mode: "one-shot" } });
-  assert.equal(resolve("child-4", { workspacesRt, sessionsRt: addrRt }), "/repo-alpha", "currentAddress 补齐直接父");
-  assert.equal(resolve(null, { workspacesRt, sessionsRt: addrRt }), "/repo-alpha", "无入参时 currentAddress 子会话仍可解析");
+  assert.equal(resolve("child-4", { workspacesRt, sessionsRt: addrRt }), null, "currentAddress 回退已删除 ⇒ 无法定位父（如实返回 null）");
+  assert.equal(resolve(null, { workspacesRt, sessionsRt: addrRt }), null, "无入参时也不得据 currentAddress 猜工作区");
 
   // 6. 旧/降级形状：items 数组 + parentSessionId 仍兼容
   const legacyRt = sessSnap({ items: [{ sessionId: "c-legacy", parentSessionId: "s-a" }] });
@@ -3895,6 +3895,20 @@ test("g-244 Fail-Closed 不退化：孤儿/环/畸形输入返回 null 且不抛
   assert.equal(resolve("child-of-nowhere", { workspacesRt, sessionsRt: isoRt }), null);
 });
 
+/**
+ * 只匹配**可执行代码**行的正则命中（去掉 `//` 之后的注释部分）。
+ * g-627：删除旧宿主口径时，注释里会留下「已删除」的说明；结构断言不应把它当违规。
+ */
+function codeOnlyMatches(source: string, re: RegExp): string[] {
+  const out: string[] = [];
+  for (const line of source.split("\n")) {
+    const at = line.indexOf("//");
+    const code = at >= 0 ? line.slice(0, at) : line;
+    for (const m of code.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"))) out.push(m[0]);
+  }
+  return out;
+}
+
 test("g-244 生成物一致：client.js 含真实 resolver 且与源模块同源", () => {
   const plugin = readFileSync(join(import.meta.dirname, "../../dsh-graph-host/lib/client/plugin.js"), "utf8");
   const bundle = readFileSync(join(import.meta.dirname, "../../dist/lib/client.js"), "utf8");
@@ -3920,7 +3934,10 @@ test("g-244 生成物一致：client.js 含真实 resolver 且与源模块同源
   assert.match(bundle, /item\?\.parentId === "string"/);
   assert.match(bundle, /item\?\.parentSessionId === "string"/);
   assert.match(bundle, /snap\.subagentsByParent/);
-  assert.match(bundle, /snap\.currentAddress/);
+  // g-627：`snap.currentAddress` / `snap.current` 的 0.1.5 口径已删除（负向钉住，防回潮）。
+  // 只看**可执行代码**：注释里记录「已删除」不算违规。
+  assert.deepEqual(codeOnlyMatches(bundle, /snap\.currentAddress/), [], "bundle 不得再读 snap.currentAddress");
+  assert.deepEqual(codeOnlyMatches(bundle, /snap\.current\b/), [], "bundle 不得再读 snap.current");
   assert.match(bundle, /\\\/\\\.worktrees\\\//);
   assert.doesNotMatch(bundle, /if \(lastGoodWorkspace\) return lastGoodWorkspace/);
 });
@@ -4639,7 +4656,9 @@ test("g-327 直发契约（源码）：先投递后复制、直发成功分支�
   assert.match(code, /if \(copied\) showToast\(dgT\("exec\.requestCopied"\)\);/);
   assert.match(code, /setFallback\(!copied\)/);
   assert.match(code, /setNote\(copied \? dgT\("exec\.requestCopiedOpened"\) : dgT\("exec\.autocopyFailedRequest"\)\);/);
-  assert.match(code, /openSessionTarget\(supervisorSession, typeof rt\.open === "function"/);
+  // g-627：会话导航收窄为单参数单一入口（sessions.open 回退已删除）⇒ 断言调用仍在、但不再带旧回调
+  assert.match(code, /openSessionTarget\(supervisorSession\)/);
+  assert.doesNotMatch(code, /openSessionTarget\(supervisorSession, typeof rt/);
   // 手动复制预览在 DefinitionPolish 的渲染分支里（openSupervisor 之外），故查整份模块源码
   assert.match(goalActionsClientSrc(), /fallback \? h\("textarea", \{ readOnly: true, value: request/, "复制失败的手动复制预览仍在");
   // 原错误分支与 loading 配平保留

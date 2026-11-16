@@ -46,13 +46,18 @@ function backlogGoalMeta(root: string, goal: string): Record<string, any> {
   return loadGoal(join(root, "backlog", goal, "goal.md")).meta as Record<string, any>;
 }
 
+/**
+ * 复用准入的归属夹具（g-627：宿主归属收口只剩 `subagents.rootOf`）。
+ * 一律显式声明 `ownershipApi: "rootOf"` —— 夹具按 rc.3 形态提供**稳定身份**的 live Agent，
+ * 这是下限之上的唯一归属面；不声明就会落到旧 `isOwnedBy` 桩（已不在支持面内）。
+ */
 function registry(child: ReuseChildStub | undefined) {
-  return { reuse: { childRegistry: { [CHILD]: child } } };
+  return { ownershipApi: "rootOf" as const, reuse: { childRegistry: { [CHILD]: child } } };
 }
 
 // ───────────────────────── 判据 1：未传 child_id 时行为逐字等价 ─────────────────────────
 test("g-613 判据 1：未传/传 null child_id ⇒ 仍走全新 spawn，响应与既有形状逐字一致", async () => {
-  const h = createHarnessWith({});
+  const h = createHarnessWith({ ownershipApi: "rootOf" });
   const { b } = twoGoals(h);
   const plain = await h.call("graph_start_attempt", { goal: b, attempt_brief: "b1", task_type: "fix" });
   assert.equal(plain.child_id, "child-1", "未传 child_id 必须新建子代理");
@@ -62,7 +67,7 @@ test("g-613 判据 1：未传/传 null child_id ⇒ 仍走全新 spawn，响应�
   assert.equal(plain.started, undefined);
   assert.equal(h.sentMessages.length, 0, "未复用不得向任何既有子代理投递");
 
-  const h2 = createHarnessWith({});
+  const h2 = createHarnessWith({ ownershipApi: "rootOf" });
   const b2 = createGoal(h2.root, { title: "B2", version: "v1.0", type: "task", actor: "human:gui" });
   setCriteria(h2.root, b2, ["判据"], "human:gui");
   const withNull = await h2.call("graph_start_attempt", { goal: b2, attempt_brief: "b2", task_type: "fix", child_id: null });
@@ -221,6 +226,7 @@ test("g-613 判据 5：旧代际 runId 的迟到 subagent/end 不得写入新目
 // ───────────────────────── 判据 6：投递不确定 ⇒ fail-closed ─────────────────────────
 test("g-613 判据 6：投递被拒绝 ⇒ child_error、attempt 结算为 child_error、记 reuse_failed、不声称已开始", async () => {
   const h = createHarnessWith({
+    ownershipApi: "rootOf",
     reuse: {
       childRegistry: { [CHILD]: { status: "idle", ownedBy: ["a1"] } },
       sendMessage: async () => { throw new Error("INPUT_CLOSED: child 已提交结构化结果"); },
@@ -248,6 +254,7 @@ test("g-613 判据 6：投递被拒绝 ⇒ child_error、attempt 结算为 child
 // 孤儿记录（g-374 不变式要求：无子代理输出的 attempt 由派发处补齐占位摘要）。
 test("g-613 判据 6：投递被拒 ⇒ 补写 source=child_error 占位摘要（不留无结果文件的孤儿 attempt）", async () => {
   const h = createHarnessWith({
+    ownershipApi: "rootOf",
     reuse: {
       childRegistry: { [CHILD]: { status: "idle", ownedBy: ["a1"] } },
       sendMessage: async () => { throw new Error("UNAUTHORIZED: message delivery requires the exact live sender agent"); },
@@ -318,6 +325,7 @@ test("g-613：child 不属于当前主管 ⇒ 显式拒绝（跨主管复用零�
 // ───────────────────────── 判据 6 补充：投递等待超时（不确定） ─────────────────────────
 test("g-613 判据 6：投递长时间无回执 ⇒ 按「不确定 = 未投递」fail-closed（timed out）", async () => {
   const h = createHarnessWith({
+    ownershipApi: "rootOf",
     reuse: {
       childRegistry: { [CHILD]: { status: "idle", ownedBy: ["a1"] } },
       sendMessage: () => new Promise<string>(() => { /* 永不 settle：模拟宿主无回执 */ }),
@@ -400,7 +408,7 @@ test("g-613：复用**空闲**专家后目标可暂缓（不再被 status_line �
 
 test("g-613 负向对照：复用的 child 变回 running ⇒ 暂缓仍被拒绝（门禁没有被放松成「一律放行」）", async () => {
   const stubs: Record<string, ReuseChildStub> = { [CHILD]: { status: "idle", ownedBy: ["a1"] } };
-  const h = createHarnessWith({ reuse: { childRegistry: stubs } });
+  const h = createHarnessWith({ ownershipApi: "rootOf", reuse: { childRegistry: stubs } });
   const { b } = twoGoals(h);
   await h.call("graph_start_attempt", { goal: b, attempt_brief: "x", child_id: CHILD });
   stubs[CHILD].status = "running"; // 子代理开始干活

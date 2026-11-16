@@ -107,8 +107,8 @@ function makeHostCtx(captured: { prompt?: string }, workspace: string) {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
-            captured.prompt = opts.request?.prompt?.[0]?.text ?? "";
+          startActivation: async (opts: any) => {
+            captured.prompt = opts.prompt?.[0]?.text ?? "";
             return { childId: "child-g333", parentSessionId: "sess-super" };
           },
         };
