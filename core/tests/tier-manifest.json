@@ -261,6 +261,9 @@
         "g612-real-host-budget.test.ts",
         "g612-run-budget-history.test.ts",
         "g612-run-restart.test.ts",
+        "g623-service-e2e.test.ts",
+        "g623-service-security.test.ts",
+        "g623-service.test.ts",
         "g628-real-cold-child.test.ts",
         "g628-real-ownership-matrix.test.ts",
         "g628-real-stale-caller.test.ts",
@@ -415,6 +418,14 @@
           "g616-care-coalesce.test.ts",
           "g628-resumed-care-effects.test.ts"
         ]
+      },
+      "local-service": {
+        "description": "独立本地只读服务（Web App + Web API + localhost MCP）：只绑 127.0.0.1、MCP 认证先行、token 不入 git/graph/配置/日志/URL、Web 会话与 MCP token 分离、只读白名单 fail-closed、graphRoot 与 executionWorkspace 分离、安全负向矩阵逐项有正向对照。为 g-623（v1.0.0 独立本地服务 MVP）而建；防「拒绝靠全拒绝蒙对」「未认证先解析业务」「宽权限凭据静默放行」与「同进程三入口被拆散」类复发。",
+        "files": [
+          "g623-service.test.ts",
+          "g623-service-security.test.ts",
+          "g623-service-e2e.test.ts"
+        ]
       }
     }
   },
@@ -429,7 +440,10 @@
         "g507-http-auth-guard.test.ts",
         "g507-http-auth-real-host.test.ts",
         "g507-http-auth-surface.test.ts",
-        "g611-private-workspace-isolation.test.ts"
+        "g611-private-workspace-isolation.test.ts",
+        "g623-service-e2e.test.ts",
+        "g623-service-security.test.ts",
+        "g623-service.test.ts"
       ]
     },
     "isolation": {
@@ -509,6 +523,8 @@
         "g507-auth-negative-controls.test.ts",
         "g507-http-auth-surface.test.ts",
         "g613-reuse-idle-child.test.ts",
+        "g623-service-e2e.test.ts",
+        "g623-service-security.test.ts",
         "g628-real-cold-child.test.ts",
         "g628-real-ownership-matrix.test.ts",
         "g628-real-stale-caller.test.ts",

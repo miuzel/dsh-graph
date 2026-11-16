@@ -34,7 +34,8 @@ mkdir -p "$dest"
 cp "$CORE_DIST"/*.js "$dest"/
 # 子目录必须存在：缺了会导致产物静默残缺（dist/core/cli 缺失 ⇒ dsh-graph 无法启动），
 # 故在复制前显式断言，而不是等运行时才暴露。
-for sub in domain cli; do
+# 子目录清单与 tsconfig `include` 的 `core/<sub>/*.ts` 条目一一对应（g-623 起含 service）。
+for sub in domain cli service; do
   if [ ! -d "$CORE_DIST/$sub" ]; then
     echo "❌ 编译产物缺少子目录 ${CORE_DIST}/${sub}（tsconfig include 是否漏了 core/${sub}/*.ts？）" >&2
     exit 1
