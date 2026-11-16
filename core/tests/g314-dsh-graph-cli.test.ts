@@ -719,7 +719,7 @@ test("g-314 判据 3：frontmatter 与事件流语义由 core 决定（CLI 只�
     assert.match(shown.goal.body, /## 目标描述/);
 
     // status 的事件计数必须与 core readEvents 完全一致
-    const status = collectStatus({ root, workspace, mode: "main-tree" });
+    const status = await collectStatus({ root, workspace, mode: "main-tree" });
     assert.equal(status.eventCount, 1, "init 记一条 project.initialized 事件");
     assert.equal(status.lastEvent, "project.initialized");
   } finally {

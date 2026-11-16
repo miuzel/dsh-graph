@@ -80,7 +80,9 @@ const FALLBACK_RE = /退回两次 rename/;
 // g-315: dsh-graph sync 投影模块 dist/core/cli/sync.js（+1）⇒ 94 + 1 = 95。
 // g-316: dsh-graph claim 认领模块 dist/core/cli/claim.js（+1）⇒ 95 + 1 = 96。
 // g-317: dsh-graph submit 提交模块 dist/core/cli/submit.js（+1）⇒ 96 + 1 = 97。
-const DIST_FILE_COUNT = 97;
+// g-630: 事件流增量索引 dist/core/cli/events-index.js（+1）与目标文件轻量叶子模块
+//   dist/core/cli/goal-files.js（+1）⇒ 97 + 2 = 99。
+const DIST_FILE_COUNT = 99;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）

@@ -1,24 +1,22 @@
 /**
- * dsh-graph 只读诊断（g-314 判据 6）：只报告事实，**不写任何文件**。
+ * dsh-graph 只读诊断（g-314 判据 6）：只报告事实，**不写看板**。
  *
- * 复用约束（判据 3）：project.yaml 走 `readProjectConfig`、事件流走 `readEvents`、
+ * 复用约束（判据 3）：project.yaml 走 `readProjectConfig`、事件流走 core `readEvents`（经
+ * `events-index.ts` 的增量索引快路径，未命中即回退 `readEvents` 全量校验）、
  * 目标文件走 `listGoalFiles` / `loadGoal` / `findGoalFile`、frontmatter 与状态机全部来自 core。
- * 本模块**零写操作**：不 init、不 appendEvent、不建目录、不获取锁 —— 因此不存在
- * 「读命令残留副作用」的风险；也不绕过任何 CAS（本模块根本不写）。
+ *
+ * 写入面（g-630，如实声明）：本模块**不写 `.dsh-graph`** —— 不 init、不 appendEvent、不建看板目录、
+ * 不获取任何锁、不绕过任何 CAS。唯一新增的写入是**用户缓存目录**下的**纯缓存**索引
+ * （`$XDG_CACHE_HOME/dsh-graph`，见 `events-index.ts`）：它可随时删除，只影响下次是否走快路径，
+ * 不影响任何判定结果。
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import {
-  findGoalFile,
-  listGoalFiles,
-  loadGoal,
-  readProjectConfig,
-  readRulesVersion,
-  type ProjectConfig,
-} from "../ops.ts";
-import { readEvents, type GraphEvent } from "../events.ts";
+// g-630：目标文件枚举/读取、rules.md 版本取自**轻量叶子模块**（唯一实现，ops 转调同一份），
+// 不再为只读汇总急切加载 1.4 万行的 ops 单体（实测可省 ≈69ms 冷启动）。
+import { findGoalFile, listGoalFiles, loadGoal, readRulesVersion, readProjectConfigHealth } from "./goal-files.ts";
 import type { GoalDoc } from "../domain/model.ts";
 import { collectHealth, probeFile, type FileProbe, type HealthReport } from "./health.ts";
+// g-630：事件流摘要改走增量索引（截断/改写/替换/索引异常一律 fail-safe 回退 core 全量校验）。
+import { readEventsSummary } from "./events-index.ts";
 
 // 轻量探针与类型由 health.ts 单点定义（info 走轻量模块图，status 复用同一实现）。
 export { collectHealth, probeFile };
@@ -39,39 +37,27 @@ export interface StatusReport extends HealthReport {
   rulesVersion: string | null;
   /** project.yaml 是否可解析（损坏配置报 false）。 */
   projectConfigOk: boolean;
-  /** 损坏配置/事件流时的可读问题列表（空 = 无问题）。 */
+  /** 损坏配置/事件流时的可读问题列表（空 = 无问题）。非空 ⇒ status 非零退出。 */
   problems: string[];
+  /**
+   * 告警级说明（g-630）：如「事件索引失效，已退回全量校验」。**不**让 status 非零退出
+   * —— 索引是纯缓存，失效不等于看板损坏；但必须如实显示，不得静默。
+   */
+  notices: string[];
 }
 
 /**
- * 从 core 的 `ProjectConfig` 上读出**畸形标志**（`*_malformed` / `malformed`）。
+ * 汇总状态：健康信息 + 目标数 + 事件数 + 规则库版本 + 损坏配置可见性。
  *
- * core 把「字段存在但不可解析」表达为标志位（fail-closed 信号源），而不是抛错；
- * CLI 只需如实转述，不重实现任何判定。返回可读问题列表（空 = 配置良好）。
+ * **async**（g-630）：project.yaml 的畸形标志仍以 `ops.readProjectConfig` 为唯一真源，但改为
+ * **按需加载** —— 否则只为一次只读汇总就急切加载 1.4 万行 ops 单体（实测 ≈69ms 冷启动），
+ * 与判据 1 的 <100ms 直接冲突。事件计数不再因此回退：它走 `events-index.ts` 的 O(1) 索引。
  */
-function collectConfigMalformed(cfg: ProjectConfig): string[] {
-  const out: string[] = [];
-  const walk = (value: unknown, path: string, depth: number) => {
-    if (depth > 4 || value === null || typeof value !== "object") return;
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const here = path ? `${path}.${k}` : k;
-      if (k.endsWith("_malformed") || k === "malformed") {
-        if (v === true) out.push(`project.yaml 字段不可解析（畸形）：${here.replace(/\.?_?malformed$/, "") || "(整档)"}`);
-        continue;
-      }
-      walk(v, here, depth + 1);
-    }
-  };
-  walk(cfg, "", 0);
-  return out;
-}
-
-/** 汇总状态：健康信息 + 目标数 + 事件数 + 规则库版本 + 损坏配置可见性。 */
-export function collectStatus(params: {
+export async function collectStatus(params: {
   root: string;
   workspace: string;
   mode: string;
-}): StatusReport {
+}): Promise<StatusReport> {
   const health = collectHealth(params);
   const { root } = params;
   const problems: string[] = [];
@@ -89,29 +75,17 @@ export function collectStatus(params: {
     problems.push(`无法枚举归档目标文件：${(e as Error).message}`);
   }
 
-  // 事件流：**条数 + 最近事件**可经「按行切分 + 只解析末行」得到（18404 行实测 ≈38ms，
-  // 全量逐行 JSON 解析 ≈72ms）。但**损坏检出**不能因此变弱：一旦快路径发现任何结构可疑
-  // （末行不可解析 / 缺 event·actor），立即回退到 core 的 `readEvents` 做**全量**校验并报错
-  // —— 事件流语义仍只有 core 一份实现，本模块只做「省一次全量解析」的快速路径。
-  let eventCount = 0;
-  let lastEvent: string | null = null;
-  let lastEventTs: string | null = null;
-  const fast = summarizeEventsFast(root);
-  if (fast.ok) {
-    eventCount = fast.count;
-    lastEvent = fast.lastEvent;
-    lastEventTs = fast.lastTs;
-  } else {
-    try {
-      const events: GraphEvent[] = readEvents(root);
-      eventCount = events.length;
-      const last = events[events.length - 1];
-      lastEvent = last?.event ?? null;
-      lastEventTs = last?.ts ?? null;
-    } catch (e) {
-      problems.push(`事件流不可解析：${(e as Error).message}`);
-    }
-  }
+  // 事件流（g-630）：条数 + 最近事件改走 `events-index.ts` 的**增量索引 + O(1) 字节探测**
+  // （不再整档 readFileSync + 逐行 JSON.parse，那在 18404 事件上实测 ≈36ms 且线性增长）。
+  // 索引只存事件流派生物，未变/纯追加才给数；截断、就地改写、被替换、索引缺失/损坏/版本不匹配
+  // 一律 fail-safe 回退到 core `readEvents` 做**全量校验**并给出**可读告警**（判据 3），
+  // 语义仍只有 core 一份实现（判据 5）。
+  const eventsSummary = readEventsSummary(root);
+  const eventCount = eventsSummary.eventCount;
+  const lastEvent = eventsSummary.lastEvent;
+  const lastEventTs = eventsSummary.lastEventTs;
+  for (const msg of eventsSummary.problems) problems.push(msg);
+  const notices: string[] = [...eventsSummary.notices];
 
   let rulesVersion: string | null = null;
   try {
@@ -120,20 +94,10 @@ export function collectStatus(params: {
     problems.push(`rules.md 不可读：${(e as Error).message}`);
   }
 
-  let projectConfigOk = true;
-  let projectConfigErrors: string[] = [];
-  try {
-    const cfg: ProjectConfig = readProjectConfig(root);
-    // core 的畸形判定是 **fail-closed 标志**（不抛错）：整档 YAML 不可解析时会置位
-    // `*_malformed`。判据 4 要求「损坏配置」可读且非零退出，故必须读这些标志，
-    // 不能只 try/catch（实测：任何畸形 YAML 下 readProjectConfig 都不抛）。
-    projectConfigErrors = collectConfigMalformed(cfg);
-    if (projectConfigErrors.length > 0) projectConfigOk = false;
-  } catch (e) {
-    projectConfigOk = false;
-    projectConfigErrors = [`project.yaml 解析异常：${(e as Error).message}`];
-  }
-  for (const msg of projectConfigErrors) problems.push(msg);
+  // project.yaml：语义仍以 ops 的 `readProjectConfig` 为真源（不重实现 YAML 解析）；只有这里
+  // 才需要它 ⇒ 走懒加载，`goal list`/`goal show` 不为它付整张 ops 图与 yaml 的成本。
+  const cfgHealth = await readProjectConfigHealth(root);
+  if (!cfgHealth.ok) problems.push(...cfgHealth.errors);
   // 文件级探针也会报告损坏（project.yaml 为空等），这里合并去重成问题列表。
   for (const f of health.files) {
     if (f.exists && !f.readable) {
@@ -150,62 +114,10 @@ export function collectStatus(params: {
     lastEvent,
     lastEventTs,
     rulesVersion,
-    projectConfigOk,
+    projectConfigOk: cfgHealth.ok,
     problems,
+    notices,
   };
-}
-
-/**
- * 事件流**摘要**：逐行切分并逐行校验（与 core `readEvents` 同口径的 JSON + `event`/`actor` 契约），
- * 但**不构建结果数组**、不触发缓存失效（实测 18404 行 ≈34ms，readEvents ≈68ms）。
- *
- * 损坏检出**不弱化**：任何一行不合法即返回 `ok:false`，由调用方交给 core 的 `readEvents`
- * 做权威的全量解析并给出**准确行号**的可读错误（事件流语义仍只有 core 一份实现）。
- * 这里只做「省掉对象数组与缓存失效」的快速路径，绝不把任何一行跳过。
- */
-function summarizeEventsFast(root: string): {
-  ok: boolean;
-  count: number;
-  lastEvent: string | null;
-  lastTs: string | null;
-} {
-  const file = join(root, "events.jsonl");
-  let text: string;
-  try {
-    if (!existsSync(file)) return { ok: true, count: 0, lastEvent: null, lastTs: null };
-    text = readFileSync(file, "utf8");
-  } catch {
-    return { ok: false, count: 0, lastEvent: null, lastTs: null };
-  }
-  const lines = text.split("\n");
-  let count = 0;
-  let last: Record<string, unknown> | null = null;
-  for (const line of lines) {
-    if (line.trim() === "") continue;
-    const rec = tryParseEventLine(line);
-    if (rec === null) return { ok: false, count: 0, lastEvent: null, lastTs: null };
-    count++;
-    last = rec;
-  }
-  if (last === null) return { ok: true, count: 0, lastEvent: null, lastTs: null };
-  return {
-    ok: true,
-    count,
-    lastEvent: String(last.event),
-    lastTs: typeof last.ts === "string" ? last.ts : null,
-  };
-}
-
-/** 解析单行事件并按 core 的最小契约校验（event/actor 必在）；不合格返回 null。 */
-function tryParseEventLine(line: string): Record<string, unknown> | null {
-  try {
-    const rec = JSON.parse(line);
-    if (!rec || typeof rec !== "object" || Array.isArray(rec)) return null;
-    if (!rec.event || !rec.actor) return null;
-    return rec as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 /** 目标摘要（`goal list` 用）。 */

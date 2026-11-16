@@ -189,7 +189,7 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
 
   if (args.command === "status") {
     const { collectStatus } = await import("./diagnostics.ts");
-    const status = collectStatus(common);
+    const status = await collectStatus(common);
     if (args.json) {
       return {
         exitCode: EXIT_OK,
@@ -208,6 +208,11 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
     if (status.problems.length > 0) {
       emit(out, "问题：");
       for (const p of status.problems) emit(out, `  - ${p}`);
+    }
+    if (status.notices.length > 0) {
+      // g-630：索引失效/退回全量校验等**告警**（不致命，但仍须如实显示）。
+      emit(out, "告警：");
+      for (const n of status.notices) emit(out, `  - ${n}`);
     }
     if (located.warning) emit(out, `警告：${located.warning}`);
     // 损坏配置不致命（仍能诊断），但必须以非零退出提示运维：判据 4 要求「损坏配置可读非零退出」。

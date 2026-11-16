@@ -388,35 +388,38 @@ dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Age
 
 **全部 < 100ms**（含 median），满足判据 2。
 
-### 真实大看板（本仓主看板：406 目标 / 18404 事件 / 74MB）
+### 真实大看板（本仓主看板：g-630 实测）
 
-| 命令 | best (ms) | median (ms) | 判据 2 |
-| --- | --- | --- | --- |
-| `version` | 23.2 | 27.6 | ✅ |
-| `help` | 23.1 | 27.9 | ✅ |
-| `info` | 38.1 | 47.7 | ✅ |
-| `status` | 141.9 | 147.9 | ❌ **未达标** |
-| `goal list` | 92.0 | 97.7 | ✅ |
-| `goal show g-314` | 90.0 | 95.6 | ✅ |
+看板规模：**401 目标 / 18658 事件 / 18MB**。同机、同 Node `v26.7.0`、同入口 `dist/bin/dsh-graph.mjs`，
+`spawnSync` 全进程耗时，每项 **n=21**（median / p95 / min / max，单位 ms）：
 
-**如实报告**：在 18404 条事件的超大看板上，`status` 的 best 为 142ms、median 148ms，
-**超过 100ms**。未通过降低判据或改写口径来掩盖；成本结构如下（均为实测分项）：
+| 版本 | median | p95 | min | max | 判据（<100ms） |
+| --- | --- | --- | --- | --- | --- |
+| **优化前** `a93216f` | 158.3 | 169.8 | 151.5 | 170.5 | ❌ 未达标 |
+| **优化后**（索引命中） | **83.9** | **96.2** | 75.6 | 97.2 | ✅ 达标 |
+| 优化后（强制无索引、每次清缓存） | 188.9 | 200.7 | 180.6 | 203.7 | ❌（对照，见下） |
 
-- Node 启动 ≈20ms（不可压缩）；
-- `core/ops.ts` 冷加载 ≈41ms（判据 3 要求复用 core，其模块图含 `yaml` 等，CLI 不得绕开）；
-- root 定位（含一次 `git` 子进程）≈16ms；
-- 看板计算：事件流逐行校验 ≈34ms（18404 行）+ 目标枚举/配置解析 ≈30ms。
+**小看板（12 目标 / 49 事件）**：优化前 median 65.9 / p95 72.8；优化后 median 65.4 / p95 78.7
+（p95 的差异在噪声范围内：小看板本来就不是瓶颈，索引命中省下的时间淹没在启动抖动里）。
 
-即 `status` 的耗时**随事件流线性增长**：事件流越大越慢，与「启动」无关。
-小看板（典型用户场景）为 76ms，已达标；大看板未达标是**数据规模**导致的，
-不是可再压缩的实现缺陷（`goal list`/`goal show` 在同样大看板上分别为 92/90ms，
-已是「加载 ops 41ms + 实际计算」的下限结构）。
+> **「强制无索引」一行是诚实的边界**：索引缺失时 `status` 仍会全量校验（这是 fail-safe 的一部分，
+> 见 `docs/events-index-g630.md`）。首次运行、缓存被系统清理、或切换 `DSH_GRAPH_CACHE_HOME` 后，
+> 会付一次全量成本；之后命中。
 
-后续若需在超大看板上达标，可选路径（本次未做，留给后续目标）：
-为 `events.jsonl` 建增量索引（apex count + 末事件指针），使 `status` 不再线性扫全量事件流。
+成本结构（优化后，实测分项）：Node 启动 ≈20ms（不可压缩）；`core/root.ts` + locate ≈30ms；
+`core/cli/diagnostics.ts` 加载 ≈13ms；`collectStatus` 本体 ≈13ms（其中事件流已从
+整档 `readFileSync` + 逐行 JSON 解析的 ≈36ms 降为 O(1) 探测 ≈1ms）。
+`core/ops.ts`（≈69ms）改为**按需**加载——只用于 project.yaml 的畸形判定。
 
-> 复现：`node --test core/tests/g314-dsh-graph.test.ts`；手工粗测
-> `for i in $(seq 1 30); do /usr/bin/time -f %e node dist/bin/dsh-graph.mjs status >/dev/null; done`
+### g-630：事件流增量索引（判据 2 的达标路径）
+
+旧实现在大看板上线性扫全量事件流；g-630 引入**增量索引**（`core/cli/events-index.ts`），
+按 `size + inode + 头部指纹` 判定「未变 / 纯追加 / 截断 / 改写 / 替换」，只有前两者才给数，
+其余一律 fail-safe 回退 `core.readEvents` 全量校验并给出可读告警。
+索引落在**用户缓存目录**（`$XDG_CACHE_HOME/dsh-graph/`，可用 `DSH_GRAPH_CACHE_HOME` 覆盖），
+**不写 `.dsh-graph`、不写源码树**，是纯缓存（可随时删除）。
+设计与失效策略见 [`docs/events-index-g630.md`](events-index-g630.md)；测试见
+`core/tests/g630-events-index.test.ts`（22 用例，含 3 组真源码副本反向变异）。
 
 **为什么 `info`/`version` 快**：入口只静态依赖 node 内置模块与 `core/root.ts`；
 `info` 走轻量 `core/cli/health.ts`（stat 级探针 + 只读 1 字节确认），

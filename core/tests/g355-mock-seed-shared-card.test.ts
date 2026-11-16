@@ -39,11 +39,12 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
@@ -202,6 +203,13 @@ test("g-355 B 负向对照：卡片定位回退到 goal 自有目录 ⇒ seed �
     for (const f of readdirSync(join(REPO, "core"))) {
       if (f.endsWith(".ts")) cpSync(join(REPO, "core", f), join(mirror, "core", f));
     }
+    // g-630：ops.ts 现在经 `./cli/goal-files.ts` 转调目标文件枚举/读取的**唯一实现**（相对导入），
+    // 镜像必须一并复制 `core/cli/*.ts`（只需非测试的模块文件），否则镜像里的 ops.ts 在 import 期
+    // 就 ERR_MODULE_NOT_FOUND，负向断言的错误签名会被掩盖。只补依赖，不放宽任何裁决。
+    cpSync(join(REPO, "core", "cli"), join(mirror, "core", "cli"), {
+      recursive: true,
+      filter: (src) => !src.includes(`${sep}tests${sep}`) && (statSync(src).isDirectory() || src.endsWith(".ts")),
+    });
     // g-496：core 现在会在**模块加载期**读取提示词正文资产（`attempt-report-skeleton.<lang>.md` 等），
     // 按模块位置解析 ⇒ 本镜像的 `core/ops.ts` 走源形态 `../prompts/`（**公共层**，位于 core 同级）。
     // 必须把 prompts 一并复制，否则 seed 会在 import 期 fail-closed 抛错（错误签名变成
