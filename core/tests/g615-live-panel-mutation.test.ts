@@ -273,6 +273,19 @@ test("g-615 M9（正向说明性用例，非反向对照）：只删 alive 守�
   // 如实记录 alive 缺失的可观测痕迹：迟到写入把画面从 MSG_B 打回「读取中…」（token 守卫否掉脏 state）。
   assert.doesNotMatch(mut.afterLate, /MSG_B/,
     `只删 alive 时迟到写入应留下可观测痕迹（画面从 B 的基线退化），实得 ${JSON.stringify(mut.afterLate)}`);
+
+  // 【att-004 补】NO_TOKEN 四态在此之前只存在于文档与探针里，仓库内无用例 ⇒ 无回归保护。
+  // 用同一真迟到时序固化它。如实定性：画面仍是 MSG_B **不等于** token 守卫有效 ——
+  // storedState 本来就属于 B，token 不匹配与否都画出同一个 B，**没有可泄漏的内容**。
+  // 因此这条断言的是「单删 token 在真迟到下也无泄漏」，不是「token 守卫有判别力」；
+  // 判据 3 的可归属反向证据仍只由 M2（双删）承担。
+  const tokenless = dropTokenGuard(production, "M9b");
+  assert.notEqual(tokenless, production, "M9b 必须真的删掉了 token 守卫");
+  const noTok = await run(tokenless, "M9b");
+  assert.match(noTok.baseline, /MSG_B/, `只删 token：基线仍应为 B（实得 ${JSON.stringify(noTok.baseline)}）`);
+  assert.doesNotMatch(noTok.afterLate, /MSG_A/,
+    `只删 token 后迟到数据仍不得出现（实得 ${JSON.stringify(noTok.afterLate)}）—— `
+      + "storedState 本就属于 B，无可泄漏内容；若这里出现 MSG_A 说明结论需重新判定");
 });
 
 test("g-615 M10：mutation 跳过健康态前置时，「永远 loading、A 永不可见」的变异体也必须变红", async () => {

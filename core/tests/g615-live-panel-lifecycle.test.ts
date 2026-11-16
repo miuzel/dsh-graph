@@ -221,7 +221,8 @@ test("g-615 C3：旧身份响应后到不得覆盖新身份（真延迟注入 + 
   view.flush();
   // 乱序：即使旧 A 的响应迟到（宿主忽略 abort 仍回包），也不得写入看板。
   // （abort 只置标记不 reject ⇒ 这次 resolve **真的**驱动了组件里 await 之后的代码；
-  //   无守卫时它会写进看板 —— 见 mutation.test.ts M9 的正向差分证明。）
+  //   无守卫时它会写进看板 —— 反向证据见 mutation.test.ts **M2**（双删 alive+token 必泄漏 MSG_A）。
+  //   注意 M9 只删 alive 时**不**泄漏（写入被渲染期 token 守卫否掉），故 M9 是说明性用例，不是本判据的反向证据。）
   aCall.resolve({ ok: true, value: { records: [recFor("A")] } });
   await flushMicro();
   const mid = view.flush();
