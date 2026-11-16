@@ -85,11 +85,61 @@ function rejectSymlinkRoot(root: string): string {
   } catch (e: any) { if (e?.message === "graph root symlink is not allowed") throw e; }
   return root;
 }
+/**
+ * 核心资料目录**默认名**（g-632 B：唯一字面量真源）。
+ *
+ * g-632 裁决：不同 harness 中用户应能按项目修改核心资料目录名（如 `board-a`、`boards/main`）。
+ * 约定（不新增配置通道）：
+ * - **插件侧**沿用既有 `config.root`（profile 配置 / `--patch` overlay）：相对值即以 workspace 为基准的
+ *   目录名（可含子目录），绝对值为管理员覆盖 —— 与 `resolveRoot` 旧语义逐字一致；
+ * - **CLI 侧**沿用既有 `--root`；
+ * - **服务侧**必须显式给出完整 graphRoot（`serve --root <abs>`）：服务不猜 cwd；
+ * - 未给出时**一律**回落本常量 ⇒ 现有用户零迁移。
+ */
+export const DEFAULT_GRAPH_DIR_NAME = ".dsh-graph";
+
+/**
+ * 相对 root 形态的**目录名校验**（g-632 B）：只接受工作区内的普通相对路径段。
+ * 拒绝绝对路径（那是管理员覆盖，需显式语义）、`..`、空段与 NUL —— 自定义名不得把看板
+ * 根移出工作区（跨看板隔离与路径越界防线的**第一道**）。
+ */
+export function assertGraphDirName(name: string): string {
+  const raw = String(name ?? "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  if (raw === "") throw new Error("graph 目录名不能为空（默认 .dsh-graph）");
+  if (raw.includes("\0")) throw new Error("graph 目录名不得包含 NUL");
+  if (isAbsolute(raw) || /^[A-Za-z]:\//.test(raw)) {
+    throw new Error(`graph 目录名必须是工作区内的相对路径（绝对路径请走显式 graphRoot 覆盖）：${name}`);
+  }
+  const segments = raw.split("/");
+  if (segments.some((s) => s === "" || s === "." || s === "..")) {
+    throw new Error(`graph 目录名不得包含空段 / . / ..（越界防线）：${name}`);
+  }
+  return segments.join("/");
+}
+
+/**
+ * 相对 root 形态（配置给出则校验，未给出用默认名）。
+ *
+ * 「未给出」的口径：`undefined` / `null` / **空串**（与 config.root 既有的「空即未给」一致，
+ * 保证零迁移）。**纯空白串不是未给出** —— 它是明显的配置错误，必须 fail-closed 而不是静默
+ * 回落默认名（否则 `root: "  "` 会悄悄读默认看板）。
+ */
+export function relativeGraphDirName(config?: { root?: string } | null): string {
+  const raw = config?.root;
+  if (raw === undefined || raw === null) return DEFAULT_GRAPH_DIR_NAME;
+  if (typeof raw !== "string") throw new Error(`graph 目录名必须是字符串：${String(raw)}`);
+  if (raw === "") return DEFAULT_GRAPH_DIR_NAME;
+  return assertGraphDirName(raw);
+}
+
 export function resolveRoot(
   config?: { root?: string } | null,
   workspaceRoot: string = process.cwd(),
 ): string {
-  return rejectSymlinkRoot(resolve(workspaceRoot, config?.root ?? ".dsh-graph"));
+  const raw = config?.root;
+  // 管理员覆盖：**绝对** config.root 原样生效（g-112 既有语义，逐字保留）。
+  if (typeof raw === "string" && raw !== "" && isAbsolute(raw)) return rejectSymlinkRoot(resolve(raw));
+  return rejectSymlinkRoot(resolve(workspaceRoot, relativeGraphDirName(config)));
 }
 
 /** Git discovery metadata returned by `discoverGitWorktree`. */
@@ -374,7 +424,7 @@ export function resolveCanonicalRoot(
     };
   }
 
-  const relRoot = rawRoot ?? ".dsh-graph";
+  const relRoot = relativeGraphDirName(config);
   const ttlMs = options?.ttlMs ?? DEFAULT_CANONICAL_CACHE_TTL_MS;
   const cacheKey = `${workspace}::${relRoot}`;
 

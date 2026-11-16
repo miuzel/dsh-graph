@@ -65,6 +65,9 @@ const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读
 
 选项：
   --root <path>    显式指定 graph root（绝对路径，或相对当前目录的路径）
+  --graph-dir-name <name>
+                   核心资料目录名（项目级自定义；默认 .dsh-graph，可含子目录如 boards/main）。
+                   与 --root 互斥；只影响定位，不改变解析语义（worktree 归一/symlink 拒收不变）
   --json           机器可读 JSON 输出
   --all, -a        goal list 包含归档目标
   --full           sync 不折叠目标列表（默认单次最多列 40 个）
@@ -75,8 +78,8 @@ const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读
   --version, -V    显示版本
 
 路径定位：
-  默认从当前目录向上查找 .dsh-graph；找不到即报「非工作区」并非零退出，
-  不会回落到用户全局配置（$DSH_HOME / ~/.dsh）。
+  默认从当前目录向上查找 .dsh-graph（可用 --graph-dir-name 改成项目自己的目录名）；
+  找不到即报「非工作区」并非零退出，不会回落到用户全局配置（$DSH_HOME / ~/.dsh）。
 
 退出码：
   0 成功 / 1 运行期失败（非工作区、未初始化、目标不存在、损坏配置、sync/claim/submit 的可判定失败） / 2 用法错误
@@ -86,9 +89,17 @@ sync（g-315）：
   workspace 根的 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（<!-- dsh-graph:sync:begin/end -->）。
   区段外字节级不动；无标记时追加到末尾；无变更不写；有变更原子写；失败不写任何文件。
 
-serve（g-623）：
+serve（g-623 / g-632）：
   独立本地服务：**同一进程**同时提供 Web 静态入口（/）、Web API（/api/…）与 localhost MCP
-  endpoint（POST /mcp）。只读 MVP：只注册只读查询与安全附件引用，没有任何写/执行/人工审批路由。
+  endpoint（POST /mcp）。**默认只读**：只注册只读查询与安全附件引用，没有任何写/执行/人工审批路由。
+  写模式（g-632 A）：仅由服务端显式 serve --allow-write（或 serve init --allow-write）开启，
+  写进服务私有运行配置，serve status 可查并写开关审计；**请求参数永远不能开启它**
+  （allowWrite / writeMode / mode 等在认证层按保留参数拒绝）。开启后 MCP 增加执行类写工具
+  （创建目标/登记判据/迁移非 delivered 状态/卡片/附件/记忆/设置等，actor 固定 mcp:local-service），
+  但 graph_resolve_accept、transition → delivered、graph_claim_supervisor、graph_start_attempt
+  **仍 fail-closed**（人工裁决与主管身份/执行派发保留给本地 GUI 与宿主会话）。
+  核心资料目录名（g-632 B）：serve init --root <绝对 ws> --graph-dir-name board-a（默认 .dsh-graph）；
+  服务侧始终使用显式绝对路径，绝不从 cwd 猜。
   只绑定数值回环 127.0.0.1（拒绝 0.0.0.0 / :: / LAN / 主机名），每个请求校验实际 peer、Host
   与 Origin；MCP 每请求先验 token 再解析业务，token 只经 Authorization: Bearer 传递。
   graphRoot（--root，只读看板）与 executionWorkspace（--workspace，执行目录）**显式分离**。
@@ -181,7 +192,8 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
   // 其余命令都需要定位 graph root。
   let located;
   try {
-    located = locateGraphRoot({ cwd: ctx.cwd, root: args.root });
+    // g-632 B：`--graph-dir-name` 决定「向上查找哪个目录名」以及 `--root <ws>` 时的补齐名。
+    located = locateGraphRoot({ cwd: ctx.cwd, root: args.root, dirName: args.graphDirName });
   } catch (e) {
     if (e instanceof LocateError) return failure(e.message);
     return failure((e as Error).message);

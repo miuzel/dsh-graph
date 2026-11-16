@@ -25,8 +25,9 @@ import {
   writeRuntimeConfig,
   type RuntimeConfig,
 } from "./config.ts";
-import { CredentialStore, CredentialError, TOKEN_FILE_NAME } from "./credentials.ts";
+import { CredentialStore, CredentialError, TOKEN_FILE_NAME, appendPrivateFile } from "./credentials.ts";
 import { ALLOWED_BIND_HOST, validateBindHost } from "./policy.ts";
+import { assertGraphDirName } from "../root.ts";
 import { startService, type RunningService } from "./server.ts";
 
 export const EXIT_OK = 0;
@@ -43,6 +44,20 @@ export interface ServeArgs {
   stateDir?: string;
   port?: number;
   host?: string;
+  /**
+   * g-632 B：核心资料目录名（`serve init --graph-dir-name board-a --root <abs ws>`）。
+   *
+   * 服务侧仍需**完整 graphRoot**：这里只允许 `--root` 指向 workspace，再由显式目录名补齐；
+   * 目录名本身绝不从 cwd 猜。给出 `--graph-dir-name` 时 `--root` 视为 workspace 根。
+   */
+  graphDirName?: string;
+  /**
+   * g-632 A：`--allow-write`（服务端**显式**开启 MCP 写模式）。
+   * - 与 `--root` / `--workspace` 一样是**启动/初始化动作**，写进运行配置；
+   * - 单次请求参数（MCP/Web）**永远**不能开启它（见 `mcp.RESERVED_PARAM_KEYS`）。
+   * - 缺省 undefined = 未指定（沿用既有运行配置），false = 显式关闭。
+   */
+  allowWrite?: boolean;
 }
 
 export class ServeUsageError extends Error {}
@@ -57,7 +72,10 @@ export function parseServeArgs(argv: string[]): ServeArgs {
   const action: ServeArgs["action"] = (verb as ServeArgs["action"]) ?? "serve";
   // 动作词**只**在其作为动作出现时移除：`--state-dir <含 "init" 的路径>` 这类取值不受影响
   // （取值不是独立 token 的话不会命中 ACTIONS；若真命中，`--opt` 取值优先判定仍保持成对）。
-  const rest = argv.filter((a, i) => !((ACTIONS as readonly string[]).includes(a) && argv[i - 1]?.startsWith("--") !== true));
+  // g-632 A：取值可能是动作词的选项（`--graph-dir-name serve`）同样不当动作词。
+  const VALUE_FLAGS = new Set(["--root", "--workspace", "--state-dir", "--port", "--host", "--graph-dir-name"]);
+  const isValueToken = (i: number) => VALUE_FLAGS.has(argv[i - 1] ?? "");
+  const rest = argv.filter((a, i) => !((ACTIONS as readonly string[]).includes(a) && !isValueToken(i)));
   const out: ServeArgs = { action };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
@@ -89,6 +107,20 @@ export function parseServeArgs(argv: string[]): ServeArgs {
       case "--host":
         out.host = take();
         break;
+      case "--graph-dir-name":
+        out.graphDirName = take();
+        break;
+      case "--allow-write":
+        // 布尔开关：拒绝 `--allow-write=false` 这类取值形态（不解析字符串真值，避免歧义）。
+        if (inline !== undefined) {
+          throw new ServeUsageError(`--allow-write 不接受取值（关闭写模式请省略该选项）：${inline}`);
+        }
+        out.allowWrite = true;
+        break;
+      case "--no-allow-write":
+        if (inline !== undefined) throw new ServeUsageError(`--no-allow-write 不接受取值：${inline}`);
+        out.allowWrite = false;
+        break;
       default:
         throw new ServeUsageError(`未知选项：${flag}`);
     }
@@ -107,6 +139,20 @@ export function parseServeArgs(argv: string[]): ServeArgs {
   return out;
 }
 
+/**
+ * g-632 B：服务侧 graphRoot 的**唯一**解析点（显式、不猜 cwd）。
+ *
+ * - 未给 `--graph-dir-name`：`--root` 就是看板目录本身（g-623 语义逐字不变）；
+ * - 给了 `--graph-dir-name <name>`：`--root` 视为**workspace 根**，看板目录 = `<root>/<name>`。
+ *   目录名先过 `assertGraphDirName`（拒绝绝对路径 / `..` / 空段 ⇒ 路径穿越负向对照）。
+ */
+export function resolveGraphRootExplicit(args: ServeArgs): string {
+  if (!args.root) throw new ServeUsageError("需要 --root <绝对路径>");
+  if (!args.graphDirName) return resolve(args.root);
+  const name = assertGraphDirName(args.graphDirName);
+  return resolve(args.root, name);
+}
+
 /** 解析状态目录：显式 --state-dir 优先；否则 HOME 下的默认落点（绝不写进 graphRoot）。 */
 export function resolveStateDir(args: ServeArgs, env: { HOME?: string; XDG_STATE_HOME?: string } = process.env): string {
   if (args.stateDir) {
@@ -123,6 +169,7 @@ export interface InitResult {
   tokenCreated: boolean;
   tokenFingerprint: string;
   graphInitialized: boolean;
+  allowWrite: boolean;
   config: RuntimeConfig;
 }
 
@@ -135,7 +182,8 @@ export function initService(args: ServeArgs, env: NodeJS.ProcessEnv = process.en
   if (!isAbsolute(args.root) || !isAbsolute(args.workspace)) {
     throw new ServeUsageError("--root 与 --workspace 必须是绝对路径（不得按进程 cwd 猜测）");
   }
-  assertSeparatedRoots(args.root, args.workspace);
+  const graphRoot = resolveGraphRootExplicit(args);
+  assertSeparatedRoots(graphRoot, args.workspace);
   const stateDir = resolveStateDir(args, env);
   const store = new CredentialStore({ stateDir });
   const opened = store.open();
@@ -143,17 +191,20 @@ export function initService(args: ServeArgs, env: NodeJS.ProcessEnv = process.en
     version: 1,
     bindAddress: ALLOWED_BIND_HOST,
     port: args.port ?? 0,
-    graphRoot: resolve(args.root),
+    graphRoot,
     executionWorkspace: resolve(args.workspace),
     contractVersion: SERVICE_CONTRACT_VERSION,
     storageProfile: STORAGE_PROFILE,
+    allowWrite: args.allowWrite === true,
   };
   writeRuntimeConfig(stateDir, config);
+  auditWriteMode(stateDir, config.allowWrite === true, "init", env);
   return {
     stateDir,
     tokenCreated: opened.created,
     tokenFingerprint: opened.fingerprint,
     graphInitialized: isGraphInitialized(config.graphRoot),
+    allowWrite: config.allowWrite === true,
     config,
   };
 }
@@ -164,6 +215,10 @@ export interface ServiceStatus {
   tokenPresent: boolean;
   tokenFingerprint: string;
   graphInitialized: boolean;
+  /** g-632 A：写模式是否开启（`serve status` 必须可见）。未初始化时为 false。 */
+  allowWrite: boolean;
+  /** 写模式一句话说明（人类可读，不含秘密）。 */
+  writeMode: string;
   config: RuntimeConfig | null;
 }
 
@@ -188,12 +243,17 @@ export function serviceStatus(args: ServeArgs, env: NodeJS.ProcessEnv = process.
   } catch {
     config = null;
   }
+  const allowWrite = config?.allowWrite === true;
   return {
     stateDir,
     initialized: existsSync(runtimeConfigPath(stateDir)) && tokenPresent,
     tokenPresent,
     tokenFingerprint: fingerprint,
     graphInitialized: config ? isGraphInitialized(config.graphRoot) : false,
+    allowWrite,
+    writeMode: allowWrite
+      ? "allow-write：MCP 执行类写工具已开启（actor=mcp:local-service）；人工裁决与主管/派发仍 fail-closed"
+      : "read-only：MCP 只注册只读查询工具（写工具未注册）；需要写入请由服务端显式启动 `serve --allow-write`",
     config,
   };
 }
@@ -218,6 +278,19 @@ export async function runServe(
     io.err(`错误：${e?.message ?? e}\n`);
     return { exitCode: EXIT_FAILURE };
   }
+  // g-632 A：写模式的**唯一开关点**。只接受服务端显式动作：
+  //   · `serve --allow-write` / `serve --no-allow-write`（本次进程，并回写运行配置）；
+  //   · 否则沿用运行配置（`serve init --allow-write` 写入）。请求参数永远影响不到这里。
+  let allowWrite = config.allowWrite === true;
+  if (args.allowWrite === true && !allowWrite) {
+    allowWrite = true;
+    writeRuntimeConfig(stateDir, { ...config, allowWrite: true });
+    auditWriteMode(stateDir, true, "serve", env);
+  } else if (args.allowWrite === false && allowWrite) {
+    allowWrite = false;
+    writeRuntimeConfig(stateDir, { ...config, allowWrite: false });
+    auditWriteMode(stateDir, false, "serve", env);
+  }
   // 显式参数（如 --port 覆盖）优先，但仍受绑定策略约束。
   const host = args.host ?? config.bindAddress;
   const verdict = validateBindHost(host);
@@ -233,6 +306,7 @@ export async function runServe(
       stateDir,
       port: args.port ?? config.port,
       host,
+      allowWrite,
       audit: (line) => io.err(`[audit] ${line}\n`),
     });
   } catch (e: any) {
@@ -241,12 +315,16 @@ export async function runServe(
   }
   io.out(
     [
-      `dsh-graph 本地只读服务已启动：${service.origin}`,
+      `dsh-graph 本地${allowWrite ? "服务（写模式已开启）" : "只读服务"}已启动：${service.origin}`,
       `  Web App   ${service.origin}/`,
       `  Web API   ${service.origin}/api/…（同 origin 会话 Cookie）`,
       `  MCP       ${service.origin}/mcp（Authorization: Bearer <token>）`,
       `  graphRoot          ${config.graphRoot}${isGraphInitialized(config.graphRoot) ? "" : "（未初始化：只读查询将报 E_NOT_INITIALIZED，本服务不会自动 init/claim）"}`,
       `  executionWorkspace ${config.executionWorkspace}`,
+      allowWrite
+        ? "  写模式             ON（--allow-write）：MCP 执行类写工具可达，actor=mcp:local-service；" +
+          "graph_resolve_accept / transition→delivered / claim_supervisor / start_attempt 仍 fail-closed"
+        : "  写模式             OFF（默认只读）：MCP 只注册只读查询工具；开启需服务端显式 --allow-write",
       `  token 指纹 ${service.tokenFingerprint}（完整 token 在服务私有状态目录的凭据文件中，未打印）`,
       "",
     ].join("\n"),
@@ -266,6 +344,26 @@ export async function runServe(
   return { exitCode: EXIT_OK, service };
 }
 
+/**
+ * g-632 A：**写模式开关审计**（开启/关闭都留痕）。
+ *
+ * 写入服务自有状态目录下的 `write-mode-audit.jsonl`（非 graph 数据、非 token）：
+ * `{ts, action, allowWrite, stateDir}`。只登记开关动作本身，不含任何请求内容或秘密；
+ * 追加失败不阻断服务启动（审计是旁路，不是门禁）——失败时由调用方 stderr 已打印。
+ */
+export const WRITE_MODE_AUDIT_FILE = "write-mode-audit.jsonl";
+
+export function auditWriteMode(stateDir: string, allowWrite: boolean, action: "init" | "serve", env?: NodeJS.ProcessEnv): void {
+  void env;
+  try {
+    const line = JSON.stringify({ ts: new Date().toISOString(), action, allowWrite, pid: process.pid }) + "\n";
+    // 同一行追加（不建第二真源：交由 credentials 的私有写入口保证 0600）。
+    appendPrivateFile(join(stateDir, WRITE_MODE_AUDIT_FILE), line);
+  } catch {
+    /* 审计旁路：不阻断启动 */
+  }
+}
+
 /** 卸载：只删除本服务自有的运行配置与凭据；**graph 数据不动**。 */
 export function uninstallService(
   args: ServeArgs,
@@ -280,7 +378,8 @@ export function uninstallService(
   } catch {
     graphRoot = null;
   }
-  for (const name of [TOKEN_FILE_NAME, RUNTIME_CONFIG_NAME]) {
+  // g-632 A：写模式开关审计文件也是**本服务自有**状态，与凭据/运行配置一并清理（graph 数据不动）。
+  for (const name of [TOKEN_FILE_NAME, RUNTIME_CONFIG_NAME, WRITE_MODE_AUDIT_FILE]) {
     const file = join(stateDir, name);
     if (!existsSync(file)) continue;
     const st = lstatSync(file);

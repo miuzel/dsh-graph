@@ -36,7 +36,8 @@ import {
   queryEvents,
   type ServiceContext,
 } from "./queries.ts";
-import { handleMcpRequest, parseBearer } from "./mcp.ts";
+import { handleMcpRequest, listToolDescriptors, parseBearer } from "./mcp.ts";
+import { MCP_WRITE_ACTOR } from "./write-commands.ts";
 import { STATIC_ROUTES } from "./web-app.ts";
 
 /** Web 会话 Cookie 名（HttpOnly + SameSite=Strict；本地 HTTP 下不设 Secure，避免 http:// 被拒收）。 */
@@ -54,6 +55,11 @@ export interface ServiceOptions {
   port?: number;
   /** 绑定地址（只接受 127.0.0.1）。 */
   host?: string;
+  /**
+   * g-632 A：MCP 写模式（默认关闭）。**只能**由服务端启动入口（`serve --allow-write` / 运行配置）传入，
+   * 不存在任何「请求参数 / Header / session」能把它翻成 true 的通道。
+   */
+  allowWrite?: boolean;
   /** 注入的随机源（测试）。 */
   secretFactory?: (bytes: number) => string;
   /** 审计日志接收器（**只**允许脱敏后的事件文本；默认丢弃）。 */
@@ -77,6 +83,8 @@ export interface RunningService {
   close(): Promise<void>;
   credentials: CredentialStore;
   sessions: WebSessionStore;
+  /** g-632 A：本次进程实际生效的写模式（只读自省，与启动配置一致）。 */
+  writeMode: { enabled: boolean; actor: string };
   /** 只读自省（测试/诊断）：请求计数与拒绝原因分布。 */
   stats(): { total: number; rejected: Record<string, number> };
 }
@@ -175,6 +183,8 @@ export async function startService(opts: ServiceOptions): Promise<RunningService
   const opened = credentials.open();
   const sessions = new WebSessionStore({ secretFactory: opts.secretFactory });
   const ctx: ServiceContext = { graphRoot: opts.graphRoot, executionWorkspace: opts.executionWorkspace };
+  // g-632 A：写模式取自**启动配置**（缺省=false）。此处之后没有任何代码路径会修改它。
+  const writeMode = Object.freeze({ enabled: opts.allowWrite === true });
   const audit = opts.audit ?? (() => {});
   const stats = { total: 0, rejected: {} as Record<string, number> };
   const noteReject = (code: string) => {
@@ -210,7 +220,7 @@ export async function startService(opts: ServiceOptions): Promise<RunningService
         }
         const bodyText = await readBodyCapped(req);
         const out = handleMcpRequest(
-          { ...ctx, authenticate: (t) => credentials.verify(t) },
+          { ...ctx, authenticate: (t) => credentials.verify(t), writeMode },
           {
             authorization: headerValue(req.headers as any, "authorization"),
             query: url.searchParams,
@@ -297,6 +307,7 @@ export async function startService(opts: ServiceOptions): Promise<RunningService
     tokenFingerprint: opened.fingerprint,
     credentials,
     sessions,
+    writeMode: { enabled: writeMode.enabled, actor: writeMode.enabled ? MCP_WRITE_ACTOR : "" },
     rotateToken() {
       const r = credentials.rotate();
       sessions.revokeAll(); // 轮换 ⇒ 旧 Web 会话立即撤销
@@ -451,8 +462,18 @@ export const WEB_API_ROUTES: readonly string[] = Object.freeze([
   "/api/events",
 ]);
 
-/** 白名单命令名（供 self-check 断言 MCP 与 Web 同源）。 */
+/**
+ * 白名单命令名（供 self-check 断言 MCP 与 Web 同源）。
+ *
+ * g-632 A：这是**只读**名单（Web API 与「未开启写模式」时的 MCP 都只认它）。
+ * 写模式开启后 MCP 另有 `WRITE_MODE_COMMANDS`；两者边界见 `write-commands.ts`。
+ */
 export const SERVICE_TOOL_NAMES: readonly string[] = READ_ONLY_COMMANDS.map((c) => c.name);
+
+/** 当前写模式下实际已注册的 MCP 工具名（关闭时恰为只读名单，与 g-623 逐项一致）。 */
+export function serviceToolNamesFor(writeMode?: { enabled?: boolean } | null): readonly string[] {
+  return listToolDescriptors(writeMode ? { writeMode } : null).map((t) => t.name);
+}
 
 /** 稳定指纹辅助（诊断用；不暴露原文）。 */
 export function fingerprintOf(secret: string): string {

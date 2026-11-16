@@ -20,7 +20,8 @@
 **最新亮点（v1.0.0）**
 
 - **命令行工具 `dsh-graph`**：`info` / `status` / `goal` / `version` 只读查询，`sync` 投影常驻事实与目标概览到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，`claim` 认领目标并注入判据，`submit` 跑全量自检后把成果闭环到看板。命令原称 `dsh-cli`，本版统一为 `dsh-graph`，不保留旧名。
-- **独立本地只读服务**：`dsh-graph serve` 在同一进程提供 Web 页面、Web API 与 localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。MVP 只暴露只读查询，写/审批类能力在该入口**根本不存在**。
+- **独立本地服务**：`dsh-graph serve` 在同一进程提供 Web 页面、Web API 与 localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。**默认只读**：MCP 只注册只读查询，写工具根本不注册；需要外部宿主经 MCP 改看板时，由服务端显式 `serve --allow-write` 开启执行类写工具（固定 actor `mcp:local-service`，开关状态见 `serve status` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管/派发**永远** fail-closed，仍需人在本地看板完成。详见 [docs/g632-write-mode-and-custom-root.md](docs/g632-write-mode-and-custom-root.md)。
+- **核心资料目录名可按项目自定义**：默认仍是 `.dsh-graph`（零迁移）；插件用既有 `config.root`、CLI 用 `--graph-dir-name`、服务用 `serve init --graph-dir-name` 指向自定义名（如 `board-a`、`boards/main`）。自定义名只接受工作区内规整相对路径，`..` / 绝对路径一律拒绝；worktree 归属与跨看板隔离不受影响。
 - **大看板 `status` 提速约 2 倍**：事件流增量索引让 18750 事件看板的中位耗时从约 179ms 降到约 89ms；索引以大小 + inode + 头部指纹三重校验，截断/改写/替换一律回退全量并告警，绝不返回错误计数。
 - **宿主支持面收窄**：`engines.dsh` 与 peer 一并改为 `>=0.2.2-rc.3 <0.2.3-0`，删除仅为更早宿主保留的兼容分支。**`0.2.2-rc.1` / `rc.2` 及更早版本将无法安装**，本版不提供版本豁免；升级说明见 [docs/host-compat-v0.25.0.md](docs/host-compat-v0.25.0.md)。
 - **测试分层**：日常回归层（`shakedown`，约 49s）⊊ `integration` ⊊ `full` ⊊ `everything`（全量约 96s）；安全/鉴权/隔离/门禁自证类测试强制留在日常层。发布门禁仍是无参全量。

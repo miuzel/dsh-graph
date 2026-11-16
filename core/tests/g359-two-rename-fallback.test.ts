@@ -84,7 +84,8 @@ const FALLBACK_RE = /退回两次 rename/;
 //   mcp/server/serve 共 +8）⇒ 97 + 8 = 105。
 // g-630: 事件流增量索引 dist/core/cli/events-index.js（+1）与目标文件轻量叶子模块
 //   dist/core/cli/goal-files.js（+1）⇒ 105 + 2 = 107。
-const DIST_FILE_COUNT = 107;
+// g-632: MCP 写模式白名单 dist/core/service/write-commands.js（+1）⇒ 107 + 1 = 108。
+const DIST_FILE_COUNT = 108;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）

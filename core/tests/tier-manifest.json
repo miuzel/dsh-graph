@@ -182,6 +182,7 @@
         "g627-host-compat-narrowing.test.ts",
         "g628-resumed-care-effects.test.ts",
         "g629-tier-manifest.test.ts",
+        "g632-write-mode-and-custom-root.test.ts",
         "goal-markdown.test.ts",
         "goal-type.test.ts",
         "guide-injection.test.ts",
@@ -447,7 +448,8 @@
         "g611-private-workspace-isolation.test.ts",
         "g623-service-e2e.test.ts",
         "g623-service-security.test.ts",
-        "g623-service.test.ts"
+        "g623-service.test.ts",
+        "g632-write-mode-and-custom-root.test.ts"
       ]
     },
     "isolation": {
@@ -461,6 +463,7 @@
         "g448-cross-board-worktree-ownership.test.ts",
         "g449-cross-board-clean-ownership.test.ts",
         "g611-private-workspace-isolation.test.ts",
+        "g632-write-mode-and-custom-root.test.ts",
         "worktree-isolation-g283.test.ts"
       ]
     },

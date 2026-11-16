@@ -12,16 +12,21 @@
  */
 import { existsSync, lstatSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { resolveCanonicalRoot, type CanonicalRootResult } from "../root.ts";
+import { DEFAULT_GRAPH_DIR_NAME, relativeGraphDirName, resolveCanonicalRoot, type CanonicalRootResult } from "../root.ts";
 
-/** 看板目录名（与 core 的默认相对 root 一致；此处仅用于「向上查找」定位，不参与解析语义）。 */
-export const GRAPH_DIR_NAME = ".dsh-graph";
+/** 看板目录名（**默认值**；g-632 B 起按项目可配，见 `LocateOptions.dirName`）。 */
+export const GRAPH_DIR_NAME = DEFAULT_GRAPH_DIR_NAME;
 
 export interface LocateOptions {
   /** 起始目录（默认 process.cwd()）。 */
   cwd?: string;
   /** 显式 `--root` 值（绝对或相对起始目录）；null/undefined 表示向上查找。 */
   root?: string | null;
+  /**
+   * g-632 B：核心资料目录名（项目级自定义；工作区内相对路径，默认 `.dsh-graph`）。
+   * 只在 `--root` 未给出时参与「向上查找」，以及 `--root` 指向 workspace（而非看板目录本身）时的补齐。
+   */
+  dirName?: string | null;
 }
 
 export interface LocateResult {
@@ -73,10 +78,10 @@ export function isPathWithin(parent: string, child: string): boolean {
  * 从 `start` 向上查找最近含 `.dsh-graph` 目录的祖先（含 `start` 自身）。
  * 返回该祖先目录（workspace 起点）；未找到返回 null。
  */
-export function findGraphWorkspace(start: string): string | null {
+export function findGraphWorkspace(start: string, dirName: string = GRAPH_DIR_NAME): string | null {
   let cur = resolve(start);
   for (;;) {
-    if (isDir(join(cur, GRAPH_DIR_NAME))) return cur;
+    if (isDir(join(cur, dirName))) return cur;
     const parent = dirname(cur);
     if (parent === cur) return null; // 已到文件系统根
     cur = parent;
@@ -142,6 +147,13 @@ function assertNotSymlinkedGraphRoot(abs: string): void {
 export function locateGraphRoot(opts: LocateOptions = {}): LocateResult {
   const cwd = resolve(opts.cwd ?? process.cwd());
   const rawRoot = opts.root ?? null;
+  // g-632 B：目录名先过越界校验（`..` / 绝对路径一律拒绝，避免自定义名把根移出工作区）。
+  let dirName: string;
+  try {
+    dirName = relativeGraphDirName({ root: opts.dirName ?? undefined });
+  } catch (e) {
+    throw new LocateError("root-forbidden", `核心资料目录名非法：${(e as Error).message}`);
+  }
 
   if (rawRoot !== null) {
     const trimmed = rawRoot.trim();
@@ -160,8 +172,10 @@ export function locateGraphRoot(opts: LocateOptions = {}): LocateResult {
     // `--root <项目根>` 会得到一个不含事件流的空目录（静默误读），是难以察觉的错误。
     // 判定「本身就是看板目录」= 目录名恰为 `.dsh-graph` **且**其父目录里没有同名子目录
     // （不能只看 `existsSync(abs/.dsh-graph)`：任何带 `.dsh-graph` 子目录的 workspace 都满足它）。
-    const isGraphDirItself = basename(abs) === GRAPH_DIR_NAME;
-    const effectiveRoot = isGraphDirItself ? abs : join(abs, GRAPH_DIR_NAME);
+    // g-632 B：判定口径按目录名首段推广到自定义名（`board-a` / `boards/main`）。
+    const firstSeg = dirName.split("/")[0];
+    const isGraphDirItself = isDir(abs) && (basename(abs) === firstSeg || abs.endsWith(`/${dirName}`));
+    const effectiveRoot = isGraphDirItself ? abs : join(abs, dirName);
     const result = resolveCanonicalRoot({ root: effectiveRoot }, cwd);
     return {
       root: result.root,
@@ -172,15 +186,17 @@ export function locateGraphRoot(opts: LocateOptions = {}): LocateResult {
     };
   }
 
-  const workspace = findGraphWorkspace(cwd);
+  const workspace = findGraphWorkspace(cwd, dirName);
   if (workspace === null) {
     throw new LocateError(
       "graph-not-found",
-      `当前目录 ${cwd} 及其所有祖先目录都没有 ${GRAPH_DIR_NAME}（非 dsh-graph 工作区）；` +
+      `当前目录 ${cwd} 及其所有祖先目录都没有 ${dirName}（非 dsh-graph 工作区）；` +
         `请在项目根运行，或用 --root 指定看板目录`,
     );
   }
-  const result = resolveCanonicalRoot(null, workspace);
+  // g-632 B：向上查找按目录名完成，但 root **仍**交给 core 统一解析（worktree 归一/scratch/symlink），
+  // 只在目录名非默认时把相对名显式传下去 —— 默认路径沿用 `null`（与 g-149 旧调用逐字一致）。
+  const result = dirName === GRAPH_DIR_NAME ? resolveCanonicalRoot(null, workspace) : resolveCanonicalRoot({ root: dirName }, workspace);
   return {
     root: result.root,
     workspace: result.workspace,
