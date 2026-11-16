@@ -454,8 +454,6 @@ test("g-623 G 伪身份矩阵：actor/owner/human/approval/root 参数一律拒�
       // 未知能力/角色参数
       const cap = await rawRequest({ port: svc.port, path: `/api/goals?capability=execution.start&role=supervisor`, headers: { host, cookie } });
       assert.equal(cap.status, 200, "未知 query 参数不得导致副作用或提权");
-      const before = readFileSync(join(board.root, "events.jsonl"), "utf8");
-      assert.ok(!before.includes("claim") || true);
     });
     // 事件流里不得出现伪 actor 导致的 claim/绑定事件
     const evText = readFileSync(join(board.root, "events.jsonl"), "utf8");
