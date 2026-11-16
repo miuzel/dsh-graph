@@ -268,6 +268,7 @@
         "g628-real-ownership-matrix.test.ts",
         "g628-real-stale-caller.test.ts",
         "g628-reuse-cwd-real-host.test.ts",
+        "g630-events-index.test.ts",
         "prompt-newline-escape-g331.test.ts",
         "root.test.ts"
       ]
@@ -497,7 +498,8 @@
         "g612-d1-budget-edit-after-care.test.ts",
         "g612-d2-old-outcome-multitarget.test.ts",
         "g618-care-wake-compact.test.ts",
-        "g628-resumed-care-effects.test.ts"
+        "g628-resumed-care-effects.test.ts",
+        "g630-events-index.test.ts"
       ]
     },
     "variant": {
@@ -528,7 +530,8 @@
         "g628-real-cold-child.test.ts",
         "g628-real-ownership-matrix.test.ts",
         "g628-real-stale-caller.test.ts",
-        "g629-tier-manifest.test.ts"
+        "g629-tier-manifest.test.ts",
+        "g630-events-index.test.ts"
       ]
     }
   },
