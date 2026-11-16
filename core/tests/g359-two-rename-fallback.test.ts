@@ -80,7 +80,9 @@ const FALLBACK_RE = /退回两次 rename/;
 // g-315: dsh-graph sync 投影模块 dist/core/cli/sync.js（+1）⇒ 94 + 1 = 95。
 // g-316: dsh-graph claim 认领模块 dist/core/cli/claim.js（+1）⇒ 95 + 1 = 96。
 // g-317: dsh-graph submit 提交模块 dist/core/cli/submit.js（+1）⇒ 96 + 1 = 97。
-const DIST_FILE_COUNT = 97;
+// g-623: 独立本地服务编译产物 dist/core/service/*.js（policy/credentials/config/queries/web-app/
+//   mcp/server/serve 共 +8）⇒ 97 + 8 = 105。
+const DIST_FILE_COUNT = 105;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）
@@ -108,6 +110,8 @@ function makeSandbox(): Sandbox {
   mkdirSync(join(repo, "core"), { recursive: true });
   cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
   cpSync(join(repoRoot, "core", "cli"), join(repo, "core", "cli"), { recursive: true });
+  // g-623：独立本地服务（core/service/*.ts → dist/core/service/*.js）同样是构建必需源目录。
+  cpSync(join(repoRoot, "core", "service"), join(repo, "core", "service"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));
   }

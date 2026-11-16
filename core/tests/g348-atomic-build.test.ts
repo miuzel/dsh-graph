@@ -233,6 +233,8 @@ function makeSandbox(): Sandbox {
   cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
   // g-314：dsh-graph 核心子目录（core/cli/*.ts → dist/core/cli/*.js）。
   cpSync(join(repoRoot, "core", "cli"), join(repo, "core", "cli"), { recursive: true });
+  // g-623：独立本地服务（core/service/*.ts → dist/core/service/*.js）同样是构建必需源目录。
+  cpSync(join(repoRoot, "core", "service"), join(repo, "core", "service"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));
