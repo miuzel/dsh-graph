@@ -415,15 +415,11 @@ dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Age
 
 > **「冷索引」是诚实的边界**：索引缺失时 `status` 仍会全量校验（这是 fail-safe 的一部分，
 > 见 `docs/events-index-g630.md`）。首次运行、缓存被系统清理、或切换 `DSH_GRAPH_CACHE_HOME` 后，
-> 会付一次全量成本（实测 162–172ms，超过 100ms 判据）；之后命中（80.1ms）。
+> 会付一次全量成本（实测约 162–207ms，超过 100ms 判据）；之后命中（实测 median 约 80–90ms，
+> 随负载漂移，勿把单点数字当常量）。
 > **已知未消除的边界**：该首跑尖峰未做优化（预置索引、后台预热均未做），也不会因本目标消失。
 > 另：在源码形态入口 `node bin/dsh-graph.mjs`（Node 原生 type-strip 加载 `.ts`）下实测
 > 命中 median ≈158ms —— **判据 1 的口径是发布形态 `dist/bin/dsh-graph.mjs`**，源码形态不参与该判据。
-
-成本结构（优化后，实测分项）：Node 启动 ≈20ms（不可压缩）；`core/root.ts` + locate ≈30ms；
-`core/cli/diagnostics.ts` 加载 ≈13ms；`collectStatus` 本体 ≈13ms（其中事件流已从
-整档 `readFileSync` + 逐行 JSON 解析的 ≈36ms 降为 O(1) 探测 ≈1ms）。
-`core/ops.ts`（≈69ms）改为**按需**加载——只用于 project.yaml 的畸形判定。
 
 成本结构（优化后，实测分项）：Node 启动 ≈20ms（不可压缩）；`core/root.ts` + locate ≈30ms；
 `core/cli/diagnostics.ts` 加载 ≈13ms；`collectStatus` 本体 ≈13ms（其中事件流已从
