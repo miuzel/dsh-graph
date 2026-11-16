@@ -49,15 +49,15 @@ export class ServeUsageError extends Error {}
 
 /** 解析 `dsh-graph serve …` 之后的参数（纯函数，无副作用）。 */
 export function parseServeArgs(argv: string[]): ServeArgs {
-  let action: ServeArgs["action"] = "serve";
-  const rest: string[] = [];
-  for (const a of argv) {
-    if (a === "init" || a === "status" || a === "stop" || a === "uninstall" || a === "serve") {
-      if (a !== "serve") action = a;
-      continue;
-    }
-    rest.push(a);
-  }
+  // 动作词：取**第一个**出现者（`serve init` 的默认动作是 serve；位置参数里的 `init` 才是动作）。
+  const ACTIONS = ["serve", "init", "status", "stop", "uninstall"] as const;
+  // 注意：`serve` 本身是**默认动作**，不能作为动作词参与匹配（命令名本身就是 `dsh-graph serve`，
+  // 否则 `serve init` 会被解析成 `serve`）。动作词 = 第一个非 `serve` 的动作名。
+  const verb = argv.find((a) => a !== "serve" && (ACTIONS as readonly string[]).includes(a));
+  const action: ServeArgs["action"] = (verb as ServeArgs["action"]) ?? "serve";
+  // 动作词**只**在其作为动作出现时移除：`--state-dir <含 "init" 的路径>` 这类取值不受影响
+  // （取值不是独立 token 的话不会命中 ACTIONS；若真命中，`--opt` 取值优先判定仍保持成对）。
+  const rest = argv.filter((a, i) => !((ACTIONS as readonly string[]).includes(a) && argv[i - 1]?.startsWith("--") !== true));
   const out: ServeArgs = { action };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];

@@ -79,9 +79,6 @@ export function hasTokenLikeParam(query: URLSearchParams | null, body: unknown):
     for (const key of query.keys()) {
       if (/^(token|access_token|api[_-]?key|authorization)$/i.test(key)) return true;
     }
-    for (const value of query.values()) {
-      if (/^bearer$/i.test(value.trim())) return true;
-    }
   }
   const scan = (v: any, depth = 0): boolean => {
     if (depth > 6 || v === null || typeof v !== "object") return false;

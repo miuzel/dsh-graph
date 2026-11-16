@@ -149,6 +149,19 @@ export function assertPrivateTree(dir: string): void {
   }
 }
 
+/** 已存在凭据文件的权限自检（POSIX：必须 0600；宽权限 ⇒ 拒绝，不静默沿用）。 */
+export function assertPrivateFile(file: string): void {
+  const st = lstatSync(file);
+  if (st.isSymbolicLink()) {
+    throw new CredentialError("permission_too_open", `凭据文件不允许是 symlink：${file}`);
+  }
+  if (!POSIX) return;
+  const mode = st.mode & 0o777;
+  if (mode & 0o077) {
+    throw new CredentialError("permission_too_open", `凭据文件权限过宽（${mode.toString(8)}），要求 0600：${file}`);
+  }
+}
+
 export interface CredentialStoreOptions {
   /** 服务自有的状态目录（**不是** graphRoot，**不是** executionWorkspace）。 */
   stateDir: string;
@@ -180,8 +193,18 @@ export class CredentialStore {
     this.factory = opts.secretFactory ?? ((bytes) => generateSecret(bytes));
   }
 
-  /** 首次显式初始化：目录不存在或其中无 token ⇒ 生成一个新 token。返回是否新生成。 */
+  /**
+   * 首次显式初始化：目录不存在或其中无 token ⇒ 生成一个新 token。返回是否新生成。
+   *
+   * 顺序很重要（判据 3「权限无法限制则拒绝启动」）：
+   *   ① **先**对**已存在**的状态目录与凭据文件做权限自检（宽权限 ⇒ 直接拒绝，不「先收紧再当没事」）；
+   *   ② 只有自检通过才创建/补建目录与凭据。
+   */
   initialize(): { created: boolean; fingerprint: string; generation: number } {
+    if (existsSync(this.stateDir)) {
+      assertPrivateTree(this.stateDir);
+      if (existsSync(this.tokenFile)) assertPrivateFile(this.tokenFile);
+    }
     ensurePrivateDir(this.stateDir);
     assertPrivateTree(this.stateDir);
     if (existsSync(this.tokenFile)) {
@@ -287,7 +310,7 @@ export class WebSessionStore {
 
   create(generation: number, now = Date.now()): WebSession {
     const session: WebSession = {
-      id: this.factory(16).slice(0, 16),
+      id: this.factory(TOKEN_BYTES).slice(0, 16),
       secret: this.factory(TOKEN_BYTES),
       generation,
       createdAt: now,

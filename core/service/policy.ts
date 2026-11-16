@@ -38,10 +38,17 @@ function isIPv4Literal(s: string): boolean {
   });
 }
 
-/** 数值回环判定：仅 `127.0.0.1`（以及 `::1`，但本服务不开放 v6 绑定）。 */
+/**
+ * peer 回环判定：**只**接受 IPv4 回环网段及其 IPv4-mapped 形态
+ * （`::ffff:127.x.y.z`，Node 在 v4 监听上见到 v4 客户端时的双栈表示）。
+ *
+ * `::1` **不**接受：本服务只绑定 `127.0.0.1`（v4-only），不存在合法的 IPv6 客户端路径；
+ * 接受 `::1` 等于为「IPv6 回环」开一条未经决策的入口（设计 §2 明确 v6 需另行显式决策）。
+ */
 export function isLoopbackAddress(addr: string | null | undefined): boolean {
   const s = String(addr ?? "");
-  return s === "127.0.0.1" || s === "::1" || s === "::ffff:127.0.0.1";
+  if (isLoopbackV4(s)) return true;
+  return /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.test(s) && isLoopbackV4(s.slice(7));
 }
 
 /**

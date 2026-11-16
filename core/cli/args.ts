@@ -97,6 +97,45 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   let skipTests = false;
   let afterDoubleDash = false;
 
+  // ── g-623：`serve` 走**独立**解析路径（服务选项由 core/service/serve.ts 解析，本解析器不解释）──
+  // 必须在通用选项扫描之前判定：`--workspace` / `--state-dir` / `--port` / `--host` 等是服务选项，
+  // 若先过通用扫描会被当成「未知选项」直接报用法错误。
+  {
+    const serveIdx = argv.indexOf("serve");
+    if (serveIdx >= 0 && !argv.slice(0, serveIdx).includes("goal")) {
+      const serveTail = [...argv.slice(serveIdx + 1)];
+      if (serveTail.some((t) => t === "--help" || t === "-h")) {
+        return {
+          args: {
+            command: "help", subcommand: "serve", positionals: [], root: null, json: false, help: true,
+            version: false, all: false, full: false, activeOnly: false, target: null, skipTests: false,
+          },
+          error: null,
+        };
+      }
+      const action = serveTail.find((t) => (SERVE_ACTIONS as readonly string[]).includes(t)) ?? "serve";
+      return {
+        args: {
+          command: "serve",
+          subcommand: action === "serve" ? null : action,
+          positionals: serveTail.filter((t) => t !== action),
+          root: null,
+          json: false,
+          help: false,
+          version: false,
+          all: false,
+          full: false,
+          activeOnly: false,
+          target: null,
+          skipTests: false,
+          // 动作词必须**显式**传给服务（`serve` 是默认动作，不能靠 argv 自身推断）
+          serveArgv: action === "serve" ? serveTail.filter((t) => t !== action) : [action, ...serveTail.filter((t) => t !== action)],
+        },
+        error: null,
+      };
+    }
+  }
+
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (afterDoubleDash) {
@@ -162,55 +201,6 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   }
 
   const [commandRaw, ...rest] = positionals;
-  // `serve` 专属选项由服务自己解析 ⇒ 原样保留 `--opt value` 的成对顺序（不随位置参数剥离）。
-  const serveRawArgv = rawArgv.slice(rawArgv.indexOf("serve") + 1).filter((t) => t !== "--");
-
-  // g-623：`serve` 的选项属于**服务**（--graph-root/--workspace/--state-dir/--port/--host/
-  // --rotate-token/--revoke-token …），CLI 参数解析器不解释它们，只原样转交（单一真源在
-  // core/service/serve.ts）。因此 `serve` 走**独立**的解析路径：跳过未知选项检查。
-  if (commandRaw === "serve") {
-    if (help) {
-      return {
-        args: {
-          command: "help",
-          subcommand: "serve",
-          positionals: [],
-          root: null,
-          json: false,
-          help: true,
-          version: false,
-          all: false,
-          full: false,
-          activeOnly: false,
-          target: null,
-          skipTests: false,
-        },
-        error: null,
-      };
-    }
-    const sub = positionals.slice(1);
-    const action = sub.find((t) => (SERVE_ACTIONS as readonly string[]).includes(t)) ?? "serve";
-    // 原样转交的 argv：按**原始**顺序，去掉动作词本身（动作由服务自己再解析一次）。
-    const serveArgv = serveRawArgv.filter((t) => t !== action);
-    return {
-      args: {
-        command: "serve",
-        subcommand: action === "serve" ? null : action,
-        positionals: sub.filter((t) => t !== action),
-        root: null,
-        json: false,
-        help: false,
-        version: false,
-        all: false,
-        full: false,
-        activeOnly: false,
-        target: null,
-        skipTests: false,
-        serveArgv,
-      },
-      error: null,
-    };
-  }
 
   // 仅 `--version` / `--help` 而无命令：仍合法（`dsh-graph --version`）。
   if (commandRaw === undefined) {

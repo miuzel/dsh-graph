@@ -118,16 +118,20 @@ function readBodyCapped(req: IncomingMessage, cap = MAX_REQUEST_BYTES): Promise<
     let size = 0;
     let done = false;
     req.on("data", (chunk: Buffer) => {
-      if (done) return;
+      if (done) {
+        // 超限后继续消费但不缓存：让客户端能把 413 响应读完（否则对端会看到连接被提前关闭）。
+        return;
+      }
       size += chunk.length;
       if (size > cap) {
         done = true;
         reject(new ServiceError("E_INPUT" as any, "请求体过大", 413));
-        req.resume();
         return;
       }
       chunks.push(chunk);
     });
+    // 超限后不缓存任何字节，但保持读取（drain）到 end。
+
     req.on("end", () => {
       if (done) return;
       done = true;

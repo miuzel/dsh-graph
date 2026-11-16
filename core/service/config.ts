@@ -141,7 +141,8 @@ export function readRuntimeConfig(stateDir: string): RuntimeConfig {
     contractVersion: String(parsed.contractVersion ?? SERVICE_CONTRACT_VERSION),
     storageProfile: String(parsed.storageProfile ?? STORAGE_PROFILE),
   };
-  if (!Number.isInteger(cfg.port) || cfg.port <= 0 || cfg.port > 65535) {
+  // 端口 0 = 「由系统分配空闲高位端口」（不冻结具体端口，见设计 §2）；1..65535 为显式端口。
+  if (!Number.isInteger(cfg.port) || cfg.port < 0 || cfg.port > 65535) {
     throw new ServiceConfigError("config_malformed", `运行配置端口非法：${parsed.port}`);
   }
   assertSeparatedRoots(cfg.graphRoot, cfg.executionWorkspace);

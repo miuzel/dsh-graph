@@ -87,7 +87,7 @@ button:hover{border-color:var(--accent)}
 
 const APP_JS = `"use strict";
 // g-623：只读 Web App。所有数据经同 origin 的 /api/* 读取；本文件**不**接触 token 字符串，
-// 也**不**写入 localStorage/sessionStorage（会话在 HttpOnly Cookie 里）。
+// 也**不**写浏览器持久存储（会话由 HttpOnly Cookie 承载）。
 (function () {
   var state = { tab: "goals", goalId: null };
   function $(id) { return document.getElementById(id); }
