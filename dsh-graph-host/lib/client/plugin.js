@@ -445,6 +445,11 @@
         helpAssetNameOf,
         helpPromptAssetRows,
         helpAssetLangOrder,
+        // g-615：实时面板的**真实组件**入口，供身份切换竞态 / 资源清理回归
+        // （`core/tests/g615-live-panel-lifecycle.test.ts`）用真实渲染驱动。
+        RecentRecords,
+        SessionPanel,
+        LiveStrip,
       },
     };
   },

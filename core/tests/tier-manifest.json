@@ -261,6 +261,8 @@
         "g612-real-host-budget.test.ts",
         "g612-run-budget-history.test.ts",
         "g612-run-restart.test.ts",
+        "g615-live-panel-lifecycle.test.ts",
+        "g615-live-panel-mutation.test.ts",
         "g623-service-e2e.test.ts",
         "g623-service-security.test.ts",
         "g623-service.test.ts",
@@ -585,6 +587,20 @@
       "tier": "integration",
       "labels": [],
       "why": "断言数 6 看似可下放，但读 dist/core/ops.js（构建产物依赖）并写 tmp/ ⇒ 属 integration 依赖面，**不**入 microTests。"
+    },
+    {
+      "file": "g615-live-panel-lifecycle.test.ts",
+      "tier": "integration",
+      "labels": [],
+      "why": "vm 装载构建产物 dist/lib/client.js 做真实组件渲染（与 g352/g498/g506 同口径依赖构建产物），归 integration；无真实宿主、无真实等待。"
+    },
+    {
+      "file": "g615-live-panel-mutation.test.ts",
+      "tier": "integration",
+      "labels": [
+        "variant"
+      ],
+      "why": "负向变异对照：内存内改坏 bundle 后跑同一套断言必红；依赖构建产物，标 variant，归 integration。"
     }
   ]
 }
