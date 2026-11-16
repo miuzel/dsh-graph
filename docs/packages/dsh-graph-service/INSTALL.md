@@ -29,9 +29,13 @@ npm install --save-exact dsh-graph-service   # 项目本地
 
 ```bash
 # ① 首次初始化：生成 ≥256 bit token（0600 凭据）+ 运行配置
+#
+# ⚠️ --root 与 --workspace 必须**互不包含**：服务会拒绝「图根位于执行工作区内」或反之的配置
+#    （安全语义：看板数据不得混在被扫描的工作树里）。所以看板目录要放在工作区**之外**，
+#    例如 ~/.dsh-graph-boards/myproject —— 不要写成 <project>/.dsh-graph 配 <project>。
 mkdir -p ~/.dsh-graph-service && chmod 700 ~/.dsh-graph-service
 dsh-graph serve init \
-  --root /path/to/project/.dsh-graph \
+  --root ~/.dsh-graph-boards/myproject \
   --workspace /path/to/project \
   --state-dir ~/.dsh-graph-service \
   --port 7801

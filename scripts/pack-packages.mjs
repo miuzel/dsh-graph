@@ -49,11 +49,15 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, normalize, relative, sep } from "node:path";
+import { dirname, join, normalize, relative, resolve, sep } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..");
 const DIST = join(repoRoot, "dist");
-const PACKAGES = join(repoRoot, "packages");
+/** 组装根：默认仓库内 `packages/`（已 gitignore）。测试经 `DSH_GRAPH_PACKAGES_DIR` 改指到
+ *  os.tmpdir() 私有副本，避免「只读断言」顺手污染工作树（g-631 评审注记 1）。 */
+const PACKAGES = process.env.DSH_GRAPH_PACKAGES_DIR
+  ? resolve(process.env.DSH_GRAPH_PACKAGES_DIR)
+  : join(repoRoot, "packages");
 
 /** 所有包共享的版本号与宿主范围真源（g466：engines.dsh 与 peer dsh-settings 必须逐字相等）。 */
 const HOST_PKG = JSON.parse(readFileSync(join(repoRoot, "dsh-graph-host", "package.json"), "utf8"));

@@ -18,7 +18,9 @@
  *  G. 三宿主配置：均指向同一 endpoint，且都只引用环境变量、无 token 字面量。
  *  H. 负向对照：人为破坏（删模块 / 删 prompts / 改版本 / 注入 token / 删指南段）同一套判定必须报红。
  *
- * 全部断言只读仓库 + 只读 dist/；需要组装时在 os.tmpdir() 的私有副本里跑，绝不写 packages/。
+ * 全部断言只读仓库 + 只读 dist/；需要组装时在 os.tmpdir() 的私有副本里跑（经
+ * `DSH_GRAPH_PACKAGES_DIR` 改指组装根），**绝不写**仓库内的 packages/ —— 该目录是生产组装
+ * 生成的（已 gitignore），守卫不该顺手创建或清空它。
  */
 
 import { test } from "node:test";
@@ -32,8 +34,13 @@ const repoRoot = join(import.meta.dirname, "../..");
 const DIST = join(repoRoot, "dist");
 const PACK_SCRIPT = join(repoRoot, "scripts", "pack-packages.mjs");
 
-/** 懒加载组装脚本（它读 dist/，故必须先 build；本守卫只在 dist 存在时做文件级断言）。 */
+/** 懒加载组装脚本（它读 dist/，故必须先 build；本守卫只在 dist 存在时做文件级断言）。
+ *  组装根改指到 os.tmpdir() 私有副本：本文件是「只读断言」，不得顺手把生成物写进工作树
+ *  （评审注记 1：旧版头注释声称不写 packages/，但 assemblePackage 实际会 rm+重建它）。 */
 async function loadPackModule() {
+  if (!process.env.DSH_GRAPH_PACKAGES_DIR) {
+    process.env.DSH_GRAPH_PACKAGES_DIR = mkdtempSync(join(tmpdir(), "g631-pkg-"));
+  }
   return import(pathToFileURL(PACK_SCRIPT).href);
 }
 
