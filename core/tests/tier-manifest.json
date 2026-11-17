@@ -274,6 +274,7 @@
         "g628-real-stale-caller.test.ts",
         "g628-reuse-cwd-real-host.test.ts",
         "g630-events-index.test.ts",
+        "g631-multi-package.test.ts",
         "prompt-newline-escape-g331.test.ts",
         "root.test.ts"
       ]
@@ -538,7 +539,8 @@
         "g628-real-ownership-matrix.test.ts",
         "g628-real-stale-caller.test.ts",
         "g629-tier-manifest.test.ts",
-        "g630-events-index.test.ts"
+        "g630-events-index.test.ts",
+        "g631-multi-package.test.ts"
       ]
     }
   },

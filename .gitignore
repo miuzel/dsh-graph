@@ -39,3 +39,10 @@ handoffs/
 
 # 构建/测试临时产物（worktree 内私有，不入版本控制）
 tmp/
+
+# g-631：多包打包层的**生成物**，不入库。
+#   packages/<name>/ 由 `node scripts/pack-packages.mjs` 从 dist/ 组装（真源是源码 + 打包脚本）；
+#   out/*.tgz + SHA256SUMS.txt 由 `--tarballs` 产出（发布产物走 tarball 传递，不入 git）。
+# 手工提交生成物会与 dist/ 同类的漂移风险一致，故一律忽略。
+/packages/
+/out/
