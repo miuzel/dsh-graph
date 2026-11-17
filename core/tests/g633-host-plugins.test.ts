@@ -27,6 +27,24 @@
  * 真源一律从 core 导入（`READ_ONLY_COMMAND_NAMES` / `WRITE_MODE_COMMAND_NAMES` /
  * `HUMAN_GATE_TOOLS`），不在这里手写第二份工具名单 ⇒ 将来 core 增减工具时本套件自动跟随，
  * 技能正文若不跟着更新就会红。
+ *
+ * ── 能力边界（**必读**，att-008 主管裁决固化；请勿再试图用文本守卫穷尽它）────────────────
+ *
+ * > 本守卫保证「登记表声明的未验证结论在**结论列**与**证据列**存在且未被否定」，
+ * > **不保证**「文档任何位置都没有自相矛盾的肯定式表述」——后者无法用文本守卫穷尽，
+ * > 依赖评审与 `scripts/g633-opencode-mcp-probe.mjs` 实测。
+ *
+ * 具体地：
+ *   · **保证**（结构性、可穷尽，已钉死）：
+ *       §8 表格每行恰好 3 列（项 | 状态 | 证据）；`\|` 是转义字面竖线、不分列；
+ *       每条登记锚点的**结论列**讲这条结论、**证据列**命中「未证实」语义且不含无条件肯定断言；
+ *       顶部 ⇄ §8 ⇄ 登记表三方逐条对应。
+ *   · **不保证**（本轮**明确不追**，`⑧b-e1` 把这条漏放固化下来）：
+ *       表格**之外**的段落写「已在本地跑通」「按目录放置即可生效」这类肯定式小结 ——
+ *       那是**整篇自然语言**的性质，词表打地鼠，每轮都能构造新措辞。守卫已达约 2k 行 / 48 用例，
+ *       真实防线是**探针实测**与人工评审，不是再补一条正则。
+ *
+ * 因此：**当评审再构造出表格外措辞逃逸时，正确处置是记录为已知边界 + 用探针实测，而不是继续加词表。**
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -541,12 +559,67 @@ interface UnverifiedAnchor {
    * att-007（评审逃逸 A2）：此前只审结论列 ⇒ 保留锚点词与 `❌ 未验证`、把证据列改成
    * 「已在全部平台确认可自动发现，无需手工放置」这类**肯定断言**照样判绿。证据列被反向断言后，
    * 「未验证」就只剩个符号，结论事实上已被改写成「已确认」。
+   *
+   * att-008（评审逃逸 c）：上一版的语料是**手写的少量变体**，把证据列改成「未经确认」「尚未验证」
+   * 这类**同义的未证实表述**反而判红 —— 守卫既漏放了真肯定断言，又误伤了诚实的否定式改写。
+   * 本版改为**必须命中 `UNVERIFIED_SEMANTICS` 这一族未证实语义**（白名单是「未证实」这一侧，
+   * 不是「肯定式」那一侧）：近义否定被系统性收录，而不是一个个往正则里补。
    */
   readonly evidencePattern: RegExp;
 }
 
-/** 证据列里**不得**出现的肯定式断言（命中等同于把「未证实」偷换成「已确认」）。 */
-const AFFIRMATIVE_CLAIM = /已确认|已证实|已核实|无需|不需要|不必|全部平台|所有平台|均可用|完全可用|可自动发现|已可/;
+/**
+ * 「未证实」语义全集（**正向**白名单）：证据列必须命中其中至少一项。
+ *
+ * att-008：白名单从「肯定式的封闭黑名单」翻转到「未证实的开放白名单」的两侧之一 ——
+ * 判绿的前提从「没有出现我知道的肯定词」变成「确实出现了未证实语义」。
+ * 新增近义否定请加到这里（这是**能力上限的显式登记**，不是打地鼠）。
+ */
+const UNVERIFIED_SEMANTICS =
+  /未经确认|未确认|尚未验证|未验证|尚未确认|未得到验证|有待验证|尚无定论|未在本次实测范围|未实测|未测|未核查|未覆盖|走不到|未走到|不可用|无法[^|]{0,20}调用|未完成[^|]{0,10}调用|手工放置|规则未确认/;
+
+/**
+ * 证据列里**不得**出现的肯定式断言（命中等同于把「未证实」偷换成「已确认」）。
+ *
+ * att-008 c3：补「默认能 / 能自动发现 / 已跑通 / 事实上…」这类已发现的逃逸措辞。
+ *
+ * 注意本表是**措辞线索**，不是最终裁决 —— 裁决走 `affirmativeClaimProblems`：
+ * 「**是否**默认能自动发现」「未验证**能否**自动发现」这类**诚实的疑问式**必须不被误伤
+ * （⑧b-c3b 钉住），因此判定要按**分句**看语境，不能对整列做一次裸匹配。
+ */
+const AFFIRMATIVE_CLAIM =
+  /已确认|已证实|已核实|无需|不需要|不必|全部平台|所有平台|均可用|完全可用|可自动发现|已可|默认能(自动)?发现|能自动发现|已跑通|跑通|事实上[^|]{0,10}(通过|生效|可用)/;
+
+/**
+ * 疑问/条件分句标记：分句里出现它，则该分句中的肯定词**不算断言**
+ * （「是否默认能…」是在问，「若跑通则…」是条件）。
+ *
+ * 这是**必要的误伤保护**，不是白名单扩容：不加它，「未确认能否自动发现」这种最诚实的写法
+ * 反而会判红 —— 而那正是 e1 边界声明所依赖的「文档可以诚实说不知道」。
+ */
+const HEDGE_CLAUSE = /是否|能否|不确定|假如|如果|若|？|\?/;
+
+/**
+ * 证据列是否含**无条件**肯定式断言（返回命中的分句，便于点名；`null` = 没有）。
+ *
+ * 按 `，。；、|` 切分句，逐句判定：疑问/条件分句中的肯定词不算断言，其余分句命中即算。
+ */
+/**
+ * 证据列是否含**无条件**肯定式断言（返回命中的分句，便于点名；`null` = 没有）。
+ *
+ * 按句读切分（`，。；、！？|`），逐句判定：疑问/条件分句中的肯定词不算断言，其余分句命中即算。
+ * 问号保留在分句里（不切掉），因为它本身就是「这句是疑问」的证据。
+ */
+function affirmativeClaimIn(evidence: string): string | null {
+  for (const clause of evidence.split(/[，。；、|！]/)) {
+    if (HEDGE_CLAUSE.test(clause)) continue;
+    if (AFFIRMATIVE_CLAIM.test(clause)) return clause.trim();
+  }
+  return null;
+}
+
+/** §8 表格的列数（`项 | 状态 | 证据`）：恒为 3，多一列/少一列都是结构退化。 */
+const SECTION8_COLUMNS = 3;
 
 export const REQUIRED_UNVERIFIED_ANCHORS: readonly UnverifiedAnchor[] = [
   {
@@ -558,7 +631,7 @@ export const REQUIRED_UNVERIFIED_ANCHORS: readonly UnverifiedAnchor[] = [
     // 该行**结论列**必须说明「是否被自动发现」这条结论，而不只是提到 `skills/`
     rowPattern: /自动发现/,
     // 证据列必须仍在说「没测 / 未确认 / 手工放置」，而不是「已确认可自动发现」
-    evidencePattern: /未在本次实测范围|未测|未确认|未经确认|未核查|手工放置|规则未确认/,
+    evidencePattern: UNVERIFIED_SEMANTICS,
   },
   {
     id: "opencode-in-session-tool-call",
@@ -567,7 +640,7 @@ export const REQUIRED_UNVERIFIED_ANCHORS: readonly UnverifiedAnchor[] = [
     anchor: "工具调用链路",
     rowPattern: /会话内|tools\/call/,
     // 证据列必须仍在说「走不到 / 不可用 / 未走到」
-    evidencePattern: /走不到|未走到|不可用|无法[^|]{0,20}调用|未完成[^|]{0,10}调用|未验证/,
+    evidencePattern: UNVERIFIED_SEMANTICS,
   },
 ];
 
@@ -587,11 +660,23 @@ function isSeparatorRow(line: string): boolean {
   return /^\s*\|[\s:|-]+\|\s*$/.test(line);
 }
 
-/** 把一条表格行切成列数组（去掉首尾竖线，逐列 trim）。非表格行返回 `[]`。 */
+/**
+ * 把一条表格行切成列数组（去掉首尾竖线，逐列 trim）。非表格行返回 `[]`。
+ *
+ * **按 Markdown 语义切列**（att-008 评审逃逸 g / g2）：GFM 表格里 `\|` 是**转义的字面竖线**，
+ * 不是列分隔符。att-007 的 `body.split("|")` 把它当分隔符 ⇒ 证据列里写
+ * 「未测 \| 已确认无需手工放置」，`evidenceCol` 只取到 `未测 `（真话），而 `已确认…` 被切到
+ * 第 4 列后被静默丢弃 ⇒ 行被当成 4 列也不报错、证据列里的肯定断言肉眼可见却判绿。
+ * 先以占位符保护 `\|`，切分后再还原成字面 `|`。
+ */
+const ESCAPED_PIPE = "\u0000";
 function splitRowCols(line: string): string[] {
   if (!isTableRow(line)) return [];
   const body = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return body.split("|").map((c) => c.trim());
+  return body
+    .replace(/\\\|/g, ESCAPED_PIPE)
+    .split("|")
+    .map((c) => c.replaceAll(ESCAPED_PIPE, "|").trim());
 }
 
 /**
@@ -728,6 +813,21 @@ export function auditOpenCodeVerification(doc: string): string[] {
     problems.push(`§8 区内出现**非表格行**的未验证标记（必须是表格行）：「${line.trim().slice(0, 60)}」`);
   }
 
+  // ── A2. §8 表格每行**列数恒为 3**（att-008 评审逃逸 g2 的结构面）───────────────
+  //
+  // 「项 | 状态 | 证据」三列的语义前提是每行恰好 3 列。多出第 4 列时，`evidenceCol` 只取第 3 列，
+  // 第 4 列里的肯定断言**在结构上不可能被看到** —— 只要不校验列数，藏一列就永久绕过证据列判定。
+  // 列数不符即判红（含 `\|` 被误当分隔符的情形：那会让一列被切成两列）。
+  for (const row of tableRows) {
+    const n = splitRowCols(row).length;
+    if (n !== SECTION8_COLUMNS) {
+      problems.push(
+        `§8 表格行必须是 ${SECTION8_COLUMNS} 列（项 | 状态 | 证据），实际 ${n} 列：「${row.trim().slice(0, 70)}」` +
+          " —— 多出的列会绕过证据列判定（`\\|` 是转义字面竖线，不能用来分列）",
+      );
+    }
+  }
+
   // ── B. 锚定**实体**：登记表 ⇄ 顶部 ⇄ §8 表格三方逐条对应（F3 / Y1' / Y2' 的漏放面）──
   //
   // 这里**不再**做「顶部与表格互相自洽」的比对：成对替换能让两处照样自洽（Y1'）。
@@ -778,9 +878,11 @@ export function auditOpenCodeVerification(doc: string): string[] {
             `「${ev.slice(0, 80)}」 —— 未验证结论必须由证据列支撑，不得只留符号`,
         );
       }
-      if (AFFIRMATIVE_CLAIM.test(ev)) {
+      const claim = affirmativeClaimIn(ev);
+      if (claim !== null) {
         problems.push(
-          `§8 行「${reg.id}」的证据列含**肯定式断言**（把「未证实」偷换成「已确认」）：「${ev.slice(0, 80)}」`,
+          `§8 行「${reg.id}」的证据列含**肯定式断言**（把「未证实」偷换成「已确认」）：「${ev.slice(0, 80)}」` +
+            `（无条件的肯定分句：「${claim.slice(0, 40)}」）`,
         );
       }
     }
@@ -1411,14 +1513,293 @@ test("g-633 ⑧b-A2 逃逸：证据列被改成「已确认/无需」的肯定�
 
   // ③ 负向对照的负向对照：证据列仍如实描述「未证实」时**不得**因 evidencePattern 判红
   //    （防止把 evidencePattern 写成「反正一律红」的假守卫）
+  //    att-008：这里必须**整列替换**而不是把旧证据列嵌进括号 —— 旧证据列自带表格竖线，
+  //    拼接后会把行撑成 4 列，新加的「列数恒为 3」断言会（正确地）把它判红；反向自检要验的是
+  //    「诚实的否定式改写不被误伤」，因此只保留恰好 3 列的构造。
   const ok = base.replace(
-    /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|)(.*)$/m,
-    "$1 未在本次实测范围内；本机规则未确认，请手工放置（$2）",
+    /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|).*$/m,
+    "$1 未在本次实测范围内；本机规则未确认，请手工放置 |",
   );
+  assert.notEqual(ok, base, "反向自检必须真的改到了文档");
+  const okRow = ok.split("\n").find((l) => l.trim().startsWith("|") && l.includes("被 OpenCode 自动发现"))!;
+  assert.equal(splitRowCols(okRow).length, 3, "反向自检的前提：改写后的行仍是 3 列");
   assert.deepEqual(
     auditOpenCodeVerification(ok).filter((p) => /证据列/.test(p)),
     [],
     "证据列如实描述「未证实」时不得被证据列判定误伤",
+  );
+});
+
+// ── ⑧b-G 列结构（att-008 评审逃逸 g / g2：结构性、可穷尽）──────────────────
+//
+// 前几轮补了 D（结论列）与 A2（证据列语义），但**表格的结构本身**从未被校验：
+//   g  证据列写「未测 \| 已确认无需手工放置」—— `\|` 是转义字面竖线，却被人为当作列分隔符，
+//      `evidenceCol` 只取到第 3 列的「未测」（真话），`已确认…` 被切进第 4 列后**静默丢弃** ⇒ 判绿
+//   g2 直接把肯定断言写进第 4 列 —— 同上，证据列判定在结构上看不到它
+// 两者的共同前提都是「一行可以不是 3 列」。本段把列数变成**硬断言**，前提消失 ⇒ 两类逃逸关闭。
+//
+// 注意：判别 `\|` 不是分隔符这一点**同时**决定证据列取到什么，所以 splitRowCols 的正负向对照
+// 与列数断言必须成对存在 —— 只做其一，仍可构造另一侧的逃逸。
+
+test("g-633 ⑧b-G0 splitRowCols 按 Markdown 语义切列：`\\|` 是转义字面竖线，不是分隔符", () => {
+  // ① 正向：普通 3 列
+  assert.deepEqual(splitRowCols("| a | b | c |"), ["a", "b", "c"], "普通 3 列必须切成 3 列");
+  // ② 正向：`\|` 不得分列（转义后还原为字面竖线）
+  assert.deepEqual(
+    splitRowCols("| a | b | 未测 \\| 已确认 |"),
+    ["a", "b", "未测 | 已确认"],
+    "`\\|` 必须在**同一列内**还原成字面竖线，不得当作分隔符",
+  );
+  // ③ 负向对照：旧实现（裸 split）在同一个输入上确实切成 4 列 —— 先演示漏放面
+  const legacySplit = (line: string): string[] =>
+    line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  assert.equal(
+    legacySplit("| a | b | 未测 \\| 已确认 |").length,
+    4,
+    "旧实现（裸 split）确实把 `\\|` 当分隔符 ⇒ 这就是 g / g2 的结构前提",
+  );
+  assert.equal(splitRowCols("| a | b | 未测 \\| 已确认 |").length, 3, "新实现必须切成 3 列");
+  // ④ 非表格行 / 空行仍返回空数组（既有契约不变）
+  assert.deepEqual(splitRowCols("不是表格行"), [], "非表格行返回 []");
+});
+
+test("g-633 ⑧b-G1 列数恒为 3：4 列必红（评审逃逸 g2：肯定断言藏进第 4 列）", () => {
+  const base = read("plugins/opencode/INSTALL.md");
+  // g2 的构造：结论列、状态列、证据列（真话「未测」）全保留，只在**第 4 列**追加肯定断言
+  const doc = base.replace(
+    /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|[^|\n]*\|)\s*$/m,
+    "$1 已确认无需手工放置，全部平台可用 |",
+  );
+  assert.notEqual(doc, base, "负向对照必须真的改到了文档（§8 的 `skills/` 行）");
+  const got = doc.split("\n").find((l) => l.trim().startsWith("|") && l.includes("被 OpenCode 自动发现"))!;
+  assert.equal(splitRowCols(got).length, 4, "负向对照的前提：该行确实被撑成 4 列");
+  // 前提确认：第 3 列（证据列）仍是真话，第 4 列才是肯定断言 ⇒ 只看证据列的口径必然漏放
+  assert.match(evidenceCol(got), /未在本次实测范围|未测|未确认/, "前提：证据列仍是真话");
+  assert.match(splitRowCols(got)[3]!, /已确认|全部平台/, "前提：肯定断言藏在第 4 列");
+
+  const problems = auditOpenCodeVerification(doc);
+  assert.notDeepEqual(problems, [], "4 列的 §8 表格行必须判红");
+  assert.ok(
+    problems.some((p) => /必须是 3 列/.test(p) && /实际 4 列/.test(p)),
+    `判红理由必须点名列数，实际：${JSON.stringify(problems)}`,
+  );
+});
+
+test("g-633 ⑧b-G2 列数恒为 3：2 列必红（缩列后证据列取空，不得静默判绿）", () => {
+  const base = read("plugins/opencode/INSTALL.md");
+  // 缩成 2 列：证据列被整个删掉 ⇒ evidenceCol 取到空串。旧口径对空串会让 evidencePattern 判红，
+  // 但红因是「证据列不再描述未证实」而**不是**「表格结构坏了」；这里要的是结构级点名。
+  const doc = base.replace(
+    /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|).*$/m,
+    "$1",
+  );
+  assert.notEqual(doc, base, "负向对照必须真的改到了文档");
+  const got = doc
+    .split("\n")
+    .find((l) => l.trim().startsWith("|") && l.includes("被 OpenCode 自动发现"))!;
+  assert.equal(splitRowCols(got).length, 2, "负向对照的前提：该行确实被缩成 2 列");
+
+  const problems = auditOpenCodeVerification(doc);
+  assert.notDeepEqual(problems, [], "2 列的 §8 表格行必须判红");
+  assert.ok(
+    problems.some((p) => /必须是 3 列/.test(p) && /实际 2 列/.test(p)),
+    `判红理由必须点名列数，实际：${JSON.stringify(problems)}`,
+  );
+});
+
+test("g-633 ⑧b-G3 含 `\\|` 的行必红（评审逃逸 g：转义竖线被当分隔符藏肯定断言）", () => {
+  const base = read("plugins/opencode/INSTALL.md");
+  // g 的构造原样：证据列写「未测 \| 已确认无需手工放置」—— 肉眼可见的肯定断言，
+  // 但裸 split 会把它切到第 4 列，`evidenceCol` 只读到「未测」⇒ 旧口径判绿。
+  const doc = base.replace(
+    /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|).*$/m,
+    "$1 未测 \\| 已确认无需手工放置 |",
+  );
+  assert.notEqual(doc, base, "负向对照必须真的改到了文档");
+  const got = doc
+    .split("\n")
+    .find((l) => l.trim().startsWith("|") && l.includes("被 OpenCode 自动发现"))!;
+  // ① 旧口径漏放：裸 split 把 `\|` 当分隔符 ⇒ 4 列，其中证据列只剩「未测」是真话
+  const legacyCols = got.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  assert.equal(legacyCols.length, 4, "旧口径（裸 split）切出 4 列 ⇒ 这是漏放的结构前提");
+  assert.equal(legacyCols[2], "未测 \\", "旧口径的证据列只取到「未测」⇒ 肯定断言被静默丢弃");
+  // ② 新口径：`\|` 不分列 ⇒ 证据列完整含「已确认」，肯定断言可见
+  assert.equal(splitRowCols(got).length, 3, "新口径：`\\|` 不分列，仍是 3 列");
+  assert.match(evidenceCol(got), /已确认/, "新口径：证据列必须能看见被藏在转义竖线后的肯定断言");
+
+  const problems = auditOpenCodeVerification(doc);
+  assert.notDeepEqual(problems, [], "证据列含 `\\|` + 肯定断言必须判红");
+  assert.ok(
+    problems.some((p) => /肯定式断言/.test(p)),
+    `判红理由必须点名「肯定式断言」（而不是被切列后静默丢弃），实际：${JSON.stringify(problems)}`,
+  );
+});
+
+// ── ⑧b-c 证据列「必须命中未证实语义」（att-008 评审逃逸 c：近义否定）────────────
+//
+// att-007 的 evidencePattern 是**手写语料**：证据列改成「未经确认」「尚未验证」这类**同义的未证实
+// 表述**会被判红（误伤诚实标注），而「默认能自动发现」这类肯定式措辞却判绿（漏放）。
+// 本版把白名单翻到「未证实」一侧（UNVERIFIED_SEMANTICS）：判绿前提从「没出现我知道的肯定词」
+// 变成「确实出现了未证实语义」。以下逐条钉住**方向正确**：近义否定必须绿、肯定式必须红。
+
+test("g-633 ⑧b-c 证据列的六种近义否定都必须判绿（误伤面：诚实标注不得被当成改口）", () => {
+  const base = read("plugins/opencode/INSTALL.md");
+  const variants = [
+    "未经确认：OpenCode 侧技能目录规则未确认，请手工放置",
+    "尚未验证：本机 LLM 上游不可用，未走到这一步",
+    "尚未确认：需在你的版本上复核",
+    "未得到验证：本次未跑该路径",
+    "有待验证：留待换版本后复核",
+    "尚无定论：两种规则都可能",
+  ];
+  for (const variant of variants) {
+    const doc = base.replace(
+      /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|).*$/m,
+      `$1 ${variant} |`,
+    );
+    assert.notEqual(doc, base, `负向对照必须真的改到了文档（${variant}）`);
+    const got = doc.split("\n").find((l) => l.trim().startsWith("|") && l.includes("被 OpenCode 自动发现"))!;
+    assert.equal(splitRowCols(got).length, 3, `前提：改写后仍是 3 列（${variant}）`);
+    // 前提：确认这确实是**未证实**语义、且不含任何肯定断言（否则判绿的理由会跑偏）
+    assert.match(evidenceCol(got), UNVERIFIED_SEMANTICS, `前提：「${variant}」确实命中未证实语义`);
+    assert.equal(affirmativeClaimIn(evidenceCol(got)), null, `前提：「${variant}」不含肯定式断言`);
+
+    assert.deepEqual(
+      auditOpenCodeVerification(doc),
+      [],
+      `证据列改写成近义否定「${variant}」必须判绿（诚实标注不得被误伤）`,
+    );
+  }
+});
+
+test("g-633 ⑧b-c2 每种近义否定都有对照：换成肯定式必须判红（方向正确 + 不漏放）", () => {
+  // 与 ⑧b-c 一一配对的肯定式改写 —— 若某一对里「绿」的那条其实也不是靠 UNVERIFIED_SEMANTICS 判绿
+  // （例如全文档根本没走到证据列判定），下面这半边的红就必须出现，否则说明对照失效。
+  const base = read("plugins/opencode/INSTALL.md");
+  const pairs: Array<[string, string]> = [
+    ["未经确认：规则未确认，请手工放置", "已确认：规则明确，可自动发现"],
+    ["尚未验证：未走到这一步", "尚未验证 → 但事实上已通过"],
+    ["尚未确认：需复核", "不必复核，已核实可用"],
+    ["未得到验证：本次未跑该路径", "已验证通过，无需手工放置"],
+    ["有待验证：留待换版本后复核", "有待验证 → 但事实上已生效"],
+    ["尚无定论：两种规则都可能", "无争议，已证实全部平台可用"],
+  ];
+  for (const [honest, claim] of pairs) {
+    const rewrite = (text: string) => {
+      const doc = base.replace(
+        /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|).*$/m,
+        `$1 ${text} |`,
+      );
+      assert.notEqual(doc, base, `负向对照必须真的改到了文档（${text}）`);
+      return doc;
+    };
+    // 正方向：诚实的否定式 ⇒ 绿
+    assert.deepEqual(auditOpenCodeVerification(rewrite(honest)), [], `诚实标注「${honest}」必须绿`);
+    // 负方向：同一「位置」换成肯定式 ⇒ 红
+    const problems = auditOpenCodeVerification(rewrite(claim));
+    assert.notDeepEqual(problems, [], `肯定式「${claim}」必须红（对照「${honest}」）`);
+    assert.ok(
+      problems.some((p) => /证据列/.test(p)),
+      `红因必须落在证据列（${claim}），实际：${JSON.stringify(problems)}`,
+    );
+  }
+});
+
+// ── ⑧b-c3 AFFIRMATIVE_CLAIM 补已知逃逸措辞（att-008 评审逃逸 c3）──────────────
+//
+// c3 的构造：「默认能自动发现，若不行再手工放置」—— 既像提示又像结论，`手工放置` 命中了旧的
+// evidencePattern 语料 ⇒ 判绿。措辞非穷尽，但**已发现的**必须钉住。
+
+test("g-633 ⑧b-c3 已知逃逸措辞必须判红：「默认能 / 能自动发现 / 已跑通 / 事实上…」", () => {
+  const base = read("plugins/opencode/INSTALL.md");
+  const escapes = [
+    "默认能自动发现，若不行再手工放置", // 评审 c3 原文
+    "能自动发现，未放对目录时才手工放置",
+    "这条路已在本地跑通，未放对目录时才手工放置",
+    "未确认过，但事实上已生效，手工放置只是兜底",
+    "未测过整体，但事实上可用，否则再手工放置",
+  ];
+  for (const text of escapes) {
+    const doc = base.replace(
+      /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|).*$/m,
+      `$1 ${text} |`,
+    );
+    assert.notEqual(doc, base, `负向对照必须真的改到了文档（${text}）`);
+    const got = doc.split("\n").find((l) => l.trim().startsWith("|") && l.includes("被 OpenCode 自动发现"))!;
+    assert.equal(splitRowCols(got).length, 3, `前提：改写后仍是 3 列（${text}）`);
+    // 前提：确认这确实是被**新补的**那几条措辞命中（而不是老白名单里的词顺带命中）
+    assert.match(
+      evidenceCol(got),
+      /默认能[^|]{0,6}(发现|生效|可用|工作)|能自动发现|已跑通|跑通|事实上[^|]{0,10}(通过|生效|可用)/,
+      `前提：「${text}」命中本轮新增的逃逸措辞集合`,
+    );
+
+    const problems = auditOpenCodeVerification(doc);
+    assert.notDeepEqual(problems, [], `证据列改成「${text}」必须判红`);
+    assert.ok(
+      problems.some((p) => /肯定式断言/.test(p)),
+      `判红理由必须点名「肯定式断言」（${text}），实际：${JSON.stringify(problems)}`,
+    );
+  }
+});
+
+test("g-633 ⑧b-c3b 反向自检：新增措辞不得误伤诚实的否定式表述", () => {
+  const base = read("plugins/opencode/INSTALL.md");
+  // 这些也含「默认」「自动发现」「已跑通」等**新增线索词**，但语义是**疑问/条件/否定**，不得被判红。
+  // 其中第一条最关键：它含 `默认能自动发现` 这个**本轮新加**的线索（旧版必被误伤），
+  // 但整句是「不确定**是否**…」⇒ 分句级判定必须放行。
+  // 每条用例 = [证据列文本, 是否含本轮新增的线索词]。含线索词的必须证明没被误伤（这是保护的实际
+  // 检验面）；不含线索词的只需证明整句判绿（它防的是 evidencePattern 一侧的误伤）。
+  const honest: Array<[string, boolean]> = [
+    ["未测：不确定是否默认能自动发现，请手工放置", true], // 含 `默认能自动发现`（本轮新增线索）
+    ["能自动发现吗？尚未验证，请先手工放置", true], // 含 `能自动发现`（疑问式结尾）
+    ["若默认能自动发现则可省一步，但这一点尚未验证", true], // 含 `默认能自动发现`（条件从句）
+    ["未验证能否自动发现，先手工放置", false], // 「能否自动发现」不构成线索（`能自动发现` 不在词表内含「否」）
+    ["未确认这条路径是否已跑通，按规则未确认处理", true], // 含 `已跑通`，但被「是否」限定
+  ];
+  for (const [text, hasCue] of honest) {
+    const doc = base.replace(
+      /^(\|\s*`skills\/` 被 OpenCode 自动发现\s*\|\s*❌\s*\*\*未验证\*\*\s*\|).*$/m,
+      `$1 ${text} |`,
+    );
+    assert.notEqual(doc, base, `反向自检必须真的改到了文档（${text}）`);
+    // 必须限定**表格行**：顶部第 8 行的引用块同样含「被 OpenCode 自动发现」（且排在前面），
+    // 不筛表格行就会取到那一行、evidenceCol 返回空串 ⇒ 前提断言假红。
+    const ev = evidenceCol(
+      doc.split("\n").find((l) => l.trim().startsWith("|") && l.includes("被 OpenCode 自动发现"))!,
+    );
+    assert.ok(ev !== "", "反向自检的前提：必须取到 §8 表格行的证据列（非空）");
+    // 前提：含线索词的用例必须确实**含**线索，否则这条自检等于没测到 HEDGE_CLAUSE 的误伤保护
+    assert.equal(AFFIRMATIVE_CLAIM.test(ev), hasCue, `反向自检的前提：「${text}」的线索词命中应为 ${hasCue}`);
+    // 而判定必须认为它是**被限定的**陈述（疑问/条件），不是无条件断言
+    assert.equal(affirmativeClaimIn(ev), null, `「${text}」是疑问/条件分句，不得被判为无条件断言`);
+    assert.deepEqual(auditOpenCodeVerification(doc), [], `诚实的否定式表述「${text}」不得被误伤`);
+  }
+});
+
+// ── ⑧b-e1 **已知边界**：表格外段落的肯定式表述（本轮明确不追，仅固化为已知漏放）──
+//
+// e1 是评审构造的真实逃逸：§8 表格一字不改（结论列、状态列、证据列都诚实），只在表格**后面**
+// 追加一段小结「已在本地跑通，按目录放置即可生效」⇒ 整篇文档自相矛盾，而表格守卫判绿。
+//
+// 本守卫**不追**这一类，理由（主管裁决 + 评审共识）：
+//   「表格外段落会不会自相矛盾」是**整篇自然语言**的性质，任何词表都无法穷尽 —— 本轮已用尽
+//   结构性手段（列语义、列数、未证实语义词族），再补词表只是把地鼠洞挪到下一条措辞。
+//   真实防线是**探针实测**（`scripts/g633-opencode-mcp-probe.mjs`，可复跑）与人工评审。
+// 本测试把这条漏放**钉成已知事实**：若将来有人声称守卫覆盖了 e1，它会先红。
+
+test("g-633 ⑧b-e1 【已知边界】表格外追加的小结肯定断言不被文本守卫拦下（如实固化，非缺陷回归）", () => {
+  const base = read("plugins/opencode/INSTALL.md");
+  const doc = base.replace(
+    /(> \*\*关于 `opencode mcp list`\*\*)/,
+    "> **小结**：skills 已在本地跑通，按目录放置即可生效。\n\n$1",
+  );
+  assert.notEqual(doc, base, "负向对照必须真的改到了文档");
+  // 表格本身一字未动 ⇒ 表格级守卫（锚点/列语义/列数）按设计判绿
+  assert.deepEqual(
+    auditOpenCodeVerification(doc),
+    [],
+    "已知边界：表格外段落的肯定式表述不被文本守卫覆盖（这就是 §8 能力上限，见文件头「能力边界」）",
   );
 });
 

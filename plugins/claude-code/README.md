@@ -19,6 +19,16 @@ claude plugin install dsh-graph@dsh-graph -y
 - **`--allow-write` 后**：再加 27 个写工具，可推进到 `review`。
 - **人工裁决保留**：`graph_resolve_accept`、`transition → delivered`、`graph_claim_supervisor`、`graph_start_attempt` 不可达 —— 必须回 DSH 看板或本地 GUI 裁决。
 
+### 文档守卫的能力边界（请勿再试图穷尽）
+
+> 本守卫保证「登记表声明的未验证结论在**结论列**与**证据列**存在且未被否定」，
+> **不保证**「文档任何位置都没有自相矛盾的肯定式表述」——后者无法用文本守卫穷尽，
+> 依赖评审与 `scripts/g633-opencode-mcp-probe.mjs` 实测。
+
+守卫（`core/tests/g633-host-plugins.test.ts`）只守 §8 表格的**行列语义**；表格**之外**段落的
+肯定式小结（如「已在本地跑通」）守卫看不见，`⑧b-e1` 已把这条漏放固化为已知边界。
+这是有意划定的能力上限，不是待补缺口 —— 发现这类矛盾请用探针实测取证并直接修文档。
+
 ## 结构
 
 ```
