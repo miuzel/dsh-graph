@@ -183,6 +183,7 @@
         "g628-resumed-care-effects.test.ts",
         "g629-tier-manifest.test.ts",
         "g632-write-mode-and-custom-root.test.ts",
+        "g633-host-plugins.test.ts",
         "goal-markdown.test.ts",
         "goal-type.test.ts",
         "guide-injection.test.ts",

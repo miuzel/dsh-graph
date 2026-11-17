@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "dsh-graph": {
+      "type": "http",
+      "url": "http://127.0.0.1:7788/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DSH_GRAPH_MCP_TOKEN}"
+      }
+    }
+  }
+}

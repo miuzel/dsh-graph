@@ -1,0 +1,14 @@
+{
+  "name": "dsh-graph",
+  "version": "1.0.0",
+  "description": "dsh-graph 目标看板：经本地 serve 实例的 MCP 读写目标/判据/卡片/结果；人工裁决保留在 DSH 看板或本地 GUI。",
+  "author": {
+    "name": "miuzel",
+    "url": "https://github.com/miuzel/dsh-graph"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/miuzel/dsh-graph",
+  "repository": "https://github.com/miuzel/dsh-graph",
+  "keywords": ["dsh-graph", "kanban", "goals", "mcp", "graph"],
+  "mcpServers": "./.mcp.json"
+}
