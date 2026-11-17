@@ -1,0 +1,6 @@
+{
+  "name": "dsh-graph",
+  "owner": { "name": "miuzel", "url": "https://github.com/miuzel/dsh-graph" },
+  "description": "dsh-graph Codex 插件市场",
+  "plugins": [ { "name": "dsh-graph", "source": "./", "description": "目标看板 MCP 接入（Codex）" } ]
+}
