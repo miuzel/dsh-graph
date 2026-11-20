@@ -19,8 +19,8 @@
 
 **最新亮点（v1.0.0）**
 
-- **命令行工具 `goal-graph`**：`info` / `status` / `goal` / `version` 只读查询，`sync` 投影常驻事实与目标概览到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，`claim` 认领目标并注入判据，`submit` 跑全量自检后把成果闭环到看板。
-- **独立本地服务**：`goal-graph serve` 在同一进程提供 Web 页面、Web API 与 localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。**默认只读**：MCP 只注册只读查询，写工具根本不注册；需要外部宿主经 MCP 改看板时，由服务端显式 `serve --allow-write` 开启执行类写工具（固定 actor `mcp:local-service`，开关状态见 `serve status` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管/派发**永远** fail-closed，仍需人在本地看板完成。详见 [docs/g632-write-mode-and-custom-root.md](docs/g632-write-mode-and-custom-root.md)。
+- **命令行工具 `goal-graph` 与零配置 stdio MCP**：`info` / `status` / `goal` / `version` 只读查询，`sync` 投影常驻事实与目标概览到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，`claim` 认领目标并注入判据，`submit` 跑全量自检后把成果闭环到看板；新增 `goal-graph mcp` 零配置 stdio 入口，供 Claude Code / Codex / OpenCode 开箱即用（默认 38 个执行类读写工具、`--read-only` 切回 11 只读工具，并按工作区以 `127.0.0.1:0` 自动起/复用本地 Web 看板、退出自动回收）。
+- **独立本地服务**：`goal-graph serve` 在同一进程提供 Web 页面、Web API 与显式 HTTP localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。**默认只读**：MCP 只注册只读查询，写工具根本不注册；需要显式 HTTP 写模式时由服务端 `serve --allow-write` 开启（固定 actor `mcp:local-service`，开关状态见 `serve status` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管/派发在 stdio 与 HTTP 下**永远** fail-closed，仍需人在本地看板完成。详见 [docs/g632-write-mode-and-custom-root.md](docs/g632-write-mode-and-custom-root.md)。
 - **核心资料目录名可按项目自定义**：默认仍是 `.dsh-graph`（零迁移）；插件用既有 `config.root`、CLI 用 `--graph-dir-name`、服务用 `serve init --graph-dir-name` 指向自定义名（如 `board-a`、`boards/main`）。自定义名只接受工作区内规整相对路径，`..` / 绝对路径一律拒绝；worktree 归属与跨看板隔离不受影响。
 - **五包拆分发布**：v1.0.0 起按职责拆成 5 个独立包（DSH 插件本体 `dsh-graph` + 跨宿主 `goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`），由 `scripts/pack-packages.mjs` 从 `dist/` 组装并产出 tarball；每包带独立安装指南，详见 [docs/multi-package-design.md](docs/multi-package-design.md)。
 - **大看板 `status` 提速约 2 倍**：事件流增量索引让 18750 事件看板的中位耗时从约 179ms 降到约 89ms；索引以大小 + inode + 头部指纹三重校验，截断/改写/替换一律回退全量并告警，绝不返回错误计数。
@@ -63,6 +63,7 @@ npx --package goal-graph-cli goal-graph status        # 目标数、事件数、
 npx --package goal-graph-cli goal-graph goal list     # 列出目标（--all 含归档）
 npx --package goal-graph-cli goal-graph goal show g-1 # 单个目标（元信息 + 正文）
 npx --package goal-graph-cli goal-graph claim g-1     # 认领目标：推进到 in_progress 并输出「目标 + 判据 + 边界」任务单
+npx --package goal-graph-cli goal-graph mcp           # 零配置 stdio MCP（供 Claude Code / Codex / OpenCode 自动拉起）
 ```
 
 > 除 `sync`（投影上下文）与 `claim`（认领目标）外，其余命令全部只读。`claim` 是**唯一会写看板**的命令：

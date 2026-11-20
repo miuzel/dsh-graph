@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "goal-graph": {
-      "type": "http",
-      "url": "http://127.0.0.1:7788/mcp",
-      "bearer_token_env_var": "GOAL_GRAPH_MCP_TOKEN"
+      "type": "stdio",
+      "command": "goal-graph",
+      "args": ["mcp"]
     }
   }
 }

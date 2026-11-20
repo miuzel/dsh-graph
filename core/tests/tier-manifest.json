@@ -184,6 +184,7 @@
         "g629-tier-manifest.test.ts",
         "g632-write-mode-and-custom-root.test.ts",
         "g633-host-plugins.test.ts",
+        "g637-stdio-mcp-autostart.test.ts",
         "goal-markdown.test.ts",
         "goal-type.test.ts",
         "guide-injection.test.ts",
@@ -431,7 +432,8 @@
         "files": [
           "g623-service.test.ts",
           "g623-service-security.test.ts",
-          "g623-service-e2e.test.ts"
+          "g623-service-e2e.test.ts",
+          "g637-stdio-mcp-autostart.test.ts"
         ]
       }
     }
@@ -451,7 +453,8 @@
         "g623-service-e2e.test.ts",
         "g623-service-security.test.ts",
         "g623-service.test.ts",
-        "g632-write-mode-and-custom-root.test.ts"
+        "g632-write-mode-and-custom-root.test.ts",
+        "g637-stdio-mcp-autostart.test.ts"
       ]
     },
     "isolation": {
@@ -466,6 +469,7 @@
         "g449-cross-board-clean-ownership.test.ts",
         "g611-private-workspace-isolation.test.ts",
         "g632-write-mode-and-custom-root.test.ts",
+        "g637-stdio-mcp-autostart.test.ts",
         "worktree-isolation-g283.test.ts"
       ]
     },
@@ -540,7 +544,8 @@
         "g628-real-stale-caller.test.ts",
         "g629-tier-manifest.test.ts",
         "g630-events-index.test.ts",
-        "g631-multi-package.test.ts"
+        "g631-multi-package.test.ts",
+        "g637-stdio-mcp-autostart.test.ts"
       ]
     }
   },

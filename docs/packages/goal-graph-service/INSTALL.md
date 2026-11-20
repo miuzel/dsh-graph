@@ -1,7 +1,6 @@
 # goal-graph-service 安装指南
 
-goal-graph 本地**只读**服务（可选 `--allow-write`）：同一进程提供 Web App（`/`）、Web API（`/api/…`）与 localhost MCP
-endpoint（`POST /mcp`）。
+goal-graph 本地服务模块：提供零配置 stdio MCP（`goal-graph mcp`，按工作区以 `127.0.0.1:0` 自动起/复用本地 Web 看板，默认 38 读写工具、`--read-only` 11 只读工具）与显式 HTTP 服务（`goal-graph serve`，同一进程提供 Web App `/`、Web API `/api/…` 与 localhost MCP `POST /mcp`，默认只读、按需 `--allow-write`）。
 
 **自包含**：所需的 core 运行时与提示词资产都在 tarball 内，不依赖其他包。
 

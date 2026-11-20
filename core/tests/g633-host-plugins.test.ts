@@ -245,34 +245,43 @@ test("g-633 ② 插件目录只含清单/配置/文档/技能/Licence，无产�
   assert.deepEqual(problems, []);
 });
 
-// ── ③ token 不进配置 ──────────────────────────────────────────────────────────
+// ── ③ 零配置 stdio 且无任何 token 字面量 ─────────────────────────────────────
 
-test("g-633 ③ 插件配置内无 token 字面量，只写各宿主原生变量引用", () => {
+test("g-633 ③ 插件配置采用零配置 stdio，无 token 字面量、无硬编码端口 7788", () => {
   const problems: string[] = [];
 
-  // Claude Code：${VAR}
-  const ccMcp = readFileSync(join(repoRoot, "plugins/claude-code/.mcp.json"), "utf8");
-  if (!ccMcp.includes("Bearer ${GOAL_GRAPH_MCP_TOKEN}")) problems.push("claude-code .mcp.json: 必须写 Bearer ${GOAL_GRAPH_MCP_TOKEN}");
+  // Claude Code：零配置 stdio
+  const ccMcp = readJson("plugins/claude-code/.mcp.json");
+  const ccServer = ccMcp.mcpServers?.["goal-graph"] ?? {};
+  if (ccServer.type !== "stdio" || ccServer.command !== "goal-graph" || JSON.stringify(ccServer.args) !== JSON.stringify(["mcp"])) {
+    problems.push(`claude-code .mcp.json: 必须是零配置 stdio（goal-graph mcp），实际 ${JSON.stringify(ccServer)}`);
+  }
 
-  // Codex：bearer_token_env_var（运行时实测唯一真正发送 Bearer 头的写法）
-  const cxMcp = JSON.parse(read("plugins/codex/.mcp.json"));
+  // Codex：零配置 stdio（不携带失效 headers / env_http_headers）
+  const cxMcp = readJson("plugins/codex/.mcp.json");
   const cxServer = cxMcp.mcpServers?.["goal-graph"] ?? {};
-  if (cxServer.bearer_token_env_var !== "GOAL_GRAPH_MCP_TOKEN") {
-    problems.push("codex .mcp.json: 必须用 bearer_token_env_var = \"GOAL_GRAPH_MCP_TOKEN\"");
+  if (cxServer.type !== "stdio" || cxServer.command !== "goal-graph" || JSON.stringify(cxServer.args) !== JSON.stringify(["mcp"])) {
+    problems.push(`codex .mcp.json: 必须是零配置 stdio（goal-graph mcp），实际 ${JSON.stringify(cxServer)}`);
   }
-  if (cxServer.headers !== undefined) {
-    problems.push("codex .mcp.json: 不得使用 headers（插件路径运行时不发认证头）");
+  if (cxServer.headers !== undefined || cxServer.env_http_headers !== undefined) {
+    problems.push("codex .mcp.json: 不得出现 headers / env_http_headers");
   }
 
-  // OpenCode：{env:VAR}
-  const ocMcp = JSON.parse(read("plugins/opencode/opencode.json"));
-  const ocAuth = ocMcp.mcp?.servers?.["goal-graph"]?.headers?.Authorization ?? "";
-  if (!ocAuth.includes("{env:GOAL_GRAPH_MCP_TOKEN}")) problems.push("opencode.json: 必须写 Bearer {env:GOAL_GRAPH_MCP_TOKEN}");
+  // OpenCode：零配置 local stdio
+  const ocMcp = readJson("plugins/opencode/opencode.json");
+  const ocServer = ocMcp.mcp?.servers?.["goal-graph"] ?? {};
+  if (ocServer.type !== "local" || JSON.stringify(ocServer.command) !== JSON.stringify(["goal-graph", "mcp"])) {
+    problems.push(`opencode.json: 必须是零配置 local stdio（["goal-graph","mcp"]），实际 ${JSON.stringify(ocServer)}`);
+  }
 
-  // 全量扫描：任何插件文件都不得含 token 字面量
+  // 全量扫描：任何插件文件都不得含 token 字面量；配置文件不得硬编码固定端口 7788
   for (const host of HOSTS) {
     for (const rel of walk(`plugins/${host}`)) {
-      problems.push(...tokenLiteralProblems(rel, readFileSync(join(repoRoot, rel), "utf8")));
+      const content = readFileSync(join(repoRoot, rel), "utf8");
+      problems.push(...tokenLiteralProblems(rel, content));
+      if ((rel.endsWith(".mcp.json") || rel.endsWith("opencode.json")) && content.includes("7788")) {
+        problems.push(`${rel}: 零配置插件不得硬编码端口 7788`);
+      }
     }
   }
 
@@ -351,7 +360,7 @@ test("g-633 ④c 负向对照：把 Human Gate 写成可调用形态、或引用
 
 // ── ⑤ 正文与能力一致性（模式口径） ────────────────────────────────────────────
 
-test("g-633 ⑤ 三份技能正文口径一致：默认只读、--allow-write 后可写、Human Gate 不可达", () => {
+test("g-633 ⑤ 三份技能正文口径一致：stdio 默认 38 工具、--read-only/serve 只读 11 工具、Human Gate 不可达", () => {
   const texts = HOSTS.map((h) => read(`plugins/${h}/skills/goal-graph/SKILL.md`));
   // 三份必须是同一份外部宿主版（内容逐字节一致，避免三处漂移出第二真源）
   for (let i = 1; i < texts.length; i += 1) {
@@ -362,7 +371,7 @@ test("g-633 ⑤ 三份技能正文口径一致：默认只读、--allow-write �
     );
   }
   const t = texts[0];
-  for (const pat of [/默认只读/, /11\b.*工具|工具.*11\b/, /38\b/, /--allow-write/, /人工裁决/]) {
+  for (const pat of [/goal-graph mcp/, /--read-only/, /11\b.*工具|工具.*11\b|\|\s*\*\*11\*\*/, /38\b/, /--allow-write/, /人工裁决/]) {
     assert.match(t, pat, `技能正文缺少必要口径：${pat}`);
   }
 });
@@ -394,54 +403,42 @@ test("g-633 ⑥ 每份插件定义都有安装指南：一条命令安装/前置
   assert.deepEqual(problems, []);
 });
 
-// ── ⑦ 宿主运行时实测语义：Codex bearer_token_env_var / OpenCode mcp.servers ────
+// ── ⑦ 宿主运行时实测语义：三宿主统一零配置 stdio（goal-graph mcp） ──────────────
 
-test("g-633 ⑦ MCP endpoint 三宿主指向同一地址，且 token 传递按宿主运行时实测语义", () => {
+test("g-633 ⑦ 三宿主统一零配置 stdio 入口（goal-graph mcp），无固定端口/手动 token 前置", () => {
   const cc = readJson("plugins/claude-code/.mcp.json").mcpServers["goal-graph"];
   const cx = readJson("plugins/codex/.mcp.json").mcpServers["goal-graph"];
   const oc = readJson("plugins/opencode/opencode.json").mcp.servers["goal-graph"];
-  const urls = [cc.url, cx.url, oc.url];
-  assert.deepEqual(new Set(urls).size, 1, `三宿主 url 必须一致，实际：${urls.join(" / ")}`);
-  assert.match(urls[0], /^http:\/\/127\.0\.0\.1:\d+\/mcp$/, "只允许数值回环 + /mcp 路径");
-  assert.equal(cc.type, "http");
-  assert.equal(cx.type, "http");
-  assert.equal(oc.type, "remote");
+  assert.deepEqual(cc, { type: "stdio", command: "goal-graph", args: ["mcp"] });
+  assert.deepEqual(cx, { type: "stdio", command: "goal-graph", args: ["mcp"] });
+  assert.deepEqual(oc, { type: "local", command: ["goal-graph", "mcp"] });
 });
 
-// 受控探针实测基线（codex-cli 0.166.0）：同一插件、同一监听器，仅认证字段不同 ——
-//   bearer_token_env_var  ⇒ 服务端收到 `Bearer <token>`，mcp 连接 ready / authStatus=bearerToken
-//   env_http_headers      ⇒ 服务端收到 `undefined`（根本不发 Authorization 头），authStatus=unknown
-// 下面两条正向 + 负向断言钉住的正是这个运行时事实，而不是 `codex mcp get` 的静态回显。
-test("g-633 ⑦a Codex 用 bearer_token_env_var（运行时唯一真正发送 Bearer 头的写法）", () => {
+test("g-633 ⑦a Codex 插件配置采用 stdio（且进阶 HTTP 生成器仍只用 bearer_token_env_var）", async () => {
   const cx = readJson("plugins/codex/.mcp.json").mcpServers["goal-graph"];
-  assert.equal(
-    cx.bearer_token_env_var,
-    "GOAL_GRAPH_MCP_TOKEN",
-    "Codex 必须用 bearer_token_env_var 指向 token 环境变量名（值不落盘）",
-  );
+  assert.equal(cx.type, "stdio");
+  assert.equal(cx.command, "goal-graph");
+  assert.deepEqual(cx.args, ["mcp"]);
+  const mcpMod = await import(new URL("../../scripts/mcp/index.mjs", import.meta.url).href);
+  const httpToml = mcpMod.codexConfig({ transport: "http", port: 7788 });
+  assert.match(httpToml, /bearer_token_env_var\s*=\s*"GOAL_GRAPH_MCP_TOKEN"/, "进阶 HTTP 模式仍必须用 bearer_token_env_var");
+  assert.ok(!httpToml.includes("env_http_headers"), "进阶 HTTP 模式同样不得回退到 env_http_headers");
 });
 
-test("g-633 ⑦b 负向：Codex 配置不得出现 env_http_headers（插件路径运行时不发认证头）", () => {
+test("g-633 ⑦b 负向：Codex 配置不得出现 env_http_headers 或 headers（插件路径运行时不发认证头）", () => {
   const raw = read("plugins/codex/.mcp.json");
   const cx = JSON.parse(raw).mcpServers["goal-graph"];
-  // ① 结构化断言：对象里出现该键即判红（防止回退到曾把静态回显误判为生效的写法）
   assert.equal(
     Object.hasOwn(cx, "env_http_headers"),
     false,
-    "codex .mcp.json 不得出现 env_http_headers：插件 MCP schema 不承载该字段，运行时服务端收到 undefined",
+    "codex .mcp.json 不得出现 env_http_headers",
   );
-  // ② 静默回退也拦住：认证配置里任何位置的字面量
   assert.equal(
     raw.includes("env_http_headers"),
     false,
     "codex .mcp.json 全文不得出现 env_http_headers（含嵌套/大小写变体）",
   );
-  assert.equal(Object.hasOwn(cx, "headers"), false, "codex .mcp.json 不得出现 headers（同样不发认证头）");
-  // ③ 反向交叉：不能既用 bearer_token_env_var 又留一个会被丢弃的 env_http_headers
-  assert.ok(
-    !("env_http_headers" in cx) === (cx.bearer_token_env_var === "GOAL_GRAPH_MCP_TOKEN"),
-    "认证写法必须唯一且为 bearer_token_env_var",
-  );
+  assert.equal(Object.hasOwn(cx, "headers"), false, "codex .mcp.json 不得出现 headers");
 });
 
 test("g-633 ⑦b 无未授权网络/发布痕迹：不声明 dependencies，不调用 npm publish/tag/push", () => {

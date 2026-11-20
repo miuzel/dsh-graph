@@ -13,21 +13,23 @@
  * 退出码：0 = 全部实测项通过；1 = 有实测项失败；2 = 环境不满足（缺 opencode / 缺构建产物）。
  *
  * 实测项（每项都标注鉴别力）：
- *   P1 XDG_* 重定向后可启动                     [有鉴别力：不重定向则 EROFS 崩溃]
- *   P2 `opencode mcp add` 写出的配置形状        [有鉴别力：产出字段可逐项比对]
- *   P3 `opencode debug config` 能读到该配置     [**无鉴别力**：header 对任意值一律掩码 `***`]
- *   P4 `{env:}` 真的插值成 token（正向）        [有鉴别力，配合 P5 才是决定性证据]
- *   P5 未导出该变量时退化为 len=6（负向对照）   [**决定性**：等长字面量无法伪满足]
- *   P6 `${VAR}` 形态不插值（负向对照）          [**决定性**：区分 OpenCode 与 Claude Code 语法]
- *   P7 真实 serve 上的 MCP 往返（initialize/tools/list/tools/call）[有鉴别力：需服务端真实响应]
- *   P8 `opencode mcp list` 恒返回空             [无鉴别力，原因未查明 ⇒ 不作判据]
+ *   P1  XDG_* 重定向后可启动                     [有鉴别力：不重定向则 EROFS 崩溃]
+ *   P2  `opencode mcp add ... -- goal-graph mcp` 写出的零配置 stdio 形状 [有鉴别力：与 plugins/opencode/opencode.json 逐字段比对]
+ *   P2c OpenCode 真实拉起 stdio 进程（`type: "local"`） [有鉴别力：shim 实测捕获真实 spawn + cwd/args]
+ *   P2d 真实 `goal-graph mcp` stdio 协议往返（默认 38 工具 / `--read-only` 11 工具 / 自动 Web 端口）[有鉴别力]
+ *   P3  `opencode debug config` 能读到配置（HTTP 模式掩码 `***`） [**无鉴别力**：header 对任意值一律掩码 `***`]
+ *   P4  HTTP 模式 `{env:}` 真的插值成 token（正向） [有鉴别力，配合 P5 才是决定性证据]
+ *   P5  未导出该变量时退化为 len=6（负向对照）     [**决定性**：等长字面量无法伪满足]
+ *   P6  `${VAR}` 形态不插值（负向对照）            [**决定性**：区分 OpenCode 与 Claude Code 语法]
+ *   P7  真实显式 HTTP `serve` 上的 MCP 往返        [有鉴别力：需服务端真实响应 + 无头 401]
+ *   P8  `opencode mcp list` 输出依赖后台服务状态   [无鉴别力，原因未查明 ⇒ 不作判据]
  *
  * 不落盘的东西：本脚本只在 `TMPDIR` 下建临时目录，退出时清理；token 只生成在内存与临时文件里，
  * 不写入任何仓库文件、不打印完整值（只打印长度）。
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -106,9 +108,108 @@ async function main() {
     true,
   );
 
-  // ── P2 mcp add 产出配置形状 ──────────────────────────────────────────────
+  // ── P2 零配置 stdio：`opencode mcp add ... -- goal-graph mcp` 产出配置形状 ──
+  const addedStdio = oc(["mcp", "add", "goal-graph", "--global", "--", "goal-graph", "mcp"]);
+  let writtenStdioOk = false;
+  let writtenStdioShape = "";
+  if (existsSync(ocConfigPath)) {
+    const j = JSON.parse(readFileSync(ocConfigPath, "utf8"));
+    const s = j?.mcp?.servers?.["goal-graph"];
+    writtenStdioOk = s?.type === "local" && Array.isArray(s?.command) && s.command[0] === "goal-graph" && s.command[1] === "mcp";
+    writtenStdioShape = JSON.stringify(s);
+  }
+  record(
+    "P2",
+    "opencode mcp add 写出零配置 stdio（mcp.servers.goal-graph: type=local, command=[goal-graph, mcp]）",
+    writtenStdioOk,
+    writtenStdioShape || addedStdio.out.trim().slice(0, 200),
+    true,
+  );
+
+  // 与仓库内 plugins/opencode/opencode.json 逐字段比对
+  const repoCfg = JSON.parse(readFileSync(join(REPO, "plugins/opencode/opencode.json"), "utf8"));
+  const repoServer = repoCfg?.mcp?.servers?.["goal-graph"];
+  const sameStdio = JSON.stringify(repoServer) === writtenStdioShape;
+  record("P2b", "插件目录 opencode.json 与实测 stdio 产出逐字段一致", sameStdio, sameStdio ? "逐字段一致" : `仓库=${JSON.stringify(repoServer)}`, true);
+
+  // ── P2c OpenCode 真实拉起 stdio 进程（`type: "local"`）──────────────────
+  {
+    const stdioHome = mkdtempSync(join(tmpdir(), "g633-stdio-"));
+    for (const sub of ["data", "config/opencode", "state", "cache", "bin", "ws"]) mkdirSync(join(stdioHome, sub), { recursive: true });
+    const spawnMarker = join(stdioHome, "spawned.log");
+    const shimPath = join(stdioHome, "bin", "goal-graph");
+    writeFileSync(
+      shimPath,
+      `#!/usr/bin/env bash\necho "SPAWNED args=$*" >> ${JSON.stringify(spawnMarker)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(distServe)} "$@"\n`,
+    );
+    chmodSync(shimPath, 0o755);
+    writeFileSync(
+      join(stdioHome, "config", "opencode", "opencode.json"),
+      JSON.stringify({ mcp: { servers: { "goal-graph": { type: "local", command: ["goal-graph", "mcp", "--no-web"] } } } }, null, 2) + "\n",
+    );
+    const stdioEnv = {
+      ...process.env,
+      PATH: `${join(stdioHome, "bin")}:${process.env.PATH ?? ""}`,
+      XDG_DATA_HOME: join(stdioHome, "data"),
+      XDG_CONFIG_HOME: join(stdioHome, "config"),
+      XDG_STATE_HOME: join(stdioHome, "state"),
+      XDG_CACHE_HOME: join(stdioHome, "cache"),
+    };
+    delete stdioEnv.GOAL_GRAPH_MCP_TOKEN;
+    spawnSync("opencode", ["run", "--standalone", "hi"], { cwd: join(stdioHome, "ws"), env: stdioEnv, encoding: "utf8", timeout: 60000 });
+    const markerText = existsSync(spawnMarker) ? readFileSync(spawnMarker, "utf8").trim() : "";
+    rmSync(stdioHome, { recursive: true, force: true });
+    record(
+      "P2c",
+      "OpenCode 按 type=local 配置真实拉起 goal-graph mcp 子进程",
+      markerText.includes("SPAWNED args=mcp"),
+      markerText ? `shim 实测捕获：${markerText.split("\n")[0]}` : "未捕获到 goal-graph mcp 启动记录",
+      true,
+    );
+  }
+
+  // ── P2d 真实 `goal-graph mcp` stdio 协议往返（默认 38 / --read-only 11）──
+  {
+    const wsDir = join(tmpRoot, "stdio-ws");
+    const stateDir = join(tmpRoot, "stdio-state");
+    mkdirSync(wsDir, { recursive: true });
+    const runStdio = (extraArgs) =>
+      spawnSync(process.execPath, [distServe, "mcp", "--state-dir", stateDir, ...extraArgs], {
+        cwd: wsDir,
+        input: [
+          JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }),
+          JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+          JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+        ].join("\n") + "\n",
+        encoding: "utf8",
+        timeout: 15000,
+      });
+    const rw = runStdio([]);
+    const ro = runStdio(["--read-only", "--no-web"]);
+    const rwMsgs = rw.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const roMsgs = ro.stdout.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const rwCount = rwMsgs[1]?.result?.tools?.length ?? -1;
+    const roCount = roMsgs[1]?.result?.tools?.length ?? -1;
+    const ok =
+      rw.status === 0 &&
+      ro.status === 0 &&
+      rwMsgs.length === 2 &&
+      rwMsgs[0]?.result?.serverInfo?.name === "goal-graph-local" &&
+      rwCount === 38 &&
+      roCount === 11 &&
+      /web=http:\/\/127\.0\.0\.1:\d+\//.test(rw.stderr);
+    record(
+      "P2d",
+      "真实 goal-graph mcp stdio 往返（默认 38 工具 + 自动随机端口 Web / --read-only 11 工具）",
+      ok,
+      `default tools=${rwCount} (exit=${rw.status}); --read-only tools=${roCount} (exit=${ro.status}); stderr=${rw.stderr.trim().slice(0, 120)}`,
+      true,
+    );
+  }
+
+  // ── 进阶显式 HTTP 形态：`opencode mcp add --url` + `{env:}` 插值对照 ─────
   const url = "http://127.0.0.1:7788/mcp";
-  const added = oc([
+  oc([
     "mcp",
     "add",
     "goal-graph",
@@ -118,21 +219,6 @@ async function main() {
     "Authorization=Bearer {env:GOAL_GRAPH_MCP_TOKEN}",
     "--global",
   ]);
-  let writtenOk = false;
-  let writtenShape = "";
-  if (existsSync(ocConfigPath)) {
-    const j = JSON.parse(readFileSync(ocConfigPath, "utf8"));
-    const s = j?.mcp?.servers?.["goal-graph"];
-    writtenOk = s?.type === "remote" && s?.url === url && s?.headers?.Authorization === "Bearer {env:GOAL_GRAPH_MCP_TOKEN}";
-    writtenShape = JSON.stringify(s);
-  }
-  record("P2", "opencode mcp add 写出 mcp.servers.goal-graph（type/url/header）", writtenOk, writtenShape || added.out.trim().slice(0, 200), true);
-
-  // 与仓库内 opencode.json 逐字段比对
-  const repoCfg = JSON.parse(readFileSync(join(REPO, "plugins/opencode/opencode.json"), "utf8"));
-  const repoServer = repoCfg?.mcp?.servers?.["goal-graph"];
-  const same = JSON.stringify(repoServer) === writtenShape;
-  record("P2b", "插件目录 opencode.json 与实测产出逐字段一致", same, same ? "逐字段一致" : `仓库=${JSON.stringify(repoServer)}`, true);
 
   // ── P3 debug config 显示 ***（无鉴别力）─────────────────────────────────
   const dbg = oc(["debug", "config"]);

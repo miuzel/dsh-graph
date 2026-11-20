@@ -1,29 +1,42 @@
 /**
- * goal-graph-mcp —— MCP 适配器与三宿主配置生成（g-631 / g-634）。
+ * goal-graph-mcp —— MCP 适配器与三宿主配置生成（g-631 / g-634 / g-637）。
  *
- * 判据 4：Claude Code / Codex / OpenCode 的配置**能被各自宿主识别**，且**都指向同一 endpoint**，
- * 并且 **token 绝不写进配置文件**。
- *
- * 「不让 token 进配置文件」的三宿主落地方式（各自支持的原生 env 引用语法，不是我们发明的）：
- *   · Claude Code（`.mcp.json` / `~/.claude.json`）：`${VAR}` 展开 ⇒ `Authorization: Bearer ${VAR}`
- *   · Codex（`~/.codex/config.toml`）：`bearer_token_env_var = "VAR"`（专门为此存在的键）
- *   · OpenCode（`opencode.json`）：`{env:VAR}` 插值 ⇒ `Authorization: Bearer {env:VAR}`
- * 三者都只写**变量名**；真实 token 由用户从 goal-graph 服务的凭据文件（0600）注入环境。
- *
- * endpoint 单一真源：由 `{host, port}` 推导，三宿主共用 `baseUrl()` 结果 —— 不可能出现
- * 「三个配置指向三个不同端口」的漂移。
+ * 两种传输形态：
+ *   1. **默认零配置 `stdio`（g-637）**：三宿主直接拉起当前工作区的 `goal-graph mcp`
+ *      （无需手动起 `serve`、无需固定端口 7788、无需 `export GOAL_GRAPH_MCP_TOKEN`；
+ *      默认 38 个读写工具，`--read-only` 切回 11 只读工具；同时按工作区自动起/复用随机端口本地 Web 看板）。
+ *   2. **显式 `http`（`--transport http [--port <p>]`）**：连接显式 `goal-graph serve` 端点，
+ *      三宿主共用 `baseUrl()` 推导的单一 endpoint，**token 绝不写进配置文件**：
+ *        · Claude Code（`.mcp.json` / `~/.claude.json`）：`${VAR}` 展开 ⇒ `Authorization: Bearer ${VAR}`
+ *        · Codex（`~/.codex/config.toml`）：`bearer_token_env_var = "VAR"`
+ *        · OpenCode（`opencode.json`）：`mcp.servers.goal-graph` + `{env:VAR}` 插值 ⇒ `Authorization: Bearer {env:VAR}`
  */
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 7788;
 export const DEFAULT_TOKEN_ENV = "GOAL_GRAPH_MCP_TOKEN";
+export const DEFAULT_TRANSPORT = "stdio";
+export const TRANSPORTS = ["stdio", "http"];
+export const DEFAULT_STDIO_COMMAND = "goal-graph";
+export const DEFAULT_STDIO_ARGS = ["mcp"];
 export const SERVER_KEY = "goal-graph";
 /** 服务端只允许数值回环绑定（见 core/service/policy.ts）；生成器也坚持这一点。 */
 export const ALLOWED_HOST = "127.0.0.1";
 
 export class McpConfigError extends Error {}
 
-/** 校验并给出 MCP endpoint 基址（三宿主共用；不带 /mcp 后缀）。 */
+function assertTransport(transport) {
+  if (!TRANSPORTS.includes(transport)) {
+    throw new McpConfigError(`未知传输模式：${transport}（可选：${TRANSPORTS.join(", ")}）`);
+  }
+  return transport;
+}
+
+function stdioArgs({ readOnly = false } = {}) {
+  return readOnly ? [...DEFAULT_STDIO_ARGS, "--read-only"] : [...DEFAULT_STDIO_ARGS];
+}
+
+/** 校验并给出 MCP endpoint 基址（HTTP 模式三宿主共用；不带 /mcp 后缀）。 */
 export function baseUrl({ host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
   if (host !== ALLOWED_HOST) {
     throw new McpConfigError(`host 只允许 ${ALLOWED_HOST}（服务端只绑定数值回环，拒绝 ${host}）`);
@@ -34,7 +47,7 @@ export function baseUrl({ host = DEFAULT_HOST, port = DEFAULT_PORT } = {}) {
   return `http://${host}:${port}`;
 }
 
-/** MCP endpoint（三宿主配置里的 url 字段值，逐字相同）。 */
+/** MCP HTTP endpoint（HTTP 模式三宿主配置里的 url 字段值，逐字相同）。 */
 export function mcpEndpoint(opts = {}) {
   return `${baseUrl(opts)}/mcp`;
 }
@@ -47,10 +60,26 @@ function assertTokenEnv(tokenEnv) {
 
 /**
  * Claude Code `.mcp.json` 片段。
- * `scope="project"` ⇒ `.mcp.json` 可直接入库（token 仍是 ${VAR}，不泄漏）；
- * `scope="user"` ⇒ 写进 `~/.claude.json` 的 `mcpServers`（同一结构）。
+ * 默认 `transport="stdio"`（零配置直连 `goal-graph mcp`）；`transport="http"` 生成显式 HTTP + `${VAR}`。
  */
-export function claudeCodeConfig({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}) {
+export function claudeCodeConfig({
+  transport = DEFAULT_TRANSPORT,
+  readOnly = false,
+  tokenEnv = DEFAULT_TOKEN_ENV,
+  ...opts
+} = {}) {
+  assertTransport(transport);
+  if (transport === "stdio") {
+    return {
+      mcpServers: {
+        [SERVER_KEY]: {
+          type: "stdio",
+          command: DEFAULT_STDIO_COMMAND,
+          args: stdioArgs({ readOnly }),
+        },
+      },
+    };
+  }
   assertTokenEnv(tokenEnv);
   return {
     mcpServers: {
@@ -63,8 +92,18 @@ export function claudeCodeConfig({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {})
   };
 }
 
-/** Claude Code 的 CLI 等价命令（用户可复制执行，token 仍是 shell 变量引用）。 */
-export function claudeCodeCommand({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}) {
+/** Claude Code 的 CLI 等价命令（用户可复制执行）。 */
+export function claudeCodeCommand({
+  transport = DEFAULT_TRANSPORT,
+  readOnly = false,
+  tokenEnv = DEFAULT_TOKEN_ENV,
+  ...opts
+} = {}) {
+  assertTransport(transport);
+  if (transport === "stdio") {
+    const argv = [DEFAULT_STDIO_COMMAND, ...stdioArgs({ readOnly })].join(" ");
+    return `claude mcp add --transport stdio ${SERVER_KEY} -- ${argv}`;
+  }
   assertTokenEnv(tokenEnv);
   return `claude mcp add --transport http ${SERVER_KEY} ${mcpEndpoint(opts)} --header "Authorization: Bearer $${tokenEnv}"`;
 }
@@ -74,7 +113,22 @@ export function claudeCodeCommand({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}
  * 只输出 `[mcp_servers.goal-graph]` 这一张表 —— 用户在**共享**的 config.toml 里手动合并，
  * 生成器绝不整文件覆盖。
  */
-export function codexConfig({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}) {
+export function codexConfig({
+  transport = DEFAULT_TRANSPORT,
+  readOnly = false,
+  tokenEnv = DEFAULT_TOKEN_ENV,
+  ...opts
+} = {}) {
+  assertTransport(transport);
+  if (transport === "stdio") {
+    const argsToml = stdioArgs({ readOnly }).map((a) => JSON.stringify(a)).join(", ");
+    return [
+      `[mcp_servers.${SERVER_KEY}]`,
+      `command = ${JSON.stringify(DEFAULT_STDIO_COMMAND)}`,
+      `args = [${argsToml}]`,
+      "",
+    ].join("\n");
+  }
   assertTokenEnv(tokenEnv);
   return [
     `[mcp_servers.${SERVER_KEY}]`,
@@ -85,17 +139,37 @@ export function codexConfig({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}) {
   ].join("\n");
 }
 
-/** OpenCode `opencode.json` 片段（`mcp` 键，type=remote + {env:VAR} 插值）。 */
-export function openCodeConfig({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}) {
+/** OpenCode `opencode.json` 片段（默认 `type="local"` stdio；HTTP 模式为 `type="remote"` + `{env:VAR}`）。 */
+export function openCodeConfig({
+  transport = DEFAULT_TRANSPORT,
+  readOnly = false,
+  tokenEnv = DEFAULT_TOKEN_ENV,
+  ...opts
+} = {}) {
+  assertTransport(transport);
+  if (transport === "stdio") {
+    return {
+      $schema: "https://opencode.ai/config.json",
+      mcp: {
+        servers: {
+          [SERVER_KEY]: {
+            type: "local",
+            command: [DEFAULT_STDIO_COMMAND, ...stdioArgs({ readOnly })],
+          },
+        },
+      },
+    };
+  }
   assertTokenEnv(tokenEnv);
   return {
     $schema: "https://opencode.ai/config.json",
     mcp: {
-      [SERVER_KEY]: {
-        type: "remote",
-        url: mcpEndpoint(opts),
-        enabled: true,
-        headers: { Authorization: `Bearer {env:${tokenEnv}}` },
+      servers: {
+        [SERVER_KEY]: {
+          type: "remote",
+          url: mcpEndpoint(opts),
+          headers: { Authorization: `Bearer {env:${tokenEnv}}` },
+        },
       },
     },
   };
@@ -118,15 +192,33 @@ export function generate(host, opts = {}) {
 }
 
 /**
- * 自检：断言一份已生成文本/对象**不含任何看起来像真实 token 的东西**，
- * 且确实只引用了环境变量名。供守卫测试与 --verify 使用。
+ * 自检：断言一份已生成文本/对象**不含任何看起来像真实 token 的东西**。
+ * - HTTP 配置：必须只引用 `GOAL_GRAPH_MCP_TOKEN` 环境变量名（不认旧 `DSH_GRAPH_MCP_TOKEN`）、无字面量；
+ * - stdio 配置：必须以 `goal-graph` + `mcp` 启动、不含任何 token 字面量或旧环境变量名。
  */
-export function leaksToken(rendered) {
+export function leaksToken(rendered, { transport } = {}) {
   const text = typeof rendered === "string" ? rendered : JSON.stringify(rendered);
-  // 允许的三种引用形态（只含变量名，不含值）
-  const placeholder = /\$\{GOAL_GRAPH_MCP_TOKEN\}|\{env:GOAL_GRAPH_MCP_TOKEN\}|bearer_token_env_var = "GOAL_GRAPH_MCP_TOKEN"/;
-  const ok = placeholder.test(text);
-  // 危险信号：Bearer 后面直接跟了 32+ 位的非空白字面量（真实 token 的典型形态）
-  const literal = /Bearer\s+(?!\$\{|{env:)[A-Za-z0-9._~+/=-]{24,}/.test(text);
+  // 危险信号：Bearer 后面直接跟 24+ 位非占位字面量，或任意 32+ 位疑似 hex/base64 凭据字面量（排除 URL）
+  const bearerLiteral = /Bearer\s+(?!\$\{|\{env:)[A-Za-z0-9._~+/=-]{24,}/.test(text);
+  const longSecretMatch = /["'\s=:]([A-Za-z0-9._~+/=-]{32,})["'\s]/.exec(text);
+  const longSecretLiteral = Boolean(longSecretMatch && !/^https?:|^\/|^\.\.?\//.test(longSecretMatch[1]));
+  const literal = bearerLiteral || longSecretLiteral;
+  const hasStaleEnv = /\bDSH_GRAPH_MCP_TOKEN\b/.test(text);
+
+  const inferredHttp =
+    transport === "http" ||
+    (transport === undefined &&
+      (/http:\/\/127\.0\.0\.1:\d+\/mcp/.test(text) || /Authorization|bearer_token_env_var/.test(text)));
+
+  if (inferredHttp) {
+    // HTTP 模式必须按三种原生变量引用语法之一引用 GOAL_GRAPH_MCP_TOKEN
+    const placeholder = /\$\{GOAL_GRAPH_MCP_TOKEN\}|\{env:GOAL_GRAPH_MCP_TOKEN\}|bearer_token_env_var\s*=\s*"GOAL_GRAPH_MCP_TOKEN"/;
+    const ok = placeholder.test(text) && !hasStaleEnv && !literal;
+    return { ok, literal };
+  }
+
+  // stdio 模式：不携带 token 字段，且必须指向 goal-graph mcp
+  const hasStdioCmd = /"goal-graph"/.test(text) && /"mcp"/.test(text);
+  const ok = hasStdioCmd && !hasStaleEnv && !literal;
   return { ok, literal };
 }

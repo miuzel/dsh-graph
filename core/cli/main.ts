@@ -60,6 +60,7 @@ const HELP_TEXT = `goal-graph — 轻量目标看板命令行（默认只读；�
   claim <goal-id>  认领目标：把状态推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）
   submit [goal-id] 提交：跑全量自检门禁 + Git 变更统计，把目标推进到 review 并写 review.requested
   serve [...]      独立本地只读服务（Web App + Web API + localhost MCP）：init / status / uninstall / serve
+  mcp [...]        零配置 stdio MCP 服务（默认开启 38 个读写工具 + 按工作区自动起/复用本地 Web 看板）
   version          显示 goal-graph 版本
   help             显示本帮助
 
@@ -107,6 +108,16 @@ serve（g-623 / g-632）：
   动作：serve init（首次显式初始化：生成 ≥256bit token + 私有凭据 0600 + 运行配置）、
   serve（前台启动，Ctrl-C 停止）、serve status（只读状态）、serve uninstall
   （只删本服务自有凭据与运行配置，graph 数据不动）。CLI 不承载 Web UI，也不托管后台服务。
+
+mcp（g-637）：
+  面向 Claude Code / Codex / OpenCode 等外部宿主的零配置 JSON-RPC over stdio 入口：
+  goal-graph mcp [--root <path>] [--graph-dir-name <name>] [--state-dir <abs>] [--read-only] [--no-web]
+  · 基于当前工作区自动定位看板，与 serve 100% 复用同一 MCP 工具注册表与安全门禁；
+  · 默认开启执行类写工具（38 工具：11 只读 + 27 写，固定 actor=mcp:local-service）；传 --read-only 切回 11 只读工具；
+  · Human Gate（graph_resolve_accept / transition→delivered / graph_claim_supervisor / graph_start_attempt）
+    与保留参数拒绝（actor/owner/human/approval/allowWrite/writeMode/mode）始终 fail-closed；
+  · 未传 --no-web 时按工作区自动检查/复用或以 127.0.0.1:0 自动分配空闲端口启动本地 Web 看板（多工作区零端口冲突），
+    stdio 关闭时自动释放自启服务、不留僵尸进程；stdout 严格仅输出 JSON-RPC 响应，诊断日志仅走 stderr。
 
 claim（g-316）：
   唯一会写看板的命令。读取目标元信息与「质量判据」小节，经 core 状态机把
@@ -187,6 +198,18 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
       err: (s) => void err.push(s),
     });
     return { exitCode, stdout: out.join(""), stderr: err.join("") };
+  }
+
+  // g-637：`mcp` 走独立 stdio MCP 传输模块（动态加载，保持 info/version 冷启动成本不变，
+  // 且不让 core/cli/ 引入 server.ts / web-app.ts）。
+  if (args.command === "mcp") {
+    const { runMcpCommand } = await import("../service/stdio-mcp.ts");
+    const exitCode = await runMcpCommand((args as any).mcpArgv ?? [], {
+      cwd: ctx.cwd,
+      writeOut: ctx.write,
+      writeErr: ctx.writeError,
+    });
+    return { exitCode, stdout: "", stderr: "" };
   }
 
   // 其余命令都需要定位 graph root。

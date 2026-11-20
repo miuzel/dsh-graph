@@ -1,6 +1,6 @@
 ---
 name: goal-graph
-description: 通过 MCP 连接本地 goal-graph 服务读写目标看板（默认只读 11 个工具；服务端 --allow-write 后 38 个）。人工裁决（accept/delivered/派发）在外部宿主不可达，需回 DSH 看板或本地 GUI。
+description: 通过 MCP 连接本地 goal-graph 看板读写目标（零配置 stdio `goal-graph mcp` 默认 38 个读写工具，`--read-only` 为 11 个只读工具；显式 HTTP `goal-graph serve` 默认只读 11 个，`--allow-write` 后 38 个）。人工裁决（accept/delivered/派发）在外部宿主不可达，需回 DSH 看板或本地 GUI。
 ---
 
 # goal-graph（外部宿主版）
@@ -8,23 +8,28 @@ description: 通过 MCP 连接本地 goal-graph 服务读写目标看板（默�
 本技能供 **Claude Code / Codex / OpenCode** 这类外部宿主使用。它与 DSH 插件内置的技能正文**不是同一份**：
 DSH 插件版能调用完整工具集，外部宿主只能看见 MCP 服务实际注册的工具。请以本文为准，不要套用 DSH 版做法。
 
-## 1. 先确认服务能力状态
+## 1. 连接形态与工具模式
 
-调用 `graph_board` 或 `graph_list_goals` 试探：
+外部宿主插件默认以**零配置 stdio** 方式拉起当前工作区的 `goal-graph mcp`（无需手动起 `serve`、无需固定端口、无需导出 token），
+同时按工作区自动检查/复用或以 `127.0.0.1:0` 自动分配空闲端口启动本地 Web 看板服务。
 
-- 成功返回数据 ⇒ 服务在跑、token 有效。
-- 返回 `E_UNKNOWN_COMMAND` ⇒ 该工具**未注册**（可能是写模式没开，或碰了人工裁决保留项）。
-- 返回 `E_NOT_INITIALIZED` ⇒ 看板还没初始化，先到看板所在项目执行 `goal-graph serve init`。
-- HTTP 401 ⇒ token 缺失或错误，见 INSTALL.md 排障。
+调用 `graph_board` 或 `graph_list_goals` 即可确认状态：
 
-**服务有两种模式**，工具表不同（模式只能由服务端启动参数决定，客户端无法自行开启）：
+- 成功返回数据 ⇒ MCP 连接正常、看板已初始化。
+- 返回 `E_NOT_INITIALIZED` ⇒ 当前工作区尚无 `.dsh-graph/events.jsonl`（可按需创建或先初始化看板）。
+- 返回 `E_UNKNOWN_COMMAND` ⇒ 该工具**未注册**（当前处于只读模式，或碰了人工裁决保留项）。
+- HTTP 401 ⇒ 仅显式 HTTP 模式出现，表示 `GOAL_GRAPH_MCP_TOKEN` 缺失或错误，见 INSTALL.md 排障。
 
-| 模式 | 启动方式 | 可见工具数 |
-|---|---|---|
-| 只读（默认） | `goal-graph serve` | 11 |
-| 写模式 | `goal-graph serve --allow-write` | 38 |
+**工具模式由服务端启动参数决定**（客户端无法通过请求参数开启/关闭）：
 
-## 2. 只读模式（默认）可用的 11 个工具
+| 入口形态 | 启动方式 | 可见工具数 | 说明 |
+|---|---|---|---|
+| **零配置 stdio（插件默认）** | `goal-graph mcp` | **38** | 默认开启 11 只读 + 27 执行类写工具（actor=`mcp:local-service`），自动起/复用本地 Web 看板 |
+| **stdio 只读** | `goal-graph mcp --read-only` | **11** | 仅注册只读查询工具，写工具未注册 |
+| **显式 HTTP（默认只读）** | `goal-graph serve` | **11** | 需先 `serve init` 并注入 `GOAL_GRAPH_MCP_TOKEN` |
+| **显式 HTTP（写模式）** | `goal-graph serve --allow-write` | **38** | 服务端显式开启写模式 |
+
+## 2. 只读模式（11 个工具，所有模式均可用）
 
 | 工具 | 必填参数 | 用途 |
 |---|---|---|
@@ -40,11 +45,11 @@ DSH 插件版能调用完整工具集，外部宿主只能看见 MCP 服务实�
 | `graph_read_attachment` | `name` | 按引用名读附件（base64） |
 | `graph_events` | `goal` | 只读事件信封（可加 `limit`） |
 
-只读模式下**不要尝试**任何写操作——`graph_create_goal` 等名字此时根本不存在，调用只会得到 `E_UNKNOWN_COMMAND`。
+当以 `goal-graph mcp --read-only` 或默认 `goal-graph serve` 运行时，**不要尝试**任何写操作——`graph_create_goal` 等名字此时根本不存在，调用只会得到 `E_UNKNOWN_COMMAND`。
 
-## 3. 写模式（`--allow-write`）额外可用的 27 个工具
+## 3. 写模式额外可用的 27 个工具（`goal-graph mcp` 默认可用；`serve` 需 `--allow-write`）
 
-开启后额外可用：
+写模式可用时额外注册以下 27 个执行类写工具（共 38 个工具）：
 
 **目标生命周期**：`graph_create_goal`（`title`）、`graph_rename_goal`、`graph_set_description`、
 `graph_set_criteria`、`graph_update_criteria`、`graph_set_directive`、`graph_set_goal_tags`、
@@ -64,10 +69,10 @@ in_progress / review / blocked`。**`delivered` 会被拒（`E_FORBIDDEN`）**�
 
 所有写操作的 actor 固定为 `mcp:local-service`，事件流里能区分出「这是外部宿主经 MCP 写的」。
 
-### 写模式开启方式（客户端做不到）
+### 写模式边界（客户端做不到）
 
-写模式**只能由服务端启动时决定**。请求里传 `allowWrite` / `writeMode` / `mode` 不会生效，还会被当保留参数
-拒绝。要开启请让服务以 `goal-graph serve --allow-write` 重启。若你没有服务端的操作权限，就按只读模式工作。
+写模式**只能由服务端启动方式决定**（`goal-graph mcp` 默认可写、`--read-only` 切回只读；显式 HTTP `goal-graph serve` 默认只读、需 `--allow-write`）。
+请求里传 `actor` / `owner` / `human` / `approval` / `allowWrite` / `writeMode` / `mode` 不会生效，还会被当保留参数拒绝。
 
 ## 4. 外部宿主**做不到**的事（人工裁决保留项）
 
@@ -86,7 +91,7 @@ in_progress / review / blocked`。**`delivered` 会被拒（`E_FORBIDDEN`）**�
 
 1. 用 `graph_board` / `graph_list_goals` 了解现状，用 `graph_query_goal` 读目标描述与判据。
 2. 需要上下文时用 `graph_list_cards` + `graph_query_results`，附件用 `graph_list_attachments` + `graph_read_attachment`。
-3. 有写模式时：先 `graph_set_criteria` 登记判据（判据先于执行），再动手改代码。
+3. 写模式可用时：先 `graph_set_criteria` 登记判据（判据先于执行），再动手改代码。
 4. 过程中用 `graph_add_comment` 留可追溯记录（不要倾倒长日志，只写结论 + 文件路径 + 关键行）。
 5. 完成后把目标迁到 `review`（`graph_transition`），写完成摘要，然后**请用户裁决**。
 
@@ -96,12 +101,12 @@ in_progress / review / blocked`。**`delivered` 会被拒（`E_FORBIDDEN`）**�
 
 | 错误码 | 含义 | 处理 |
 |---|---|---|
-| `E_UNKNOWN_COMMAND` | 工具未注册（模式不对 / 人工裁决保留项） | 确认服务模式；人工裁决走 GUI |
-| `E_FORBIDDEN` | 已注册但该参数/目标被拒（如 `to=delivered`） | 改到允许范围 |
+| `E_UNKNOWN_COMMAND` | 工具未注册（只读模式下请求写工具 / 人工裁决保留项） | 确认启动模式；人工裁决走 GUI |
+| `E_FORBIDDEN` | 已注册但该参数/目标被拒（如 `to=delivered` 或保留参数） | 改到允许范围 |
 | `E_INPUT` | 参数不合法 | 按提示修正参数 |
 | `E_NOT_FOUND` | 目标/卡片/附件不存在 | 先列表确认 id |
-| `E_NOT_INITIALIZED` | 看板未初始化 | 在项目里 `goal-graph serve init` |
-| `E_NOT_READ_ONLY` | 只读模式下请求了写路由 | 按只读模式工作，或让服务端开 `--allow-write` |
-| `E_STORAGE` | 存储层失败（磁盘/权限/损坏） | 查 `serve status` 与服务日志 |
+| `E_NOT_INITIALIZED` | 看板未初始化（缺 `events.jsonl`） | 在目标项目初始化看板后重试 |
+| `E_NOT_READ_ONLY` | 只读模式下请求了写路由 | 按只读模式工作，或改用可写启动方式 |
+| `E_STORAGE` | 存储层失败（磁盘/权限/损坏） | 检查目录权限与 stderr 诊断日志 |
 
 并发写冲突表现为 `E_INPUT` 提示基线不一致：先重读最新条目，再用 `force` 或新基线重试。

@@ -3,11 +3,8 @@
   "mcp": {
     "servers": {
       "goal-graph": {
-        "type": "remote",
-        "url": "http://127.0.0.1:7788/mcp",
-        "headers": {
-          "Authorization": "Bearer {env:GOAL_GRAPH_MCP_TOKEN}"
-        }
+        "type": "local",
+        "command": ["goal-graph", "mcp"]
       }
     }
   }

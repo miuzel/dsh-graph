@@ -51,6 +51,8 @@ export interface ParsedArgs {
   graphDirName: string | null;
   /** g-623 */
   serveArgv?: string[];
+  /** g-637：`mcp` 子命令原始参数（交由 core/service/stdio-mcp.ts 解析）。 */
+  mcpArgv?: string[];
 }
 
 export interface ParseResult {
@@ -59,7 +61,7 @@ export interface ParseResult {
 }
 
 /** 已知顶层命令（`goal` 为多子命令容器）。 */
-export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "claim", "submit", "serve", "help"] as const;
+export const TOP_LEVEL_COMMANDS = ["info", "status", "version", "goal", "sync", "claim", "submit", "serve", "mcp", "help"] as const;
 /** `goal` 的已知子命令。 */
 export const GOAL_SUBCOMMANDS = ["list", "show"] as const;
 /** `serve` 的已知动作（g-623；其余 token 一律作为服务选项原样转交）。 */
@@ -74,6 +76,7 @@ const MAX_POSITIONALS: Record<string, number> = {
   claim: 1,
   submit: 1,
   serve: Number.POSITIVE_INFINITY,
+  mcp: Number.POSITIVE_INFINITY,
   help: 0,
   "goal list": 0,
   "goal show": 1,
@@ -139,6 +142,57 @@ export function parseArgs(argv: readonly string[]): ParseResult {
           graphDirName: null,
           // 动作词必须**显式**传给服务（`serve` 是默认动作，不能靠 argv 自身推断）
           serveArgv: action === "serve" ? serveTail.filter((t) => t !== action) : [action, ...serveTail.filter((t) => t !== action)],
+        },
+        error: null,
+      };
+    }
+  }
+
+  // ── g-637：`mcp` 走**独立**解析路径（选项由 core/service/stdio-mcp.ts 解析）──
+  // 跳过带取值标志（--root / --graph-dir-name / --target / --state-dir），只认第一个位置 token 为 "mcp"，
+  // 避免把 `goal-graph --root mcp info` 里的路径值误判成 mcp 命令。
+  {
+    const VALUE_FLAGS = new Set(["--root", "--graph-dir-name", "--target", "--state-dir"]);
+    let mcpIdx = -1;
+    for (let i = 0; i < argv.length; i++) {
+      const t = argv[i];
+      if (t === "--") break;
+      if (VALUE_FLAGS.has(t)) {
+        i += 1;
+        continue;
+      }
+      if (t.startsWith("-")) continue;
+      if (t === "mcp") mcpIdx = i;
+      break;
+    }
+    if (mcpIdx >= 0) {
+      const mcpArgv = [...argv.slice(0, mcpIdx), ...argv.slice(mcpIdx + 1)];
+      if (mcpArgv.some((t) => t === "--help" || t === "-h")) {
+        return {
+          args: {
+            command: "help", subcommand: "mcp", positionals: [], root: null, json: false, help: true,
+            version: false, all: false, full: false, activeOnly: false, target: null, skipTests: false,
+            graphDirName: null,
+          },
+          error: null,
+        };
+      }
+      return {
+        args: {
+          command: "mcp",
+          subcommand: null,
+          positionals: mcpArgv,
+          root: null,
+          json: false,
+          help: false,
+          version: false,
+          all: false,
+          full: false,
+          activeOnly: false,
+          target: null,
+          skipTests: false,
+          graphDirName: null,
+          mcpArgv,
         },
         error: null,
       };
