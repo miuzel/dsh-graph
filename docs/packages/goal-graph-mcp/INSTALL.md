@@ -1,21 +1,18 @@
 # goal-graph-mcp 安装指南
 
-把 goal-graph 的看板 MCP endpoint 接入外部 Agent，并生成 Claude Code / Codex / OpenCode
-三宿主配置。
-
-**token 绝不写进配置文件**——三个生成器都只写**环境变量名**，真实 token 从 goal-graph 服务的
-0600 凭据文件注入环境。
+为 Claude Code / Codex / OpenCode 生成 goal-graph MCP 配置片段：
+- **默认零配置 `stdio` 模式**：直接拉起当前工作区的 `goal-graph mcp`（无需手动起 `serve`、无需固定端口、无需导出 token）；
+- **进阶显式 `http` 模式（`--transport http [--port <p>]`）**：连接显式 `goal-graph serve` 端点，**token 绝不写进配置文件**（只写环境变量名 `GOAL_GRAPH_MCP_TOKEN`）。
 
 ## 1. 前置要求
 
 | 项 | 要求 | 说明 |
 |---|---|---|
 | Node.js | ≥ 22 | 生成器零依赖 |
-| 一个运行中的 goal-graph 服务 | `goal-graph serve`（来自 `goal-graph-service` 或 `goal-graph-cli`） | 提供 `http://127.0.0.1:<port>/mcp` |
-| 服务已初始化 | 0600 凭据文件里存有 token | `goal-graph serve init` 生成 |
+| `goal-graph-cli`（stdio 默认模式） | 提供 `goal-graph mcp` | 装完 CLI 与配置后打开工作区即自动可用 |
+| `goal-graph serve`（仅 `--transport http` 进阶模式） | 需先 `serve init` 生成 0600 token | 默认 stdio 模式无需手动启动或导出 token |
 
-本包**只生成配置**，不含服务本身。若还没有 endpoint，先装 `goal-graph-service`（或用
-`goal-graph-cli` 的 `serve` 子命令）。
+本包**只生成配置**，不含服务本身。默认 stdio 模式只需安装 `goal-graph-cli`；显式 HTTP 模式另需运行 `goal-graph serve`。
 
 ## 2. 安装
 
@@ -27,41 +24,31 @@ npm install --save-exact goal-graph-mcp # 项目本地
 ## 3. 最小验证步骤
 
 ```bash
-# ① 生成三宿主配置（期望：三段配置，url 全部是同一 endpoint）
-goal-graph-mcp all --port 7801
+# ① 默认生成三宿主零配置 stdio 配置（拉起 goal-graph mcp）
+goal-graph-mcp all
 
-# ② 自检：确认配置只引用环境变量、不含 token 字面量
+# ② 可选：生成显式 HTTP 模式配置（指向同一 endpoint + 仅引用环境变量）
+goal-graph-mcp all --transport http --port 7801
+
+# ③ 自检：同时校验 stdio 与 http 两种模式不含 token 字面量
 goal-graph-mcp all --check
-# 期望：三个 ✅ 行，退出码 0
-
-# ③ 把真实 token 注入环境（从服务凭据文件读，不要写进任何配置文件）
-export GOAL_GRAPH_MCP_TOKEN="$(cat ~/.goal-graph-service/token)"
-
-# ④ 用该 token 打通 endpoint
-curl -s -X POST http://127.0.0.1:7801/mcp \
-  -H "Authorization: Bearer $GOAL_GRAPH_MCP_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | head -c 200
+# 期望：六个 ✅ 行（三宿主 × stdio/http），退出码 0
 ```
 
-实测输出（v1.0.0）：
+实测输出（v1.0.0，默认零配置 stdio）：
 
 ```
 --- claude-code ---
-{ "mcpServers": { "goal-graph": { "type": "http",
-    "url": "http://127.0.0.1:7801/mcp",
-    "headers": { "Authorization": "Bearer ${GOAL_GRAPH_MCP_TOKEN}" } } } }
+{ "mcpServers": { "goal-graph": { "type": "stdio", "command": "goal-graph", "args": ["mcp"] } } }
 
 --- codex ---
 [mcp_servers.goal-graph]
-url = "http://127.0.0.1:7801/mcp"
-bearer_token_env_var = "GOAL_GRAPH_MCP_TOKEN"
+command = "goal-graph"
+args = ["mcp"]
 
 --- opencode ---
-{ "mcp": { "goal-graph": { "type": "remote", "url": "http://127.0.0.1:7801/mcp",
-    "headers": { "Authorization": "Bearer {env:GOAL_GRAPH_MCP_TOKEN}" } } } }
-
-# 三宿主共用同一 endpoint：http://127.0.0.1:7801/mcp
+{ "$schema": "https://opencode.ai/config.json",
+  "mcp": { "servers": { "goal-graph": { "type": "local", "command": ["goal-graph", "mcp"] } } } }
 ```
 
 ### 3.1 三宿主各自的落点
@@ -70,16 +57,15 @@ bearer_token_env_var = "GOAL_GRAPH_MCP_TOKEN"
 |---|---|---|
 | Claude Code | 项目 `.mcp.json`（可入库）或 `~/.claude.json` 的 `mcpServers` | 直接写入该 JSON |
 | Codex | `~/.codex/config.toml` | **只合并** `[mcp_servers.goal-graph]` 一张表，**绝不整文件覆盖**（该文件被同机所有 Codex agent 共享） |
-| OpenCode | `~/.config/opencode/opencode.json` 或项目 `opencode.json` | 并入 `mcp` 键 |
+| OpenCode | `~/.config/opencode/opencode.json` 或项目 `opencode.json` | 并入 `mcp.servers` 键 |
 
 `--write <dir>` 可把片段落盘为对应文件名（`.mcp.json` / `mcp-codex.toml` / `opencode.json`），
 供你复制进真实配置；生成器**不直接写**真实宿主配置路径。
 
-Claude Code 也可直接用 CLI（等价于生成的内容）：
+Claude Code 也可直接用 CLI（等价于默认 stdio 生成结果）：
 
 ```bash
-claude mcp add --transport http goal-graph http://127.0.0.1:7801/mcp \
-  --header "Authorization: Bearer $GOAL_GRAPH_MCP_TOKEN"
+claude mcp add --transport stdio goal-graph -- goal-graph mcp
 ```
 
 ## 4. 卸载

@@ -2,33 +2,23 @@
 
 把本地 goal-graph 目标看板接入 Codex CLI。
 
-本插件不复制产品代码：MCP 能力来自已安装的 `goal-graph` CLI（`goal-graph-cli`）启动的本地 `serve` 实例；技能正文为外部宿主专用版。
+本插件不复制产品代码：默认采用**零配置 stdio MCP**，由 Codex 在当前工作区自动拉起已安装的 `goal-graph mcp`（默认 38 个读写工具，并按工作区以 `127.0.0.1:0` 自动分配空闲端口起/复用本地 Web 看板，退出自动回收）；技能正文为外部宿主专用版。
 
 ## 安装
 
 ```bash
+npm install -g goal-graph-cli
 codex plugin marketplace add /path/to/dsh-graph/plugins/codex
 codex plugin add goal-graph@goal-graph
 ```
 
-服务需先 `goal-graph serve init --root <绝对路径> --workspace <绝对路径>`，并把 token 注入 `GOAL_GRAPH_MCP_TOKEN`。完整说明见 [INSTALL.md](./INSTALL.md)。
-
-## 与 Claude Code 版的关键差异
-
-Claude Code 用 `headers` + `${VAR}` 插值；**Codex 的插件 MCP schema 不承载认证字段以外的那套写法**，
-`headers` / `env_http_headers` 在运行时都**不发送**认证头（实测服务端收到 `undefined`）。Codex 用原生字段：
-
-```json
-"bearer_token_env_var": "GOAL_GRAPH_MCP_TOKEN"
-```
-
-它发送 `Authorization: Bearer <token>`，正是本服务接受的形式。token 只写变量名，不含字面量。
-
-> `codex mcp get` 只回显静态配置，即使头被丢弃也照样显示"已配置" —— 判别性验证见 [INSTALL.md §5](./INSTALL.md#5-最小验证判别性必须看到实际认证结果)。
+无需手动运行 `goal-graph serve`、无需固定端口 `7788`、无需 `export GOAL_GRAPH_MCP_TOKEN`。完整验证、只读选项、进阶显式 HTTP 模式与排障见 [INSTALL.md](./INSTALL.md)。
 
 ## 能力边界
 
-默认只读 11 个工具；`--allow-write` 后 38 个。人工裁决（accept / delivered / claim_supervisor / start_attempt）不可达，须回 DSH 看板或本地 GUI。
+- **零配置 stdio 默认（`goal-graph mcp`）**：38 个读写工具（固定 actor `mcp:local-service`），可推进到 `review`。
+- **只读模式（`goal-graph mcp --read-only` / 显式 `goal-graph serve`）**：11 个查询工具。
+- **人工裁决保留**：`graph_resolve_accept`、`transition → delivered`、`graph_claim_supervisor`、`graph_start_attempt` 在任何模式下均不可达，须回 DSH 看板或本地 GUI 裁决。
 
 ### 文档守卫的能力边界（请勿再试图穷尽）
 
@@ -45,10 +35,10 @@ Claude Code 用 `headers` + `${VAR}` 插值；**Codex 的插件 MCP schema 不�
 ```
 .claude-plugin/plugin.json       插件清单
 .claude-plugin/marketplace.json  市场清单
-.mcp.json                        MCP 连接（bearer_token_env_var，token 只写变量名）
+.mcp.json                        零配置 stdio MCP（command: goal-graph, args: ["mcp"]，不含 token）
 skills/goal-graph/SKILL.md       外部宿主版技能正文
-INSTALL.md                        安装/验证/卸载/排障
-LICENSE                           MIT
+INSTALL.md                       安装/验证/进阶 HTTP/卸载/排障/验证状态
+LICENSE                          MIT
 ```
 
 ## License

@@ -7,10 +7,10 @@ v1.0.0 把原先的单包拆成 **5 个可独立安装的 npm 包**（DSH 专属
 | 包 | 职责 | 用户场景 | 独立可用 |
 |---|---|---|---|
 | `dsh-graph` | DSH 插件本体：`graph_*` 工具 + 二维泳道看板 | DSH 用户 | ✅ 只装它即可 |
-| `goal-graph-cli` | 命令行（`goal-graph`）：`info`/`status`/`goal`/`version`/`sync`/`claim`/`submit`/`serve` | 单兵终端用户 | ✅ 只装它即可 |
-| `goal-graph-service` | 本地服务：Web App + Web API + localhost MCP（默认只读） | 要 Web / MCP 入口 | ✅（驱动入口见 §3.2） |
+| `goal-graph-cli` | 命令行（`goal-graph`）：`info`/`status`/`goal`/`version`/`sync`/`claim`/`submit`/`serve`/`mcp` | 单兵终端与外部宿主零配置 stdio | ✅ 只装它即可 |
+| `goal-graph-service` | 本地服务：Web App + Web API + localhost HTTP MCP + stdio MCP 运行时 | 要 Web / MCP 入口 | ✅（驱动入口见 §3.2） |
 | `goal-graph-skills` | 技能包（`goal-graph-skills`）：`dsh-graph` / `dsh-graph-supervisor` 正文与安装脚本 | 按需加载技能 | ✅ |
-| `goal-graph-mcp` | MCP 适配器（`goal-graph-mcp`）+ Claude Code / Codex / OpenCode 配置生成 | 接入外部 Agent | ✅（另需 running service） |
+| `goal-graph-mcp` | MCP 适配器（`goal-graph-mcp`）+ Claude Code / Codex / OpenCode 配置生成（默认 stdio，可选 HTTP） | 接入外部 Agent | ✅（stdio 需 CLI；HTTP 需 serve） |
 
 「单包能力与拆分前等价」的判据：插件包保留 `index.js` + `lib/` + `prompts/` + `diagrams/` +
 `cordis.patch.yml` 与全部 `graph_*` 工具（68 个导出、`graph_*` 工具集不变）；
@@ -93,16 +93,18 @@ goal-graph-mcp        （零依赖；但运行时需要一个已启动的 servic
 
 ## 4. MCP 三宿主适配
 
-单一真源：`mcpEndpoint()` 由 `{host, port}` 推导，三宿主共用同一结果，不可能出现
-「三个配置指向三个端口」的漂移。token 一律**只写变量名**：
+提供两种传输形态，默认零配置 `stdio`：
 
-| 宿主 | 文件 | token 引用语法（各宿主原生） |
+- **默认 `stdio`（零配置）**：三宿主直接拉起当前工作区的 `goal-graph mcp`（Claude Code / Codex 用 `type: "stdio"`, `command: "goal-graph"`, `args: ["mcp"]`；OpenCode 用 `type: "local"`, `command: ["goal-graph", "mcp"]`），默认 38 读写工具（`--read-only` 为 11 只读工具），并按工作区以 `127.0.0.1:0` 自动起/复用本地 Web 看板，退出自动释放端口。无需手动跑 `serve`、无需固定端口、无需导出 token。
+- **显式 `http`（`--transport http [--port <p>]`）**：单一真源 `mcpEndpoint()` 由 `{host, port}` 推导，三宿主共用同一结果，token 一律**只写变量名**：
+
+| 宿主 | 文件 | HTTP 模式 token 引用语法（各宿主原生） |
 |---|---|---|
 | Claude Code | `.mcp.json` / `~/.claude.json` | `${GOAL_GRAPH_MCP_TOKEN}` |
 | Codex | `~/.codex/config.toml` | `bearer_token_env_var = "GOAL_GRAPH_MCP_TOKEN"` |
 | OpenCode | `opencode.json` | `{env:GOAL_GRAPH_MCP_TOKEN}` |
 
-`--check` 自检：断言生成结果**只**含上述引用、且不含 `Bearer <24+ 字面量>` 形态的真实 token。
+`--check` 自检默认同时覆盖 `stdio` 与 `http` 两种模式，断言无任何 token 字面量且引用语法合规。
 
 ## 5. 打包与产物
 

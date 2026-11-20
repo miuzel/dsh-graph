@@ -1,23 +1,24 @@
 # goal-graph (Claude Code plugin)
 
-把本地 **goal-graph** 目标看板接入 Claude Code：插件同时提供看板 MCP 工具与**外部宿主版**技能正文，让 Claude 能读（并可选地写）看板上的目标、判据、卡片与完成摘要。
+把本地 **goal-graph** 目标看板接入 Claude Code：零配置 stdio MCP + **外部宿主版**技能正文，装完打开工作区即可读写看板上的目标、判据、卡片与完成摘要。
 
-本插件**不复制**任何产品代码或技能正文实体：MCP 能力来自你已安装的 `goal-graph` CLI（`goal-graph-cli`）启动的本地 `serve` 实例，技能正文是专为外部宿主裁剪过的版本（不含 DSH 插件版里 Claude 做不到的指引）。
+本插件**不复制**任何产品代码：MCP 能力来自你已安装的 `goal-graph` CLI（`goal-graph-cli`）自动拉起的 `goal-graph mcp`（默认 38 个读写工具，并按工作区以 `127.0.0.1:0` 自动分配空闲端口起/复用本地 Web 看板，退出自动回收），技能正文是专为外部宿主裁剪过的版本。
 
 ## 安装
 
 ```bash
+npm install -g goal-graph-cli
 claude plugin marketplace add /path/to/dsh-graph/plugins/claude-code
 claude plugin install goal-graph@goal-graph -y
 ```
 
-服务需先在目标项目 `goal-graph serve init --root <绝对路径> --workspace <绝对路径>`，并把凭据文件里的 token 注入 `GOAL_GRAPH_MCP_TOKEN`。完整前置、验证、卸载与排障见 [INSTALL.md](./INSTALL.md)。
+无需手动运行 `goal-graph serve`、无需固定端口 `7788`、无需 `export GOAL_GRAPH_MCP_TOKEN`。完整验证、只读选项、进阶显式 HTTP 模式与排障见 [INSTALL.md](./INSTALL.md)。
 
 ## 能力边界
 
-- **默认只读**：11 个查询工具。
-- **`--allow-write` 后**：再加 27 个写工具，可推进到 `review`。
-- **人工裁决保留**：`graph_resolve_accept`、`transition → delivered`、`graph_claim_supervisor`、`graph_start_attempt` 不可达 —— 必须回 DSH 看板或本地 GUI 裁决。
+- **零配置 stdio 默认（`goal-graph mcp`）**：38 个工具（11 只读 + 27 执行类写工具，固定 actor `mcp:local-service`），可推进到 `review`。
+- **只读模式（`goal-graph mcp --read-only` / 显式 `goal-graph serve`）**：11 个查询工具。
+- **人工裁决保留**：`graph_resolve_accept`、`transition → delivered`、`graph_claim_supervisor`、`graph_start_attempt` 在任何模式下均不可达 —— 必须回 DSH 看板或本地 GUI 裁决。
 
 ### 文档守卫的能力边界（请勿再试图穷尽）
 
@@ -34,9 +35,9 @@ claude plugin install goal-graph@goal-graph -y
 ```
 .claude-plugin/plugin.json      插件清单（声明 mcpServers 指向 ./.mcp.json）
 .claude-plugin/marketplace.json 单插件市场（本地路径可直接 add）
-.mcp.json                       MCP 连接（token 只写 ${GOAL_GRAPH_MCP_TOKEN}，不含字面量）
+.mcp.json                       零配置 stdio MCP（command: goal-graph, args: ["mcp"]，不含 token）
 skills/goal-graph/SKILL.md      外部宿主版技能正文
-INSTALL.md                      安装/验证/卸载/排障
+INSTALL.md                      安装/验证/进阶 HTTP/卸载/排障
 LICENSE                         MIT
 ```
 

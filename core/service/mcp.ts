@@ -166,10 +166,12 @@ export interface McpContext extends ServiceContext {
   /** 认证回调：返回 true 才继续（服务层注入，持凭据存储的闭包）。 */
   authenticate: (token: string | null) => boolean;
   /**
-   * 写模式（g-632 A）：**只能由服务端启动配置决定**（`serve --allow-write`）。默认关闭。
+   * 写模式（g-632 A / g-637）：**只能由服务端启动配置决定**（`serve --allow-write` 或 `goal-graph mcp` 默认写模式）。
    * 本对象从不从请求参数构造 —— 请求里出现任何写模式开关参数都按保留参数拒绝。
    */
   writeMode?: { enabled: boolean };
+  /** 可选：当前工作区已自动启动/复用的本地 Web 看板基址（如 `http://127.0.0.1:43210`），仅写入 initialize 提示，不含秘密。 */
+  webOrigin?: string;
 }
 
 function rpcOk(id: JsonRpcId, result: unknown): JsonRpcResponse {
@@ -204,14 +206,16 @@ export function dispatchRpc(ctx: McpContext, msg: any): JsonRpcResponse | null {
       case "initialize": {
         const requested = String(params.protocolVersion ?? "");
         const version = (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(requested) ? requested : MCP_PROTOCOL_VERSION;
+        const baseInstructions = isWriteModeEnabled(ctx)
+          ? `写模式已由服务端显式开启（actor 固定为 ${MCP_WRITE_ACTOR}）：执行类写工具可达；` +
+            `但人工裁决（graph_resolve_accept、transition→delivered）与主管身份/执行派发仍 fail-closed。`
+          : "只读看板服务：仅注册只读查询工具；写/执行/人工审批命令未注册。";
+        const webNote = ctx.webOrigin ? ` 当前工作区本地看板：${ctx.webOrigin}/` : "";
         return rpcOk(id, {
           protocolVersion: version,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: SERVER_NAME, version: CONTRACT_VERSION },
-          instructions: isWriteModeEnabled(ctx)
-            ? `写模式已由服务端显式开启（actor 固定为 ${MCP_WRITE_ACTOR}）：执行类写工具可达；` +
-              `但人工裁决（graph_resolve_accept、transition→delivered）与主管身份/执行派发仍 fail-closed。`
-            : "只读看板服务：仅注册只读查询工具；写/执行/人工审批命令未注册。",
+          instructions: `${baseInstructions}${webNote}`,
         });
       }
       case "notifications/initialized":
@@ -258,6 +262,8 @@ export function dispatchRpc(ctx: McpContext, msg: any): JsonRpcResponse | null {
       case "prompts/list":
         return rpcOk(id, { prompts: [] });
       default:
+        // JSON-RPC 2.0 规范：无 id 的通知（如未知 notifications/*）不得产出任何响应。
+        if (msg.id === undefined) return null;
         return rpcErr(id, RPC_ERROR.METHOD_NOT_FOUND, `未实现的方法：${method}`);
     }
   } catch (e: any) {
@@ -309,6 +315,8 @@ export const WRITE_MODE_SWITCH_KEYS: ReadonlySet<string> = new Set([
   "writable",
   "readOnly",
   "read_only",
+  "write",
+  "mode",
 ]);
 
 /** 未注册工具的可读原因（三种情形；对外错误码仍是 E_UNKNOWN_COMMAND，与 g-623 一致）。 */
@@ -350,6 +358,50 @@ export function executeWriteCommand(ctx: McpContext, name: string, args: Record<
     safe[key] = value;
   }
   return cmd.run({ graphRoot: ctx.graphRoot, executionWorkspace: ctx.executionWorkspace }, safe);
+}
+
+/**
+ * 纯 JSON-RPC 2.0 负载分派核心（HTTP `handleMcpRequest` 与 stdio `goal-graph mcp` 100% 共用同一真源）。
+ * - 解析错误 / 空体 ⇒ `status=400` + 对应 JSON-RPC 错误；
+ * - 全为通知（无 id）⇒ `status=202` + `response=null`（调用方不产出响应）；
+ * - 正常 ⇒ `status=200` + 单条或批量响应对象。
+ */
+export function dispatchJsonRpcPayload(
+  ctx: McpContext,
+  parsedBody: unknown,
+): { status: number; response: JsonRpcResponse | JsonRpcResponse[] | null } {
+  const messages = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+  if (messages.length === 0 || (messages.length === 1 && messages[0] === undefined)) {
+    return { status: 400, response: rpcErr(null, RPC_ERROR.INVALID_REQUEST, "空请求体") };
+  }
+  const responses: JsonRpcResponse[] = [];
+  for (const msg of messages) {
+    const r = dispatchRpc(ctx, msg);
+    if (r) responses.push(r);
+  }
+  if (responses.length === 0) {
+    return { status: 202, response: null };
+  }
+  return { status: 200, response: Array.isArray(parsedBody) ? responses : responses[0] };
+}
+
+/**
+ * 解析并分派一条 JSON-RPC 2.0 文本消息（供 stdio 传输直接复用，与 HTTP 共享 100% 同一工具表与安全门禁）。
+ */
+export function handleMcpJsonRpcText(
+  ctx: McpContext,
+  bodyText: string,
+): { status: number; response: JsonRpcResponse | JsonRpcResponse[] | null } {
+  if (typeof bodyText !== "string" || bodyText.trim() === "") {
+    return { status: 400, response: rpcErr(null, RPC_ERROR.INVALID_REQUEST, "空请求体") };
+  }
+  let parsedBody: unknown;
+  try {
+    parsedBody = JSON.parse(bodyText);
+  } catch {
+    return { status: 400, response: rpcErr(null, RPC_ERROR.PARSE_ERROR, "JSON 解析失败") };
+  }
+  return dispatchJsonRpcPayload(ctx, parsedBody);
 }
 
 /**
@@ -401,19 +453,11 @@ export function handleMcpRequest(
   }
 
   // ④ 分派（批量数组按 MCP 语义逐条处理，通知无响应）
-  const messages = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
-  if (messages.length === 0 || (messages.length === 1 && messages[0] === undefined)) {
-    return { status: 400, headers: baseHeaders, body: json(rpcErr(null, RPC_ERROR.INVALID_REQUEST, "空请求体")), authenticated: true };
-  }
-  const responses: JsonRpcResponse[] = [];
-  for (const msg of messages) {
-    const r = dispatchRpc(ctx, msg);
-    if (r) responses.push(r);
-  }
-  if (responses.length === 0) {
-    return { status: 202, headers: baseHeaders, body: "", authenticated: true };
+  const dispatched = dispatchJsonRpcPayload(ctx, parsedBody);
+  if (dispatched.response === null) {
+    return { status: dispatched.status, headers: baseHeaders, body: "", authenticated: true };
   }
   const headers = { ...baseHeaders };
-  if (req.sessionId) headers["mcp-session-id"] = String(req.sessionId);
-  return { status: 200, headers, body: json(Array.isArray(parsedBody) ? responses : responses[0]), authenticated: true };
+  if (dispatched.status === 200 && req.sessionId) headers["mcp-session-id"] = String(req.sessionId);
+  return { status: dispatched.status, headers, body: json(dispatched.response), authenticated: true };
 }

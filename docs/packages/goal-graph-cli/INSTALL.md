@@ -1,9 +1,9 @@
 # goal-graph-cli 安装指南
 
-goal-graph 命令行：`info` / `status` / `goal list|show` / `version` / `sync` / `claim` / `submit` / `serve`。
+goal-graph 命令行：`info` / `status` / `goal list|show` / `version` / `sync` / `claim` / `submit` / `serve` / `mcp`。
 
 **自包含**：本包把所需的全部 core 运行时与提示词资产都打进了 tarball，**不依赖** `dsh-graph` 插件本体
-或其他包。只装它就能直接操作看板。
+或其他包。只装它就能直接操作看板，或为 Claude Code / Codex / OpenCode 提供零配置 stdio MCP（`goal-graph mcp`）。
 
 ## 1. 前置要求
 
@@ -42,6 +42,9 @@ goal-graph info
 
 # ③ 看板只读状态（期望：JSON，含目标数/事件数）
 goal-graph status --json
+
+# ④ 零配置 stdio MCP 自检（期望：单行合法 JSON-RPC，默认 38 个工具；加 --read-only 为 11 个）
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | goal-graph mcp --no-web
 ```
 
 实测输出（v1.0.0，节选）：

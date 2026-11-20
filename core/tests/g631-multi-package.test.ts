@@ -157,9 +157,25 @@ test("g-631 F：带 dsh 的包其 engines.dsh 与 peer dsh-settings 逐字相等
   }
 });
 
-test("g-631 G：三宿主配置指向同一 endpoint 且均不泄漏 token", async () => {
+test("g-631 G：三宿主默认零配置 stdio + --transport http 共用同一 endpoint 且均不泄漏 token", async () => {
   const mcpMod = await import(pathToFileURL(join(repoRoot, "scripts", "mcp", "index.mjs")).href);
-  const opts = { port: 7801 };
+  const cliMod = await import(pathToFileURL(join(repoRoot, "scripts", "mcp", "cli.mjs")).href);
+
+  // ① 默认零配置 stdio 形态（g-637）：三宿主均调用 goal-graph mcp，无固定端口与 token 字面量
+  const ccStdio = mcpMod.claudeCodeConfig();
+  const cxStdio = mcpMod.codexConfig();
+  const ocStdio = mcpMod.openCodeConfig();
+  assert.deepEqual(ccStdio.mcpServers["goal-graph"], { type: "stdio", command: "goal-graph", args: ["mcp"] });
+  assert.match(cxStdio, /\[mcp_servers\.goal-graph\][\s\S]*command = "goal-graph"[\s\S]*args = \["mcp"\]/);
+  assert.deepEqual(ocStdio.mcp.servers["goal-graph"], { type: "local", command: ["goal-graph", "mcp"] });
+  for (const [host, cfg] of [["claude-code", ccStdio], ["codex", cxStdio], ["opencode", ocStdio]] as const) {
+    const r = mcpMod.leaksToken(cfg, { transport: "stdio" });
+    assert.ok(r.ok && !r.literal, `${host} stdio 配置必须无 token 字面量且指向 goal-graph mcp`);
+    assert.ok(!JSON.stringify(cfg).includes("7788"), `${host} stdio 配置不得硬编码端口 7788`);
+  }
+
+  // ② 显式 HTTP 形态（--transport http）：三宿主共用同一 endpoint 且仅引用环境变量
+  const opts = { transport: "http", port: 7801 };
   const endpoint = mcpMod.mcpEndpoint(opts);
   const rendered = {
     "claude-code": JSON.stringify(mcpMod.claudeCodeConfig(opts)),
@@ -167,20 +183,27 @@ test("g-631 G：三宿主配置指向同一 endpoint 且均不泄漏 token", asy
     opencode: JSON.stringify(mcpMod.openCodeConfig(opts)),
   };
   for (const [host, text] of Object.entries(rendered)) {
-    assert.ok(text.includes(endpoint), `${host} 配置必须指向 ${endpoint}`);
-    const r = mcpMod.leaksToken(text);
-    assert.ok(r.ok && !r.literal, `${host} 配置必须只引用环境变量、不含 token 字面量`);
+    assert.ok(text.includes(endpoint), `${host} HTTP 配置必须指向 ${endpoint}`);
+    const r = mcpMod.leaksToken(text, { transport: "http" });
+    assert.ok(r.ok && !r.literal, `${host} HTTP 配置必须只引用环境变量、不含 token 字面量`);
   }
-  // 三宿主 endpoint 逐字相同（单一真源）
   assert.equal(new Set(Object.values(rendered).map((t) => t.includes(endpoint))).size, 1);
-  // 负向对照：把真实形态 token 写进配置，泄漏判定必须报红
+
+  // ③ CLI --check 默认同时覆盖 stdio 与 http 两种模式
+  const checkRes = cliMod.run(["all", "--check"]);
+  assert.equal(checkRes.code, 0, `--check 必须通过：${checkRes.out}`);
+  assert.match(checkRes.out, /\(stdio\)/, "--check 必须覆盖 stdio 模式");
+  assert.match(checkRes.out, /\(http\)/, "--check 必须覆盖 http 模式");
+
+  // ④ 负向对照：把真实形态 token 写进配置，泄漏判定必须报红
   const leaked = rendered["claude-code"].replace("Bearer ${GOAL_GRAPH_MCP_TOKEN}", "Bearer eyJhbGciOiJIUzI1NiJ9abcdefghijklmnop");
-  assert.equal(mcpMod.leaksToken(leaked).literal, true, "负向对照：真实 token 字面量必须被判为泄漏");
+  assert.equal(mcpMod.leaksToken(leaked, { transport: "http" }).literal, true, "负向对照：真实 token 字面量必须被判为泄漏");
   // 负向对照：旧 env 名（DSH_GRAPH_MCP_TOKEN）不得通过占位校验
   const staleEnv = rendered["claude-code"].replace("GOAL_GRAPH_MCP_TOKEN", "DSH_GRAPH_MCP_TOKEN");
-  assert.equal(mcpMod.leaksToken(staleEnv).ok, false, "负向对照：旧环境变量名 DSH_GRAPH_MCP_TOKEN 不得通过校验");
-  // 拒绝非回环 host（服务端策略同口径）
+  assert.equal(mcpMod.leaksToken(staleEnv, { transport: "http" }).ok, false, "负向对照：旧环境变量名 DSH_GRAPH_MCP_TOKEN 不得通过校验");
+  // 拒绝非回环 host（服务端策略同口径）与未知 transport
   assert.throws(() => mcpMod.mcpEndpoint({ host: "0.0.0.0" }), mcpMod.McpConfigError);
+  assert.throws(() => mcpMod.generate("claude-code", { transport: "sse" }), mcpMod.McpConfigError);
 });
 
 test("g-631 I（g-634 负向守卫）：跨宿主打包产物与安装指南不得混入旧包名/旧 env 名", async () => {

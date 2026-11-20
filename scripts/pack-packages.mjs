@@ -138,7 +138,7 @@ export function packageEntries() {
       assets: ["prompts"],
     },
     "goal-graph-service": {
-      entries: ["core/service/serve.js"],
+      entries: ["core/service/serve.js", "core/service/stdio-mcp.js"],
       assets: ["prompts"],
     },
     "goal-graph-skills": { entries: [], assets: [] },
