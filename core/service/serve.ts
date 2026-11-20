@@ -128,8 +128,8 @@ export function parseServeArgs(argv: string[]): ServeArgs {
   if (action === "init" || action === "serve") {
     if (!out.root) throw new ServeUsageError(`需要 --root <绝对路径>（graphRoot，只读看板数据）`);
     if (!out.workspace) throw new ServeUsageError(`需要 --workspace <绝对路径>（executionWorkspace，执行目录；与 --root 显式分离）`);
-    if (out.port === undefined || out.port === 0) {
-      if (out.port === undefined) out.port = 0; // 0 = 系统分配空闲高位端口（不冻结具体端口）
+    if (action === "init" && out.port === undefined) {
+      out.port = 0; // 0 = 系统分配空闲高位端口（不冻结具体端口）；serve 动作保留 undefined 以沿用 config.port
     }
   }
   if (out.host !== undefined) {

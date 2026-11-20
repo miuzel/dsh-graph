@@ -20,6 +20,7 @@ import { join } from "node:path";
 import net from "node:net";
 
 import { makePrivateWorkspace, seedFixtureBoard, rawRequest, snapshotTree, diffTrees, occupyPort } from "./fixtures/g623-service.ts";
+import { parseServeArgs } from "../service/serve.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..");
 const BIN = join(repoRoot, "bin", "dsh-graph.mjs");
@@ -294,5 +295,54 @@ test("g-623 端到端（防伪绿对照）：把「认证先行」改坏后，�
     assert.equal(parsed.status, 200, "变异后未认证请求会被当作已认证业务处理 ⇒ 本套件的 401 断言在变异下必然判红");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("g-623 端到端：serve 省略 --port 时必须沿用 init 写入的 config.port（显式 --port 0 才覆盖为随机端口）", { timeout: 120_000 }, async () => {
+  const ws = makePrivateWorkspace("e2e-config-port");
+  seedFixtureBoard(ws.graphRoot);
+  try {
+    const baseInit = ["init", "--root", ws.graphRoot, "--workspace", ws.executionWorkspace];
+    const baseServe = ["serve", "--root", ws.graphRoot, "--workspace", ws.executionWorkspace];
+    assert.equal(parseServeArgs(baseInit).port, 0, "init 未传 --port 时默认写 0");
+    assert.equal(parseServeArgs(baseServe).port, undefined, "serve 未传 --port 时必须保持 undefined 以沿用 config.port");
+    assert.equal(parseServeArgs([...baseServe, "--port", "0"]).port, 0, "serve 显式传 --port 0 时必须保留 0 覆盖配置");
+
+    // 获取一个当前空闲端口，init 写入该端口
+    const probe = await occupyPort();
+    const configuredPort = probe.port;
+    await probe.release();
+
+    const env = offlineEnv(ws.home);
+    const init = runCli(["serve", "init", "--root", ws.graphRoot, "--workspace", ws.executionWorkspace, "--port", String(configuredPort)], env);
+    assert.equal(init.status, 0, `init 必须成功：${init.stderr}`);
+
+    // ① 不传 --port 启动 serve：必须监听 configuredPort
+    const proc = await startServeProcess(["serve", "--root", ws.graphRoot, "--workspace", ws.executionWorkspace], env);
+    try {
+      assert.equal(proc.port, configuredPort, `未传 --port 启动时必须监听 config.port=${configuredPort}，实际为 ${proc.port}`);
+    } finally {
+      await stopProcess(proc.child);
+    }
+
+    // ② 占用 configuredPort 后显式 --port 0：必须覆盖配置，成功绑定系统分配的其它端口
+    const blocker = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(configuredPort, "127.0.0.1", () => resolve());
+    });
+    try {
+      const proc2 = await startServeProcess(["serve", "--root", ws.graphRoot, "--workspace", ws.executionWorkspace, "--port", "0"], env);
+      try {
+        assert.notEqual(proc2.port, configuredPort, "显式 --port 0 必须绕开被占用的 config.port");
+        assert.ok(proc2.port > 0, "显式 --port 0 必须成功分配端口");
+      } finally {
+        await stopProcess(proc2.child);
+      }
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  } finally {
+    ws.cleanup();
   }
 });
