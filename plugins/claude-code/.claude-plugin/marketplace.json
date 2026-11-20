@@ -9,7 +9,7 @@
     {
       "name": "goal-graph",
       "source": "./",
-      "description": "目标看板 MCP 接入 + 外部宿主版技能正文（默认只读；--allow-write 后可写）",
+      "description": "目标看板零配置 stdio MCP 接入 + 外部宿主版技能正文（默认可写 38 工具，Human Gate 保留在本地看板）",
       "category": "productivity",
       "keywords": ["goal-graph", "kanban", "goals", "mcp"]
     }

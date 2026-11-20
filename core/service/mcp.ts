@@ -248,7 +248,11 @@ export function dispatchRpc(ctx: McpContext, msg: any): JsonRpcResponse | null {
           const value = isWriteModeCommand(name)
             ? executeWriteCommand(ctx, name, args)
             : executeReadOnlyCommand({ graphRoot: ctx.graphRoot, executionWorkspace: ctx.executionWorkspace }, name, args);
-          return rpcOk(id, { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value, isError: false });
+          return rpcOk(id, {
+            content: [{ type: "text", text: JSON.stringify(value) }],
+            structuredContent: toStructuredContent(value),
+            isError: false,
+          });
         } catch (e: any) {
           const code = e instanceof ServiceError ? e.code : "E_STORAGE";
           return rpcOk(id, {
@@ -269,6 +273,17 @@ export function dispatchRpc(ctx: McpContext, msg: any): JsonRpcResponse | null {
   } catch (e: any) {
     return rpcErr(id, RPC_ERROR.INTERNAL_ERROR, `内部错误：${String(e?.message ?? e)}`);
   }
+}
+
+/**
+ * MCP 规范（CallToolResult）：`structuredContent` 必须是 JSON 对象（Record<string, unknown>），
+ * 不得返回裸数组或原始值（Claude Code 等严格 Zod 校验客户端会直接拦截裸数组）。
+ * 数组统一封装为 `{ items, count }`；普通对象原样透传；其他原始值封装为 `{ value }`。
+ */
+export function toStructuredContent(value: unknown): Record<string, unknown> {
+  if (Array.isArray(value)) return { items: value, count: value.length };
+  if (value !== null && typeof value === "object") return value as Record<string, unknown>;
+  return { value };
 }
 
 /**

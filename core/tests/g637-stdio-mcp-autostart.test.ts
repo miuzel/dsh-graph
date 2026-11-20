@@ -252,6 +252,22 @@ test("g-637 ② 真实子进程（源码 + dist）：initialize / notifications 
         });
         assert.equal(commented.result.isError, false);
 
+        // 数组类只读工具（如 graph_list_goals）的 structuredContent 必须封装为 JSON 对象（record），
+        // 避免 Claude Code 等严格 Zod 校验客户端报「structuredContent 应为 record 却收到数组」。
+        const listed = await client.request({
+          id: 6,
+          method: "tools/call",
+          params: { name: "graph_list_goals", arguments: {} },
+        });
+        assert.equal(listed.result.isError, false, `${label}: graph_list_goals 必须成功`);
+        assert.ok(
+          listed.result.structuredContent && typeof listed.result.structuredContent === "object" && !Array.isArray(listed.result.structuredContent),
+          `${label}: graph_list_goals structuredContent 必须是 record（非数组）`,
+        );
+        assert.ok(Array.isArray(listed.result.structuredContent.items), `${label}: structuredContent.items 必须是数组`);
+        assert.equal(listed.result.structuredContent.count, listed.result.structuredContent.items.length);
+        assert.ok(listed.result.structuredContent.items.some((g: any) => g.id === newId), `${label}: 必须包含刚创建的目标`);
+
         const eventsRaw = readFileSync(join(fx.graphRoot, "events.jsonl"), "utf8");
         assert.ok(eventsRaw.includes(`"actor":"${MCP_WRITE_ACTOR}"`), `${label}: 写事件 actor 必须为 ${MCP_WRITE_ACTOR}`);
       } finally {

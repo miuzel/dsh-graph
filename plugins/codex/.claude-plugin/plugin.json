@@ -1,7 +1,7 @@
 {
   "name": "goal-graph",
   "version": "1.0.0",
-  "description": "goal-graph 目标看板：经本地 serve 实例的 MCP 读写目标/判据/卡片/结果；人工裁决保留在 DSH 看板或本地 GUI。",
+  "description": "goal-graph 目标看板：通过零配置 stdio MCP（goal-graph mcp）读写目标/判据/卡片/结果并自动起本地 Web 看板；人工裁决保留在本地看板。",
   "author": {
     "name": "miuzel",
     "url": "https://github.com/miuzel/dsh-graph"

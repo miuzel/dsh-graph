@@ -292,17 +292,17 @@ test("g-623 判据6：白名单只读命令逐项可用（MCP tools/list 与本�
 
     const ctx = { graphRoot: board.root, executionWorkspace: join(board.root, "..", "..", "workspace") };
     const checks: Array<[string, (v: any) => void]> = [
-      ["graph_list_goals", (v) => assert.ok(v.some((g: any) => g.id === board.goalId))],
-      ["graph_list_versions", (v) => assert.ok(v.some((x: any) => x.slug === board.versionSlug))],
+      ["graph_list_goals", (v) => assert.ok(Array.isArray(v.items) && v.count === v.items.length && v.items.some((g: any) => g.id === board.goalId))],
+      ["graph_list_versions", (v) => assert.ok(Array.isArray(v.items) && v.count === v.items.length && v.items.some((x: any) => x.slug === board.versionSlug))],
       ["graph_query_goal", (v) => { assert.equal(v.meta.id, board.goalId); assert.ok(String(v.description).length > 0); }],
       ["graph_query_criteria", (v) => { assert.equal(v.count, 2); assert.equal(v.items.length, 2); }],
-      ["graph_list_cards", (v) => assert.ok(Array.isArray(v) && v.length >= 1, "卡片必须可读")],
+      ["graph_list_cards", (v) => assert.ok(Array.isArray(v.items) && v.count === v.items.length && v.items.length >= 1, "卡片必须可读")],
       ["graph_query_results", (v) => assert.equal(v.id, board.goalId)],
       ["graph_board", (v) => assert.ok(Array.isArray(v.versions))],
       ["graph_settings", (v) => assert.equal(v.readOnly, true)],
-      ["graph_list_attachments", (v) => assert.ok(v.includes(board.attachmentName))],
+      ["graph_list_attachments", (v) => assert.ok(Array.isArray(v.items) && v.count === v.items.length && v.items.includes(board.attachmentName))],
       ["graph_read_attachment", (v) => { assert.equal(v.name, "evidence/note.txt"); assert.equal(Buffer.from(v.base64, "base64").toString("utf8"), "attachment-body\n"); }],
-      ["graph_events", (v) => assert.ok(v.length > 0)],
+      ["graph_events", (v) => assert.ok(Array.isArray(v.items) && v.count === v.items.length && v.items.length > 0)],
     ];
     for (const [tool, check] of checks) {
       const args = tool === "graph_read_attachment"
@@ -314,6 +314,11 @@ test("g-623 判据6：白名单只读命令逐项可用（MCP tools/list 与本�
       assert.equal(r.status, 200, `${tool} 必须被接受`);
       const result = r.json.result;
       assert.equal(result.isError, false, `${tool} 不得报错：${JSON.stringify(result.content)}`);
+      // MCP CallToolResult 规范：structuredContent 必须始终是 JSON 对象（record），绝不得为裸数组。
+      assert.ok(
+        result.structuredContent !== null && typeof result.structuredContent === "object" && !Array.isArray(result.structuredContent),
+        `${tool} 的 structuredContent 必须是 JSON record，不能是数组或原始值`,
+      );
       check(result.structuredContent);
       // 直接调用（不经 HTTP）也必须是同一实现
       const direct = executeReadOnlyCommand(ctx, tool, args);
@@ -328,7 +333,9 @@ test("g-623 判据6：白名单只读命令逐项可用（MCP tools/list 与本�
         }
         return plain;
       };
-      assert.deepEqual(strip(direct), strip(result.structuredContent), `${tool} 的 HTTP 与本地调用必须同源同值`);
+      const expectedStructured = Array.isArray(direct) ? { items: direct, count: direct.length } : direct;
+      assert.deepEqual(strip(expectedStructured), strip(result.structuredContent), `${tool} 的 HTTP 与本地调用必须同源同值`);
+      assert.deepEqual(strip(direct), strip(JSON.parse(result.content[0].text)), `${tool} 的 text JSON 与本地调用必须同源同值`);
     }
   });
 });
