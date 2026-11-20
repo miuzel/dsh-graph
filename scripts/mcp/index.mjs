@@ -1,5 +1,5 @@
 /**
- * dsh-graph-mcp —— MCP 适配器与三宿主配置生成（g-631）。
+ * goal-graph-mcp —— MCP 适配器与三宿主配置生成（g-631 / g-634）。
  *
  * 判据 4：Claude Code / Codex / OpenCode 的配置**能被各自宿主识别**，且**都指向同一 endpoint**，
  * 并且 **token 绝不写进配置文件**。
@@ -8,7 +8,7 @@
  *   · Claude Code（`.mcp.json` / `~/.claude.json`）：`${VAR}` 展开 ⇒ `Authorization: Bearer ${VAR}`
  *   · Codex（`~/.codex/config.toml`）：`bearer_token_env_var = "VAR"`（专门为此存在的键）
  *   · OpenCode（`opencode.json`）：`{env:VAR}` 插值 ⇒ `Authorization: Bearer {env:VAR}`
- * 三者都只写**变量名**；真实 token 由用户从 dsh-graph 服务的凭据文件（0600）注入环境。
+ * 三者都只写**变量名**；真实 token 由用户从 goal-graph 服务的凭据文件（0600）注入环境。
  *
  * endpoint 单一真源：由 `{host, port}` 推导，三宿主共用 `baseUrl()` 结果 —— 不可能出现
  * 「三个配置指向三个不同端口」的漂移。
@@ -16,8 +16,8 @@
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 7788;
-export const DEFAULT_TOKEN_ENV = "DSH_GRAPH_MCP_TOKEN";
-export const SERVER_KEY = "dsh-graph";
+export const DEFAULT_TOKEN_ENV = "GOAL_GRAPH_MCP_TOKEN";
+export const SERVER_KEY = "goal-graph";
 /** 服务端只允许数值回环绑定（见 core/service/policy.ts）；生成器也坚持这一点。 */
 export const ALLOWED_HOST = "127.0.0.1";
 
@@ -71,7 +71,7 @@ export function claudeCodeCommand({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}
 
 /**
  * Codex `~/.codex/config.toml` 片段。
- * 只输出 `[mcp_servers.dsh-graph]` 这一张表 —— 用户在**共享**的 config.toml 里手动合并，
+ * 只输出 `[mcp_servers.goal-graph]` 这一张表 —— 用户在**共享**的 config.toml 里手动合并，
  * 生成器绝不整文件覆盖。
  */
 export function codexConfig({ tokenEnv = DEFAULT_TOKEN_ENV, ...opts } = {}) {
@@ -124,7 +124,7 @@ export function generate(host, opts = {}) {
 export function leaksToken(rendered) {
   const text = typeof rendered === "string" ? rendered : JSON.stringify(rendered);
   // 允许的三种引用形态（只含变量名，不含值）
-  const placeholder = /\$\{DSH_GRAPH_MCP_TOKEN\}|\{env:DSH_GRAPH_MCP_TOKEN\}|bearer_token_env_var = "DSH_GRAPH_MCP_TOKEN"/;
+  const placeholder = /\$\{GOAL_GRAPH_MCP_TOKEN\}|\{env:GOAL_GRAPH_MCP_TOKEN\}|bearer_token_env_var = "GOAL_GRAPH_MCP_TOKEN"/;
   const ok = placeholder.test(text);
   // 危险信号：Bearer 后面直接跟了 32+ 位的非空白字面量（真实 token 的典型形态）
   const literal = /Bearer\s+(?!\$\{|{env:)[A-Za-z0-9._~+/=-]{24,}/.test(text);

@@ -7,7 +7,7 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "dsh-graph": "./bin/dsh-graph.mjs"
+    "goal-graph": "./bin/goal-graph.mjs"
   },
   "exports": {
     ".": "./index.js",

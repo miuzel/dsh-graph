@@ -1,9 +1,9 @@
 ---
-name: dsh-graph
-description: 通过 MCP 连接本地 dsh-graph 服务读写目标看板（默认只读 11 个工具；服务端 --allow-write 后 38 个）。人工裁决（accept/delivered/派发）在外部宿主不可达，需回 DSH 看板或本地 GUI。
+name: goal-graph
+description: 通过 MCP 连接本地 goal-graph 服务读写目标看板（默认只读 11 个工具；服务端 --allow-write 后 38 个）。人工裁决（accept/delivered/派发）在外部宿主不可达，需回 DSH 看板或本地 GUI。
 ---
 
-# dsh-graph（外部宿主版）
+# goal-graph（外部宿主版）
 
 本技能供 **Claude Code / Codex / OpenCode** 这类外部宿主使用。它与 DSH 插件内置的技能正文**不是同一份**：
 DSH 插件版能调用完整工具集，外部宿主只能看见 MCP 服务实际注册的工具。请以本文为准，不要套用 DSH 版做法。
@@ -14,15 +14,15 @@ DSH 插件版能调用完整工具集，外部宿主只能看见 MCP 服务实�
 
 - 成功返回数据 ⇒ 服务在跑、token 有效。
 - 返回 `E_UNKNOWN_COMMAND` ⇒ 该工具**未注册**（可能是写模式没开，或碰了人工裁决保留项）。
-- 返回 `E_NOT_INITIALIZED` ⇒ 看板还没初始化，先到看板所在项目执行 `dsh-graph serve init`。
+- 返回 `E_NOT_INITIALIZED` ⇒ 看板还没初始化，先到看板所在项目执行 `goal-graph serve init`。
 - HTTP 401 ⇒ token 缺失或错误，见 INSTALL.md 排障。
 
 **服务有两种模式**，工具表不同（模式只能由服务端启动参数决定，客户端无法自行开启）：
 
 | 模式 | 启动方式 | 可见工具数 |
 |---|---|---|
-| 只读（默认） | `dsh-graph serve` | 11 |
-| 写模式 | `dsh-graph serve --allow-write` | 38 |
+| 只读（默认） | `goal-graph serve` | 11 |
+| 写模式 | `goal-graph serve --allow-write` | 38 |
 
 ## 2. 只读模式（默认）可用的 11 个工具
 
@@ -67,7 +67,7 @@ in_progress / review / blocked`。**`delivered` 会被拒（`E_FORBIDDEN`）**�
 ### 写模式开启方式（客户端做不到）
 
 写模式**只能由服务端启动时决定**。请求里传 `allowWrite` / `writeMode` / `mode` 不会生效，还会被当保留参数
-拒绝。要开启请让服务以 `dsh-graph serve --allow-write` 重启。若你没有服务端的操作权限，就按只读模式工作。
+拒绝。要开启请让服务以 `goal-graph serve --allow-write` 重启。若你没有服务端的操作权限，就按只读模式工作。
 
 ## 4. 外部宿主**做不到**的事（人工裁决保留项）
 
@@ -100,7 +100,7 @@ in_progress / review / blocked`。**`delivered` 会被拒（`E_FORBIDDEN`）**�
 | `E_FORBIDDEN` | 已注册但该参数/目标被拒（如 `to=delivered`） | 改到允许范围 |
 | `E_INPUT` | 参数不合法 | 按提示修正参数 |
 | `E_NOT_FOUND` | 目标/卡片/附件不存在 | 先列表确认 id |
-| `E_NOT_INITIALIZED` | 看板未初始化 | 在项目里 `dsh-graph serve init` |
+| `E_NOT_INITIALIZED` | 看板未初始化 | 在项目里 `goal-graph serve init` |
 | `E_NOT_READ_ONLY` | 只读模式下请求了写路由 | 按只读模式工作，或让服务端开 `--allow-write` |
 | `E_STORAGE` | 存储层失败（磁盘/权限/损坏） | 查 `serve status` 与服务日志 |
 

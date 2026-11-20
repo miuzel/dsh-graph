@@ -56,8 +56,8 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 **最新亮点（v1.0.0）**
 
-- **五包拆分与命令行工具 `dsh-graph`**：按职责拆分为 5 个独立包（`dsh-graph` 插件本体 / `-cli` / `-service` / `-skills` / `-mcp`），提供独立 CLI（`info` / `status` / `goal` / `version` / `sync` / `claim` / `submit`）与三宿主（Claude Code / Codex / OpenCode）插件定义。
-- **独立本地服务（`dsh-graph serve`）与按需写模式**：单进程提供 Web 看板、Web API 与 localhost MCP 端点（CSPRNG 令牌、0600 凭据文件）；默认只读（仅暴露只读查询），显式 `serve --allow-write` 开启执行类写能力（固定 actor `mcp:local-service` 并留审计），人工裁决与派发始终 fail-closed。
+- **五包拆分与命令行工具 `goal-graph`**：DSH 专属插件保留 `dsh-graph`，跨宿主产物按职责拆分为 4 个独立包（`goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`），提供独立 CLI（`info` / `status` / `goal` / `version` / `sync` / `claim` / `submit`）与三宿主（Claude Code / Codex / OpenCode）插件定义。
+- **独立本地服务（`goal-graph serve`）与按需写模式**：单进程提供 Web 看板、Web API 与 localhost MCP 端点（CSPRNG 令牌、0600 凭据文件）；默认只读（仅暴露只读查询），显式 `serve --allow-write` 开启执行类写能力（固定 actor `mcp:local-service` 并留审计），人工裁决与派发始终 fail-closed。
 - **核心资料目录名可按项目自定义**：默认仍为 `.dsh-graph`（零迁移），支持通过插件 `config.root`、CLI `--graph-dir-name` 与 `serve init --graph-dir-name` 指定工作区内规整相对路径。
 - **大看板 `status` 提速约 2 倍**：事件流增量索引（大小 + inode + 头部指纹三重校验）使大看板中位耗时减半，异常一律回退全量校验。
 - **宿主支持面收窄与测试分层**：`engines.dsh` 与 peer 统一收窄为 `>=0.2.2-rc.3 <0.2.3-0`；测试按 `shakedown ⊊ integration ⊊ full ⊊ everything` 四层治理，发布门禁仍为无参全量。
@@ -339,8 +339,8 @@ All three platforms share the same package. **Known limitations**: (1) APFS, the
 
 **What's new (v1.0.0)**
 
-- **Five-Package Split & Standalone CLI (`dsh-graph`)**: Split by responsibility into 5 independent packages (`dsh-graph` plugin / `-cli` / `-service` / `-skills` / `-mcp`), with a zero-daemon CLI (`info` / `status` / `goal` / `version` / `sync` / `claim` / `submit`) and host plugin definitions for Claude Code, Codex, and OpenCode.
-- **Standalone Local Service (`dsh-graph serve`) & Opt-In Write Mode**: Single-process Web board, Web API, and localhost MCP endpoint secured with CSPRNG tokens (0600 credential files); read-only by default (11 tools), with explicit `serve --allow-write` enabling execution-class write tools (38 tools, fixed actor `mcp:local-service`, audited), while human gates and dispatch remain fail-closed.
+- **Five-Package Split & Standalone CLI (`goal-graph`)**: Keeps `dsh-graph` for the DSH plugin while splitting cross-host artifacts into 4 independent packages (`goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`), with a zero-daemon CLI (`info` / `status` / `goal` / `version` / `sync` / `claim` / `submit`) and host plugin definitions for Claude Code, Codex, and OpenCode.
+- **Standalone Local Service (`goal-graph serve`) & Opt-In Write Mode**: Single-process Web board, Web API, and localhost MCP endpoint secured with CSPRNG tokens (0600 credential files); read-only by default (11 tools), with explicit `serve --allow-write` enabling execution-class write tools (38 tools, fixed actor `mcp:local-service`, audited), while human gates and dispatch remain fail-closed.
 - **Per-Project Custom Graph Directory Name**: Defaults to `.dsh-graph` (zero migration); supports custom normalized relative paths via plugin `config.root`, CLI `--graph-dir-name`, and `serve init --graph-dir-name`.
 - **~2x Faster `status` on Large Boards**: Incremental event-stream indexing (validated by size + inode + header fingerprint) halves median latency on large boards, falling back to full verification on any mismatch.
 - **Narrowed Host Range & Tiered Testing**: `engines.dsh` and peer aligned to `>=0.2.2-rc.3 <0.2.3-0`; tests organized into `shakedown ⊊ integration ⊊ full ⊊ everything` while the release gate remains the full no-arg run.

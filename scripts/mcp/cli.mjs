@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * dsh-graph-mcp 命令行：为 Claude Code / Codex / OpenCode 生成 MCP 配置片段（g-631）。
+ * goal-graph-mcp 命令行：为 Claude Code / Codex / OpenCode 生成 MCP 配置片段（g-631 / g-634）。
  *
  * 用法：
- *   dsh-graph-mcp <claude-code|codex|opencode|all> [--port N] [--token-env VAR] [--write <dir>] [--check]
+ *   goal-graph-mcp <claude-code|codex|opencode|all> [--port N] [--token-env VAR] [--write <dir>] [--check]
  *
  *   --write <dir>  额外落盘为对应宿主的文件名（claude-code → .mcp.json，opencode → opencode.json，
  *                  codex → mcp-codex.toml）。**绝不**写入真实宿主配置路径（那是用户的共享文件）。
@@ -99,9 +99,9 @@ export function run(argv) {
 
 export function usage() {
   return [
-    "dsh-graph-mcp — 生成 Claude Code / Codex / OpenCode 的 MCP 配置（token 只引用环境变量）",
+    "goal-graph-mcp — 生成 Claude Code / Codex / OpenCode 的 MCP 配置（token 只引用环境变量）",
     "",
-    "用法：dsh-graph-mcp <claude-code|codex|opencode|all> [--port N] [--token-env VAR] [--write DIR] [--check]",
+    "用法：goal-graph-mcp <claude-code|codex|opencode|all> [--port N] [--token-env VAR] [--write DIR] [--check]",
     "",
     `  --port N        服务端口（默认 ${DEFAULT_PORT}）`,
     `  --token-env VAR token 所在环境变量名（默认 ${DEFAULT_TOKEN_ENV}）`,
@@ -118,10 +118,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     process.exitCode = r.code;
   } catch (e) {
     if (e instanceof McpConfigError) {
-      process.stderr.write(`dsh-graph-mcp: ${e.message}\n\n${usage()}`);
+      process.stderr.write(`goal-graph-mcp: ${e.message}\n\n${usage()}`);
       process.exitCode = 2;
     } else {
-      process.stderr.write(`dsh-graph-mcp: ${e.message}\n`);
+      process.stderr.write(`goal-graph-mcp: ${e.message}\n`);
       process.exitCode = 1;
     }
   }

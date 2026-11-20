@@ -31,7 +31,7 @@ import { listGoalFiles, loadGoal, findGoalFile, readRulesVersion } from "../cli/
 import { collectStatus } from "../cli/diagnostics.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..");
-const cliEntry = join(repoRoot, "bin", "dsh-graph.mjs");
+const cliEntry = join(repoRoot, "bin", "goal-graph.mjs");
 
 // ---------------------------------------------------------------------------
 // 夹具
@@ -762,9 +762,9 @@ function makeMutationSandbox(sb: { dir: string }) {
     recursive: true,
     filter: (src) => !src.startsWith(join(repoRoot, "core", "tests")),
   });
-  cpSync(cliEntry, join(binDir, "dsh-graph.mjs"));
+  cpSync(cliEntry, join(binDir, "goal-graph.mjs"));
   return {
-    entry: join(binDir, "dsh-graph.mjs"),
+    entry: join(binDir, "goal-graph.mjs"),
     file(rel: string): string {
       return join(sb.dir, "core", "cli", rel);
     },

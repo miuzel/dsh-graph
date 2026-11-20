@@ -642,7 +642,7 @@ function resolveGoalId(root: string, explicit: string | null): { id: string; inf
   throw new SubmitError(
     "goal-none-in-flight",
     `没有在途目标（状态为 ${IN_FLIGHT_STATUS} 的目标为 0 个，已在 review 的也为 0 个）——` +
-      `请显式给出目标 ID（dsh-graph submit <goal-id>），或先 claim 目标`,
+      `请显式给出目标 ID（goal-graph submit <goal-id>），或先 claim 目标`,
   );
 }
 
@@ -709,7 +709,7 @@ export async function submitGoal(params: {
   if (!existsSync(join(root, "events.jsonl"))) {
     throw new SubmitError(
       "board-unwritable",
-      `看板未初始化（缺少 events.jsonl）：${root} —— 请先初始化看板（dsh-graph init）后再 submit`,
+      `看板未初始化（缺少 events.jsonl）：${root} —— 请先初始化看板（goal-graph init）后再 submit`,
     );
   }
   if (!isWritableDir(root)) {
@@ -916,7 +916,7 @@ function locateGoal(root: string, id: string): string {
       throw new SubmitError(
         "goal-file-corrupt",
         `目标文件损坏（frontmatter 或结构不可解析）无法提交：${shown}` +
-          `${corrupt.length > 3 ? ` 等 ${corrupt.length} 个` : ""} —— 请先修复该 goal.md（dsh-graph status 可看细节）`,
+          `${corrupt.length > 3 ? ` 等 ${corrupt.length} 个` : ""} —— 请先修复该 goal.md（goal-graph status 可看细节）`,
       );
     }
     throw new SubmitError("goal-not-found", (e as Error).message);

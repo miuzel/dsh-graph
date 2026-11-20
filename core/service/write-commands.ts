@@ -69,7 +69,7 @@ export const WRITE_MODE_LABEL = "allow-write";
 
 /** 写模式未开启时，写类工具的统一拒绝理由（可读、指明开启方式）。 */
 export const WRITE_MODE_DISABLED_REASON =
-  "写模式未开启：本服务默认只读。如需经 MCP 修改 graph 目录，请由服务端显式启动 `dsh-graph serve --allow-write`（请求参数不能开启写模式）";
+  "写模式未开启：本服务默认只读。如需经 MCP 修改 graph 目录，请由服务端显式启动 `goal-graph serve --allow-write`（请求参数不能开启写模式）";
 
 /** 写模式下**仍 fail-closed** 的操作及原因（不在 `WRITE_MODE_COMMANDS` 中，因此调用一律 E_UNKNOWN_COMMAND）。 */
 export const HUMAN_GATE_TOOLS: Readonly<Record<string, string>> = Object.freeze({

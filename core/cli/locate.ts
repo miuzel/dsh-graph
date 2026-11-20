@@ -190,7 +190,7 @@ export function locateGraphRoot(opts: LocateOptions = {}): LocateResult {
   if (workspace === null) {
     throw new LocateError(
       "graph-not-found",
-      `当前目录 ${cwd} 及其所有祖先目录都没有 ${dirName}（非 dsh-graph 工作区）；` +
+      `当前目录 ${cwd} 及其所有祖先目录都没有 ${dirName}（非 goal-graph 工作区）；` +
         `请在项目根运行，或用 --root 指定看板目录`,
     );
   }

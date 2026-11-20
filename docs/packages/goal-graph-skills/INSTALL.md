@@ -1,6 +1,6 @@
-# dsh-graph-skills 安装指南
+# goal-graph-skills 安装指南
 
-dsh-graph 的 Agent 技能包，含两个技能：
+goal-graph / dsh-graph 的 Agent 技能包，含两个技能：
 
 | 技能 | 内容 | 面向 |
 |---|---|---|
@@ -21,15 +21,15 @@ dsh-graph 的 Agent 技能包，含两个技能：
 ### 全局安装（技能落到用户级技能目录）
 
 ```bash
-npm install -g dsh-graph-skills
-dsh-graph-skills                      # 默认装到 ${DSH_HOME:-~/.dsh}/skills
+npm install -g goal-graph-skills
+goal-graph-skills                      # 默认装到 ${DSH_HOME:-~/.dsh}/skills
 ```
 
 ### 项目本地安装
 
 ```bash
-npm install --save-dev --save-exact dsh-graph-skills
-node ./node_modules/dsh-graph-skills/install.mjs --target ./.claude/skills
+npm install --save-dev --save-exact goal-graph-skills
+node ./node_modules/goal-graph-skills/install.mjs --target ./.claude/skills
 ```
 
 `--target <dir>` 指定落点；`--force` 覆盖已存在的同名技能（默认**跳过**，不覆盖你的本地修改）。
@@ -42,7 +42,7 @@ ls -1 ~/.dsh/skills | grep dsh-graph
 cat ~/.dsh/skills/dsh-graph/SKILL.md | head -3
 
 # ② 安装脚本自检（装到临时目录，不污染真实技能目录）
-node ./node_modules/dsh-graph-skills/install.mjs --target /tmp/skills-check
+node ./node_modules/goal-graph-skills/install.mjs --target /tmp/skills-check
 ls /tmp/skills-check
 ```
 
@@ -63,9 +63,9 @@ description: dsh-graph 是把工作组织成「目标看板」的插件。你有
 ## 4. 卸载
 
 ```bash
-node ./node_modules/dsh-graph-skills/install.mjs --uninstall
-npm uninstall -g dsh-graph-skills     # 全局
-npm uninstall dsh-graph-skills        # 项目本地
+node ./node_modules/goal-graph-skills/install.mjs --uninstall
+npm uninstall -g goal-graph-skills     # 全局
+npm uninstall goal-graph-skills        # 项目本地
 ```
 
 `--uninstall` 只删这两个技能目录，不动技能目录里的其他技能。
@@ -78,7 +78,7 @@ npm uninstall dsh-graph-skills        # 项目本地
 若技能正文与插件行为不一致（例如工具名对不上），请把本包版本与 `dsh-graph` 插件对齐到同一版本：
 
 ```bash
-node -p "require('dsh-graph-skills/package.json').version"   # 期望 1.0.0
+node -p "require('goal-graph-skills/package.json').version"   # 期望 1.0.0
 ```
 
 ### 5.2 端口占用

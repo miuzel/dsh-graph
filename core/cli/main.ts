@@ -46,10 +46,10 @@ export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 
-const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读；写命令只有 sync / claim / submit）
+const HELP_TEXT = `goal-graph — 轻量目标看板命令行（默认只读；写命令只有 sync / claim / submit）
 
 用法：
-  dsh-graph <命令> [选项]
+  goal-graph <命令> [选项]
 
 命令：
   info             环境自检：Node 版本、graph root、初始化状态、关键文件可读性
@@ -60,7 +60,7 @@ const HELP_TEXT = `dsh-graph — 轻量 dsh-graph 看板命令行（默认只读
   claim <goal-id>  认领目标：把状态推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）
   submit [goal-id] 提交：跑全量自检门禁 + Git 变更统计，把目标推进到 review 并写 review.requested
   serve [...]      独立本地只读服务（Web App + Web API + localhost MCP）：init / status / uninstall / serve
-  version          显示 dsh-graph 版本
+  version          显示 goal-graph 版本
   help             显示本帮助
 
 选项：
@@ -133,12 +133,12 @@ function usageError(message: string): RunResult {
   return {
     exitCode: EXIT_USAGE,
     stdout: "",
-    stderr: `dsh-graph: ${message}\n运行 dsh-graph help 查看用法。\n`,
+    stderr: `goal-graph: ${message}\n运行 goal-graph help 查看用法。\n`,
   };
 }
 
 function failure(message: string): RunResult {
-  return { exitCode: EXIT_FAILURE, stdout: "", stderr: `dsh-graph: ${message}\n` };
+  return { exitCode: EXIT_FAILURE, stdout: "", stderr: `goal-graph: ${message}\n` };
 }/**
  * 与 {@link failure} 等价、但**不复制同一行字面量**的失败出口。
  *
@@ -172,7 +172,7 @@ export async function runCli(argv: readonly string[], ctx: CliContext): Promise<
     if (args.json) {
       return { exitCode: EXIT_OK, stdout: jsonOut({ version: ctx.version, node: process.version }), stderr: "" };
     }
-    return { exitCode: EXIT_OK, stdout: `dsh-graph ${ctx.version} (node ${process.version})\n`, stderr: "" };
+    return { exitCode: EXIT_OK, stdout: `goal-graph ${ctx.version} (node ${process.version})\n`, stderr: "" };
   }
 
   // g-623：`serve` **不**承担 UI、也**不**承担服务生命周期托管 —— 它只把 argv 交给独立服务模块
@@ -436,7 +436,7 @@ async function runClaimCommand(
 }
 
 /** claim 写入事件时的 actor 标识（与看板其它 CLI 动作一致：显式标明来源是可审计的前提）。 */
-const CLAIM_ACTOR = "cli:dsh-graph claim";
+const CLAIM_ACTOR = "cli:goal-graph claim";
 
 /**
  * `dsh-graph submit [goal-id]`（g-317）：自检 + Git 统计 → 推进到 review。
@@ -473,7 +473,7 @@ async function runSubmitCommand(
     // 未验证告警：`--json` 与人类输出**都**要发（脚本消费 JSON 时同样必须被告知「未验证」，
     // 不能因为输出格式不同就让告警静默消失）。
     const unverifiedWarn = result.unverified
-      ? `${warnLine}dsh-graph: ⚠ 本次 submit 为**未验证**（--skip-tests 或自检降级）：` +
+      ? `${warnLine}goal-graph: ⚠ 本次 submit 为**未验证**（--skip-tests 或自检降级）：` +
         `${result.changed ? "review.requested 已落盘" : "本次未写入看板（幂等命中）"}但无测试证据，请勿据此判为完成。\n`
       : warnLine;
     if (args.json) {
@@ -485,19 +485,19 @@ async function runSubmitCommand(
       const tail = e.eventsWritten ? "（注意：事件已先行落盘，重试同一命令即可收敛）" : "";
       const message = `submit${id ? ` ${id}` : ""} 失败：${e.message}${tail}`;
       if (args.json) {
-        return { exitCode: EXIT_FAILURE, stdout: jsonOut(mod.submitErrorPayload(e, located.root)), stderr: `dsh-graph: ${message}\n` };
+        return { exitCode: EXIT_FAILURE, stdout: jsonOut(mod.submitErrorPayload(e, located.root)), stderr: `goal-graph: ${message}\n` };
       }
       return submitFailure(message);
     }
     // 不在本分支复制 claim 的 `failure()` 写法：g-314/g-316 的反向变异把
-    // `return { exitCode: EXIT_FAILURE, stdout: "", stderr: \`dsh-graph: ${message}\\n\` };`
+    // `return { exitCode: EXIT_FAILURE, stdout: "", stderr: \`goal-graph: ${message}\\n\` };`
     // 当作**恰命中 1 处**的锚点，多一处会让那两个既有变异对照失去意义（实测已踩红）。
-    return { exitCode: EXIT_FAILURE, stdout: "", stderr: `dsh-graph: submit 失败：${(e as Error).message}\n` };
+    return { exitCode: EXIT_FAILURE, stdout: "", stderr: `goal-graph: submit 失败：${(e as Error).message}\n` };
   }
 }
 
 /** submit 写入事件时的 actor 标识（与 claim 同口径：显式标明来源）。 */
-const SUBMIT_ACTOR = "cli:dsh-graph submit";
+const SUBMIT_ACTOR = "cli:goal-graph submit";
 
 /** 写入结果并返回退出码（供可执行入口复用；单测直接用 runCli 的返回值）。 */
 export async function runAndPrint(argv: readonly string[], ctx: CliContext): Promise<number> {

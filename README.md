@@ -15,14 +15,14 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.2.2--rc.3%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v1.0.0** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）、内嵌 DSH Web 的二维泳道看板，以及独立的 `dsh-graph` 命令行工具。
+**当前版本 v1.0.0** —— DSH 插件本体 npm 包名 `dsh-graph`，同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）、内嵌 DSH Web 的二维泳道看板，以及跨宿主独立的 `goal-graph` 命令行与本地服务。
 
 **最新亮点（v1.0.0）**
 
-- **命令行工具 `dsh-graph`**：`info` / `status` / `goal` / `version` 只读查询，`sync` 投影常驻事实与目标概览到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，`claim` 认领目标并注入判据，`submit` 跑全量自检后把成果闭环到看板。命令原称 `dsh-cli`，本版统一为 `dsh-graph`，不保留旧名。
-- **独立本地服务**：`dsh-graph serve` 在同一进程提供 Web 页面、Web API 与 localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。**默认只读**：MCP 只注册只读查询，写工具根本不注册；需要外部宿主经 MCP 改看板时，由服务端显式 `serve --allow-write` 开启执行类写工具（固定 actor `mcp:local-service`，开关状态见 `serve status` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管/派发**永远** fail-closed，仍需人在本地看板完成。详见 [docs/g632-write-mode-and-custom-root.md](docs/g632-write-mode-and-custom-root.md)。
+- **命令行工具 `goal-graph`**：`info` / `status` / `goal` / `version` 只读查询，`sync` 投影常驻事实与目标概览到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，`claim` 认领目标并注入判据，`submit` 跑全量自检后把成果闭环到看板。
+- **独立本地服务**：`goal-graph serve` 在同一进程提供 Web 页面、Web API 与 localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。**默认只读**：MCP 只注册只读查询，写工具根本不注册；需要外部宿主经 MCP 改看板时，由服务端显式 `serve --allow-write` 开启执行类写工具（固定 actor `mcp:local-service`，开关状态见 `serve status` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管/派发**永远** fail-closed，仍需人在本地看板完成。详见 [docs/g632-write-mode-and-custom-root.md](docs/g632-write-mode-and-custom-root.md)。
 - **核心资料目录名可按项目自定义**：默认仍是 `.dsh-graph`（零迁移）；插件用既有 `config.root`、CLI 用 `--graph-dir-name`、服务用 `serve init --graph-dir-name` 指向自定义名（如 `board-a`、`boards/main`）。自定义名只接受工作区内规整相对路径，`..` / 绝对路径一律拒绝；worktree 归属与跨看板隔离不受影响。
-- **五包拆分发布**：v1.0.0 起按职责拆成 5 个独立包（`dsh-graph` 插件本体 / `-cli` / `-service` / `-skills` / `-mcp`），由 `scripts/pack-packages.mjs` 从 `dist/` 组装并产出 tarball；每包带独立安装指南，详见 [docs/multi-package-design.md](docs/multi-package-design.md)。
+- **五包拆分发布**：v1.0.0 起按职责拆成 5 个独立包（DSH 插件本体 `dsh-graph` + 跨宿主 `goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`），由 `scripts/pack-packages.mjs` 从 `dist/` 组装并产出 tarball；每包带独立安装指南，详见 [docs/multi-package-design.md](docs/multi-package-design.md)。
 - **大看板 `status` 提速约 2 倍**：事件流增量索引让 18750 事件看板的中位耗时从约 179ms 降到约 89ms；索引以大小 + inode + 头部指纹三重校验，截断/改写/替换一律回退全量并告警，绝不返回错误计数。
 - **宿主支持面收窄**：`engines.dsh` 与 peer 一并改为 `>=0.2.2-rc.3 <0.2.3-0`，删除仅为更早宿主保留的兼容分支。**`0.2.2-rc.1` / `rc.2` 及更早版本将无法安装**，本版不提供版本豁免；升级说明见 [docs/host-compat-v0.25.0.md](docs/host-compat-v0.25.0.md)。
 - **测试分层**：日常回归层（`shakedown`，约 49s）⊊ `integration` ⊊ `full` ⊊ `everything`（全量约 96s）；安全/鉴权/隔离/门禁自证类测试强制留在日常层。发布门禁仍是无参全量。
@@ -53,24 +53,24 @@ dsh plugin --profile <name> add dsh-graph
 
 需要 Node ≥ 22。依赖说明、宿主兼容范围（`engines.dsh` 声明与实测宿主）、侧边栏用法、数据目录等完整内容，见 **[dsh-graph-host/README.md](dsh-graph-host/README.md)**（即 npm 包内 README）。升级宿主后若 Web 看板半边不激活（`web boot: … did not activate`），见该 README 的「[升级残留自检与清理](dsh-graph-host/README.md#升级残留自检与清理)」。
 
-## 命令行（dsh-graph）
+## 命令行（goal-graph）
 
-包内提供轻量 CLI（不依赖常驻服务、网络或第三方 CLI 框架），可直接读写工作区的 `.dsh-graph/`：
+包内提供轻量 CLI（独立包 `goal-graph-cli`，不依赖常驻服务、网络或第三方 CLI 框架），可直接读写工作区的 `.dsh-graph/`：
 
 ```sh
-npx --package dsh-graph dsh-graph info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
-npx --package dsh-graph dsh-graph status        # 目标数、事件数、最近事件、规则库版本
-npx --package dsh-graph dsh-graph goal list     # 列出目标（--all 含归档）
-npx --package dsh-graph dsh-graph goal show g-1 # 单个目标（元信息 + 正文）
-npx --package dsh-graph dsh-graph claim g-1     # 认领目标：推进到 in_progress 并输出「目标 + 判据 + 边界」任务单
+npx --package goal-graph-cli goal-graph info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
+npx --package goal-graph-cli goal-graph status        # 目标数、事件数、最近事件、规则库版本
+npx --package goal-graph-cli goal-graph goal list     # 列出目标（--all 含归档）
+npx --package goal-graph-cli goal-graph goal show g-1 # 单个目标（元信息 + 正文）
+npx --package goal-graph-cli goal-graph claim g-1     # 认领目标：推进到 in_progress 并输出「目标 + 判据 + 边界」任务单
 ```
 
 > 除 `sync`（投影上下文）与 `claim`（认领目标）外，其余命令全部只读。`claim` 是**唯一会写看板**的命令：
 > 它经 core 状态机把 `planning`/`collecting`/`ready` 推进到 `in_progress`（事件先行），
 > 然后把轻量任务单打到 stdout；已是 `in_progress` 时幂等成功（不写事件）。
 
-> `npx --package dsh-graph dsh-graph …` 是**不预先安装**的写法（临时拉包后执行其 `bin` 条目）；
-> 已装进 `devDependencies` 时直接用 `npx dsh-graph …` 或 `./node_modules/.bin/dsh-graph …`。
+> `npx --package goal-graph-cli goal-graph …` 是**不预先安装**的写法（临时拉包后执行其 `bin` 条目）；
+> 已装进 `devDependencies` 时直接用 `npx goal-graph …` 或 `./node_modules/.bin/goal-graph …`。
 > 本 CLI 的实测平台为 **Linux / WSL2**；**Windows / macOS 未验证**（未做真机兼容性测试，
 > 尤其未经 Windows 上 `npx` 与路径分隔符链路验证）。
 

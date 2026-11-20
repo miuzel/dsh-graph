@@ -76,7 +76,7 @@ function findWorkspaceRoot(start: string): string {
 }
 const workspaceRoot = findWorkspaceRoot(repoRoot);
 const tmpRoot = join(workspaceRoot, "tmp");
-const cliSourceEntry = join(repoRoot, "bin", "dsh-graph.mjs");
+const cliSourceEntry = join(repoRoot, "bin", "goal-graph.mjs");
 
 /**
  * 沙箱位置为什么是**工作区根**的 `tmp/` 而不是 `.worktrees/.../tmp/`（真事故）：
@@ -288,9 +288,9 @@ function makeMutationSandbox(sb: { dir: string }) {
   });
   cpSync(join(repoRoot, "prompts"), join(sb.dir, "prompts"), { recursive: true });
   cpSync(join(repoRoot, "scripts"), join(sb.dir, "scripts"), { recursive: true });
-  cpSync(cliSourceEntry, join(binDir, "dsh-graph.mjs"));
+  cpSync(cliSourceEntry, join(binDir, "goal-graph.mjs"));
   return {
-    entry: join(binDir, "dsh-graph.mjs"),
+    entry: join(binDir, "goal-graph.mjs"),
     file(rel: string): string {
       return join(sb.dir, rel);
     },
@@ -1048,7 +1048,7 @@ test("g-317 判据7：非工作区 / 未初始化 / 只读看板 ⇒ 可读非�
   try {
     const r = runCliProcess(cliSourceEntry, ["submit"], outside.dir);
     assert.equal(r.code, EXIT_FAILURE, `非工作区必须非零退出；stdout=${r.stdout}`);
-    assert.match(r.stderr, /非 dsh-graph 工作区|--root/, "必须给出可操作提示");
+    assert.match(r.stderr, /非 goal-graph 工作区|--root/, "必须给出可操作提示");
     assert.deepEqual(readdirSync(outside.dir), [], "非工作区必须零副作用（连 .dsh-graph 都不建）");
   } finally {
     outside.cleanup();

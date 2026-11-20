@@ -55,7 +55,7 @@ import {
 
 const repoRoot = join(import.meta.dirname, "../..");
 const tmpRoot = join(repoRoot, "tmp");
-const cliSourceEntry = join(repoRoot, "bin", "dsh-graph.mjs");
+const cliSourceEntry = join(repoRoot, "bin", "goal-graph.mjs");
 
 // ---------------------------------------------------------------------------
 // 夹具
@@ -182,9 +182,9 @@ function makeMutationSandbox(sb: { dir: string }) {
   // `core/ops.ts` 在**模块加载期**就会读取 `prompts/` 下的资产（subagent-mode.*.md 等），
   // 缺了它副本会在 import 阶段直接崩（报 "prompt asset missing"），变异体根本不是可运行程序。
   cpSync(join(repoRoot, "prompts"), join(sb.dir, "prompts"), { recursive: true });
-  cpSync(cliSourceEntry, join(binDir, "dsh-graph.mjs"));
+  cpSync(cliSourceEntry, join(binDir, "goal-graph.mjs"));
   return {
-    entry: join(binDir, "dsh-graph.mjs"),
+    entry: join(binDir, "goal-graph.mjs"),
     file(rel: string): string {
       return join(sb.dir, "core", "cli", rel);
     },
@@ -482,7 +482,7 @@ test("g-315 判据4：无标记时按文档化规则追加（绝不覆盖）；�
 
   // 判据 9：使用说明必须记录写入位置与受控区段规则（否则用户无从判断「我的文件被改了什么」）
   const guide = read(join(repoRoot, "docs", "dsh-graph-guide.md"));
-  for (const needed of ["dsh-graph sync", "写入位置", "受控区段", "稳定前缀", "无变更不写", "原子写", "dsh-graph:sync:begin"]) {
+  for (const needed of ["goal-graph sync", "写入位置", "受控区段", "稳定前缀", "无变更不写", "原子写", "dsh-graph:sync:begin"]) {
     assert.ok(guide.includes(needed), `使用说明必须记录 sync 的：${needed}`);
   }
 });

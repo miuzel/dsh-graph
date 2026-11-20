@@ -2,11 +2,11 @@
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
-      "dsh-graph": {
+      "goal-graph": {
         "type": "remote",
         "url": "http://127.0.0.1:7788/mcp",
         "headers": {
-          "Authorization": "Bearer {env:DSH_GRAPH_MCP_TOKEN}"
+          "Authorization": "Bearer {env:GOAL_GRAPH_MCP_TOKEN}"
         }
       }
     }

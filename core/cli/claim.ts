@@ -207,7 +207,7 @@ export function claimGoal(params: { root: string; id: string; actor: string }): 
   if (!existsSync(join(root, "events.jsonl"))) {
     throw new ClaimError(
       "board-unwritable",
-      `看板未初始化（缺少 events.jsonl）：${root} —— 请先初始化看板（dsh-graph init）后再 claim`,
+      `看板未初始化（缺少 events.jsonl）：${root} —— 请先初始化看板（goal-graph init）后再 claim`,
     );
   }
   if (!isWritableDir(root)) {
@@ -232,7 +232,7 @@ export function claimGoal(params: { root: string; id: string; actor: string }): 
         throw new ClaimError(
           "goal-file-corrupt",
           `目标文件损坏（frontmatter 或结构不可解析）无法认领：${shown}` +
-            `${corrupt.length > 3 ? ` 等 ${corrupt.length} 个` : ""} —— 请先修复该 goal.md（dsh-graph status 可看细节）`,
+            `${corrupt.length > 3 ? ` 等 ${corrupt.length} 个` : ""} —— 请先修复该 goal.md（goal-graph status 可看细节）`,
         );
       }
       throw new ClaimError("goal-not-found", (e as Error).message);

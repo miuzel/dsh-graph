@@ -90,7 +90,7 @@ export interface PrivateWorkspace {
 export function makePrivateWorkspace(tag: string): PrivateWorkspace {
   const base = mkdtempSync(join(process.cwd(), "tmp", `g623-${tag}-`));
   const home = join(base, "home");
-  const stateDir = join(base, "state", "dsh-graph-service");
+  const stateDir = join(base, "state", "goal-graph-service");
   const graphRoot = join(base, "graph", ".dsh-graph");
   const executionWorkspace = join(base, "workspace");
   const outsideSentinel = join(base, "outside", "secret.txt");

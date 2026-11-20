@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-graph-skills 安装脚本（g-631）。
+ * goal-graph-skills 安装脚本（g-631 / g-634）。
  *
  * 把包内 `skills/<name>/` 复制到目标技能目录。**只写目标目录，绝不改动用户既有技能内容**：
  *   - 已存在同名技能 ⇒ 默认跳过并提示（不覆盖用户可能的本地修改）；
@@ -88,7 +88,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   try {
     process.exitCode = main(process.argv.slice(2));
   } catch (e) {
-    process.stderr.write(`dsh-graph-skills: ${e.message}\n`);
+    process.stderr.write(`goal-graph-skills: ${e.message}\n`);
     process.exitCode = 1;
   }
 }

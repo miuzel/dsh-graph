@@ -67,10 +67,10 @@ export const NODE_RANGE = HOST_PKG.engines.node;
 
 export const PACKAGE_NAMES = [
   "dsh-graph",
-  "dsh-graph-cli",
-  "dsh-graph-service",
-  "dsh-graph-skills",
-  "dsh-graph-mcp",
+  "goal-graph-cli",
+  "goal-graph-service",
+  "goal-graph-skills",
+  "goal-graph-mcp",
 ];
 
 /**
@@ -79,7 +79,7 @@ export const PACKAGE_NAMES = [
  */
 export function classifyDistPath(rel) {
   const p = rel.split(sep).join("/");
-  if (p === "bin/dsh-graph.mjs") return "cli-entry";
+  if (p === "bin/goal-graph.mjs") return "cli-entry";
   if (p.startsWith("core/cli/")) return "cli";
   if (p.startsWith("core/service/")) return "service";
   if (p.startsWith("core/")) return "shared";
@@ -132,17 +132,17 @@ export function packageEntries() {
       // index.js 静态 import ./core/{ops,care,root,events}.js；宿主另读 lib/client.js。
       assets: ["prompts", "diagrams", "icon.svg", "cordis.patch.yml"],
     },
-    "dsh-graph-cli": {
-      entries: ["bin/dsh-graph.mjs", "core/cli/main.js"],
+    "goal-graph-cli": {
+      entries: ["bin/goal-graph.mjs", "core/cli/main.js"],
       // 携带 core/ ⇒ 必须带 prompts/（运行期现读）。cli 不读 diagrams/client。
       assets: ["prompts"],
     },
-    "dsh-graph-service": {
+    "goal-graph-service": {
       entries: ["core/service/serve.js"],
       assets: ["prompts"],
     },
-    "dsh-graph-skills": { entries: [], assets: [] },
-    "dsh-graph-mcp": { entries: [], assets: [] },
+    "goal-graph-skills": { entries: [], assets: [] },
+    "goal-graph-mcp": { entries: [], assets: [] },
   };
 }
 
@@ -153,7 +153,7 @@ export function packageEntries() {
 export function filesForPackage(name) {
   const spec = packageEntries()[name];
   if (!spec) throw new Error(`未知包：${name}`);
-  if (name === "dsh-graph-skills" || name === "dsh-graph-mcp") return [];
+  if (name === "goal-graph-skills" || name === "goal-graph-mcp") return [];
   const { files, missing } = closureOf(spec.entries);
   const rels = new Set(files.map((f) => relative(DIST, f).split(sep).join("/")));
   const hasCore = [...rels].some((r) => r.startsWith("core/"));
@@ -247,24 +247,24 @@ export function manifestFor(name) {
           },
         ),
       };
-    case "dsh-graph-cli":
+    case "goal-graph-cli":
       return baseManifest(
-        "dsh-graph-cli",
-        "Command line for dsh-graph boards: info / status / goal / version / sync / claim / submit / serve.",
+        "goal-graph-cli",
+        "Command line for goal-graph boards: info / status / goal / version / sync / claim / submit / serve.",
         {
-          bin: { "dsh-graph": "./bin/dsh-graph.mjs" },
+          bin: { "goal-graph": "./bin/goal-graph.mjs" },
           exports: { ".": "./core/cli/main.js", "./package.json": "./package.json" },
           files: ["bin/", "core/", "prompts/", "README.md", "INSTALL.md", "LICENSE"],
-          keywords: ["dsh-graph", "cli", "goals", "kanban"],
+          keywords: ["goal-graph", "cli", "goals", "kanban"],
           ...common,
           engines: { node: NODE_RANGE },
           dependencies: { yaml: "^2.9.0" },
         },
       );
-    case "dsh-graph-service":
+    case "goal-graph-service":
       return baseManifest(
-        "dsh-graph-service",
-        "Local read-only service for dsh-graph: Web app + Web API + localhost MCP endpoint (127.0.0.1 only).",
+        "goal-graph-service",
+        "Local service for goal-graph: Web app + Web API + localhost MCP endpoint (127.0.0.1 only, read-only by default).",
         {
           main: "./core/service/serve.js",
           exports: {
@@ -274,36 +274,36 @@ export function manifestFor(name) {
             "./package.json": "./package.json",
           },
           files: ["core/", "prompts/", "README.md", "INSTALL.md", "LICENSE"],
-          keywords: ["dsh-graph", "service", "mcp", "web"],
+          keywords: ["goal-graph", "service", "mcp", "web"],
           ...common,
           ...hostEngineFields(),
           dsh: { promptAssets: { layout: "merged", dir: "./prompts" } },
         },
       );
-    case "dsh-graph-skills":
+    case "goal-graph-skills":
       return baseManifest(
-        "dsh-graph-skills",
-        "Agent skills for dsh-graph: dsh-graph (board usage) and dsh-graph-supervisor (supervisor guide).",
+        "goal-graph-skills",
+        "Agent skills for goal-graph / dsh-graph: dsh-graph (board usage) and dsh-graph-supervisor (supervisor guide).",
         {
           main: "./install.mjs",
-          bin: { "dsh-graph-skills": "./bin/dsh-graph-skills.mjs" },
+          bin: { "goal-graph-skills": "./bin/goal-graph-skills.mjs" },
           exports: { ".": "./install.mjs", "./package.json": "./package.json" },
           files: ["skills/", "install.mjs", "bin/", "README.md", "INSTALL.md", "LICENSE"],
-          keywords: ["dsh-graph", "skills", "agent"],
+          keywords: ["goal-graph", "skills", "agent"],
           ...common,
           engines: { node: NODE_RANGE },
         },
       );
-    case "dsh-graph-mcp":
+    case "goal-graph-mcp":
       return baseManifest(
-        "dsh-graph-mcp",
-        "MCP adapter for dsh-graph with config generators for Claude Code, Codex and OpenCode (no tokens in config files).",
+        "goal-graph-mcp",
+        "MCP adapter for goal-graph with config generators for Claude Code, Codex and OpenCode (no tokens in config files).",
         {
           main: "./lib/index.mjs",
-          bin: { "dsh-graph-mcp": "./bin/dsh-graph-mcp.mjs" },
+          bin: { "goal-graph-mcp": "./bin/goal-graph-mcp.mjs" },
           exports: { ".": "./lib/index.mjs", "./package.json": "./package.json" },
           files: ["lib/", "bin/", "README.md", "INSTALL.md", "LICENSE"],
-          keywords: ["dsh-graph", "mcp", "claude-code", "codex", "opencode"],
+          keywords: ["goal-graph", "mcp", "claude-code", "codex", "opencode"],
           ...common,
           engines: { node: NODE_RANGE },
         },
@@ -324,7 +324,7 @@ function copyDistFiles(pkgDir, rels) {
     const to = join(pkgDir, rel);
     ensureDir(dirname(to));
     cpSync(from, to);
-    if (rel === "bin/dsh-graph.mjs") {
+    if (rel === "bin/goal-graph.mjs") {
       // 可执行位必须保留，否则全局安装后 CLI 不可直接调用。
       chmodSync(to, 0o755);
     }
@@ -375,7 +375,7 @@ function writeSkillsPackage(pkgDir) {
   // 只 `import("../install.mjs")` 时，模块自身的 `argv[1] === import.meta.url` 判定不成立
   // （argv[1] 是本包装器的路径），于是 main() 永不执行、命令静默 exit 0 —— 实测踩到过。
   writeFileSync(
-    join(pkgDir, "bin", "dsh-graph-skills.mjs"),
+    join(pkgDir, "bin", "goal-graph-skills.mjs"),
     [
       "#!/usr/bin/env node",
       'import { main } from "../install.mjs";',
@@ -383,13 +383,13 @@ function writeSkillsPackage(pkgDir) {
       "try {",
       "  process.exitCode = main(process.argv.slice(2));",
       "} catch (e) {",
-      '  process.stderr.write(`dsh-graph-skills: ${e.message}\\n`);',
+      '  process.stderr.write(`goal-graph-skills: ${e.message}\\n`);',
       "  process.exitCode = 1;",
       "}",
       "",
     ].join("\n"),
   );
-  chmodSync(join(pkgDir, "bin", "dsh-graph-skills.mjs"), 0o755);
+  chmodSync(join(pkgDir, "bin", "goal-graph-skills.mjs"), 0o755);
 }
 
 /** mcp 包源：仓库 scripts/mcp/ 下的适配器与三宿主配置生成器。 */
@@ -398,7 +398,7 @@ function writeMcpPackage(pkgDir) {
   ensureDir(join(pkgDir, "bin"));
   // 同上：必须是启动器，不能只 import（否则 main 不执行、静默 exit 0）。
   writeFileSync(
-    join(pkgDir, "bin", "dsh-graph-mcp.mjs"),
+    join(pkgDir, "bin", "goal-graph-mcp.mjs"),
     [
       "#!/usr/bin/env node",
       'import { run, usage } from "../lib/cli.mjs";',
@@ -407,13 +407,13 @@ function writeMcpPackage(pkgDir) {
       "  process.stdout.write(r.out);",
       "  process.exitCode = r.code;",
       "} catch (e) {",
-      '  process.stderr.write(`dsh-graph-mcp: ${e.message}\\n\\n${usage()}\\n`);',
+      '  process.stderr.write(`goal-graph-mcp: ${e.message}\\n\\n${usage()}\\n`);',
       "  process.exitCode = 2;",
       "}",
       "",
     ].join("\n"),
   );
-  chmodSync(join(pkgDir, "bin", "dsh-graph-mcp.mjs"), 0o755);
+  chmodSync(join(pkgDir, "bin", "goal-graph-mcp.mjs"), 0o755);
 }
 
 /** 从 dsh-graph-host/package.json 派生插件的发布形态（与 build.sh 生成 dist/package.json 同口径）。 */
@@ -430,9 +430,9 @@ export function assemblePackage(name) {
   writeFileSync(join(pkgDir, "package.json"), JSON.stringify(manifest, null, 2) + "\n");
   writeFileSync(join(pkgDir, "LICENSE"), LICENSE);
 
-  if (name === "dsh-graph-skills") {
+  if (name === "goal-graph-skills") {
     writeSkillsPackage(pkgDir);
-  } else if (name === "dsh-graph-mcp") {
+  } else if (name === "goal-graph-mcp") {
     writeMcpPackage(pkgDir);
   } else {
     const { files, missing } = filesForPackage(name);
@@ -505,7 +505,7 @@ if (isMain) {
     for (const name of PACKAGE_NAMES) {
       const m = manifestFor(name);
       if (m.version !== VERSION) throw new Error(`${name} 版本不一致：${m.version} != ${VERSION}`);
-      if (name !== "dsh-graph-skills" && name !== "dsh-graph-mcp") filesForPackage(name);
+      if (name !== "goal-graph-skills" && name !== "goal-graph-mcp") filesForPackage(name);
     }
     console.log(`✅ 校验通过：${PACKAGE_NAMES.length} 个包，版本统一 ${VERSION}`);
     process.exit(0);
@@ -516,7 +516,7 @@ if (isMain) {
   if (wantTarballs) {
     const outDir = join(repoRoot, "out");
     const rows = await packTarballs(outDir);
-    const lines = ["# dsh-graph v" + VERSION + " tarball 清单（sha256）", ""];
+    const lines = ["# dsh-graph / goal-graph v" + VERSION + " tarball 清单（sha256）", ""];
     for (const r of rows) {
       lines.push(`${r.name}\t${r.file}\tsha256=${r.sha256}\tbytes=${r.bytes}\tfiles=${r.entries}`);
     }
