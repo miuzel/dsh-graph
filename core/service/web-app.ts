@@ -16,12 +16,12 @@ const INDEX_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>dsh-graph 本地只读看板</title>
+<title>goal-graph 本地只读看板</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <header class="bar">
-  <h1>dsh-graph 本地看板</h1>
+  <h1>goal-graph 本地看板</h1>
   <span id="mode" class="badge">只读</span>
   <button id="lock" type="button" hidden>锁定</button>
 </header>

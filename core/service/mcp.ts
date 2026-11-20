@@ -31,7 +31,7 @@ import {
 /** 本服务实现的 MCP 协议版本（单一版本 + 完全向后兼容的默认口径）。 */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const SUPPORTED_PROTOCOL_VERSIONS = [MCP_PROTOCOL_VERSION] as const;
-export const SERVER_NAME = "dsh-graph-local";
+export const SERVER_NAME = "goal-graph-local";
 export const CONTRACT_VERSION = "1.0-draft.1";
 
 export type JsonRpcId = string | number | null;

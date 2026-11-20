@@ -23,7 +23,7 @@ import { makePrivateWorkspace, seedFixtureBoard, rawRequest, snapshotTree, diffT
 import { parseServeArgs } from "../service/serve.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..");
-const BIN = join(repoRoot, "bin", "dsh-graph.mjs");
+const BIN = join(repoRoot, "bin", "goal-graph.mjs");
 
 /** 完全隔离的进程环境：私有 HOME / XDG（config/cache/state）、无代理、无用户凭据来源。 */
 function offlineEnv(home: string): NodeJS.ProcessEnv {
@@ -108,7 +108,7 @@ test("g-623 端到端：初始化→启动→Web/API/MCP→停止→端口释放
     const notInit = runCli(["serve", "--root", ws.graphRoot, "--workspace", ws.executionWorkspace], offlineEnv(ws.home));
     assert.notEqual(notInit.status, 0, "未显式初始化时 serve 必须失败");
     assert.match(notInit.stderr, /运行配置不存在|请先显式初始化/, "必须提示先初始化");
-    assert.equal(existsSync(join(ws.home, ".local", "state", "dsh-graph-service", "token")), false, "不得自动生成凭据");
+    assert.equal(existsSync(join(ws.home, ".local", "state", "goal-graph-service", "token")), false, "不得自动生成凭据");
 
     // ② 显式初始化（私有 HOME ⇒ 状态目录落在 HOME 下，不写进 graph）
     const init = runCli(["serve", "init", "--root", ws.graphRoot, "--workspace", ws.executionWorkspace], offlineEnv(ws.home));
@@ -116,7 +116,7 @@ test("g-623 端到端：初始化→启动→Web/API/MCP→停止→端口释放
     const initJson = JSON.parse(init.stdout);
     assert.equal(initJson.tokenCreated, true);
     assert.equal(initJson.graphInitialized, true);
-    const stateDir = join(ws.home, ".local", "state", "dsh-graph-service");
+    const stateDir = join(ws.home, ".local", "state", "goal-graph-service");
     assert.equal(initJson.stateDir, stateDir, "状态目录必须落在私有 HOME 下");
     const tokenPath = join(stateDir, "token");
     const token = readFileSync(tokenPath, "utf8").trim();
@@ -133,7 +133,7 @@ test("g-623 端到端：初始化→启动→Web/API/MCP→停止→端口释放
       // Web 静态入口
       const index = await rawRequest({ port: svc.port, path: "/", headers: { host: `127.0.0.1:${svc.port}` } });
       assert.equal(index.status, 200);
-      assert.match(index.body, /dsh-graph/);
+      assert.match(index.body, /goal-graph/);
       // Web 会话 + API 只读
       const login = await rawRequest({
         port: svc.port,
@@ -249,7 +249,7 @@ test("g-623 端到端：CLI 用法错误（缺 root/workspace、相对路径、�
       const r = runCli(args, env);
       assert.notEqual(r.status, 0, `${args.join(" ")} 必须非零退出（stdout=${r.stdout}）`);
       assert.ok(!r.stdout.includes("ok\": true") || r.status !== 0, "不得把失败伪装成成功");
-      assert.equal(existsSync(join(ws.home, ".local", "state", "dsh-graph-service", "token")), false, `${args.join(" ")} 不得生成凭据`);
+      assert.equal(existsSync(join(ws.home, ".local", "state", "goal-graph-service", "token")), false, `${args.join(" ")} 不得生成凭据`);
     }
     assert.deepEqual(diffTrees(before, snapshotTree(ws.graphRoot)), [], "用法错误不得改动 graph");
   } finally {

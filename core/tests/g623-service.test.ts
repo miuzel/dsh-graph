@@ -65,7 +65,7 @@ test("g-623 判据1：同一进程同一端口同时提供 Web 静态入口、We
     const index = await rawRequest({ port: svc.port, path: "/", headers: { host: `127.0.0.1:${svc.port}` } });
     assert.equal(index.status, 200, "GET / 必须返回 200");
     assert.match(String(index.headers["content-type"]), /text\/html/, "GET / 必须是 HTML");
-    assert.match(index.body, /dsh-graph 本地看板/, "静态页必须包含看板标题");
+    assert.match(index.body, /goal-graph 本地看板/, "静态页必须包含看板标题");
     assert.equal(index.headers["access-control-allow-origin"], undefined, "不得下发 CORS 通配");
 
     // Web API（同 origin 同一端口）
@@ -81,7 +81,7 @@ test("g-623 判据1：同一进程同一端口同时提供 Web 静态入口、We
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }),
     });
     assert.equal(mcp.status, 200, "POST /mcp 必须返回 200（同一服务进程）");
-    assert.equal(mcp.json?.result?.serverInfo?.name, "dsh-graph-local", "MCP initialize 必须返回本服务标识");
+    assert.equal(mcp.json?.result?.serverInfo?.name, "goal-graph-local", "MCP initialize 必须返回本服务标识");
 
     for (const [label, port] of [["web", svc.port], ["api", svc.port], ["mcp", svc.port]] as const) {
       assert.equal(port, svc.port, `${label} 必须与 Web/MCP 共用同一端口（同进程单端口）`);

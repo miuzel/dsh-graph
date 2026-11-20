@@ -34,8 +34,8 @@ export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 
-/** 服务自有状态目录的默认落点：`<state-root>/dsh-graph-service`（调用方必须给出显式 --state-dir 或 HOME）。 */
-export const STATE_DIR_NAME = "dsh-graph-service";
+/** 服务自有状态目录的默认落点：`<state-root>/goal-graph-service`（调用方必须给出显式 --state-dir 或 HOME）。 */
+export const STATE_DIR_NAME = "goal-graph-service";
 
 export interface ServeArgs {
   action: "serve" | "init" | "status" | "stop" | "uninstall";
@@ -315,7 +315,7 @@ export async function runServe(
   }
   io.out(
     [
-      `dsh-graph 本地${allowWrite ? "服务（写模式已开启）" : "只读服务"}已启动：${service.origin}`,
+      `goal-graph 本地${allowWrite ? "服务（写模式已开启）" : "只读服务"}已启动：${service.origin}`,
       `  Web App   ${service.origin}/`,
       `  Web API   ${service.origin}/api/…（同 origin 会话 Cookie）`,
       `  MCP       ${service.origin}/mcp（Authorization: Bearer <token>）`,

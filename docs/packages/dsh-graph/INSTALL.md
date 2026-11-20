@@ -32,7 +32,7 @@ npm install -g dsh-graph
 npm install --save-exact dsh-graph
 ```
 
-安装后包本体位于 `node_modules/dsh-graph/`；项目内 CLI（若另装了 `dsh-graph-cli`）可直接调用。
+安装后包本体位于 `node_modules/dsh-graph/`；项目内 CLI（若另装了 `goal-graph-cli`）可直接调用。
 
 ## 3. 最小验证步骤
 
@@ -85,7 +85,7 @@ npm ls @deepseek-ai/dsh-settings
 
 ### 5.2 端口占用
 
-本包本体**不监听任何端口**。若同时装了 `dsh-graph-service` 并启动报端口占用：
+本包本体**不监听任何端口**。若同时装了 `goal-graph-service` 并启动报端口占用：
 
 ```bash
 ss -ltnp | grep <端口号>       # Linux
@@ -96,7 +96,7 @@ lsof -i :<端口号>              # macOS
 
 ### 5.3 token 缺失
 
-本包本体**不需要 token**。token 只属于 `dsh-graph-service` / `dsh-graph-mcp`
+本包本体**不需要 token**。token 只属于 `goal-graph-service` / `goal-graph-mcp`
 （MCP endpoint 的 `Authorization: Bearer`）。若在外部 Agent 里遇到 401，请见对应包的安装指南。
 
 ### 5.4 权限问题

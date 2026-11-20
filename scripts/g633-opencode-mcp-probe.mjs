@@ -76,7 +76,7 @@ function ocEnv(extra = {}) {
   // PATH 必须保留（否则找不到 opencode）；其余保持最小面
   const base = { ...process.env, ...xdg };
   // 长版本探针不要继承外部 token，避免污染负向对照
-  delete base.DSH_GRAPH_MCP_TOKEN;
+  delete base.GOAL_GRAPH_MCP_TOKEN;
   return { ...base, ...extra };
 }
 
@@ -90,7 +90,7 @@ async function main() {
     record("env", "opencode CLI 可用", null, "PATH 中没有 opencode ⇒ 本探针无法执行", true);
     return 2;
   }
-  const distServe = join(REPO, "dist", "bin", "dsh-graph.mjs");
+  const distServe = join(REPO, "dist", "bin", "goal-graph.mjs");
   if (!existsSync(distServe)) {
     record("env", "构建产物存在", null, `缺 ${distServe} ⇒ 先 bash scripts/build.sh`, true);
     return 2;
@@ -111,38 +111,38 @@ async function main() {
   const added = oc([
     "mcp",
     "add",
-    "dsh-graph",
+    "goal-graph",
     "--url",
     url,
     "--header",
-    "Authorization=Bearer {env:DSH_GRAPH_MCP_TOKEN}",
+    "Authorization=Bearer {env:GOAL_GRAPH_MCP_TOKEN}",
     "--global",
   ]);
   let writtenOk = false;
   let writtenShape = "";
   if (existsSync(ocConfigPath)) {
     const j = JSON.parse(readFileSync(ocConfigPath, "utf8"));
-    const s = j?.mcp?.servers?.["dsh-graph"];
-    writtenOk = s?.type === "remote" && s?.url === url && s?.headers?.Authorization === "Bearer {env:DSH_GRAPH_MCP_TOKEN}";
+    const s = j?.mcp?.servers?.["goal-graph"];
+    writtenOk = s?.type === "remote" && s?.url === url && s?.headers?.Authorization === "Bearer {env:GOAL_GRAPH_MCP_TOKEN}";
     writtenShape = JSON.stringify(s);
   }
-  record("P2", "opencode mcp add 写出 mcp.servers.dsh-graph（type/url/header）", writtenOk, writtenShape || added.out.trim().slice(0, 200), true);
+  record("P2", "opencode mcp add 写出 mcp.servers.goal-graph（type/url/header）", writtenOk, writtenShape || added.out.trim().slice(0, 200), true);
 
   // 与仓库内 opencode.json 逐字段比对
   const repoCfg = JSON.parse(readFileSync(join(REPO, "plugins/opencode/opencode.json"), "utf8"));
-  const repoServer = repoCfg?.mcp?.servers?.["dsh-graph"];
+  const repoServer = repoCfg?.mcp?.servers?.["goal-graph"];
   const same = JSON.stringify(repoServer) === writtenShape;
   record("P2b", "插件目录 opencode.json 与实测产出逐字段一致", same, same ? "逐字段一致" : `仓库=${JSON.stringify(repoServer)}`, true);
 
   // ── P3 debug config 显示 ***（无鉴别力）─────────────────────────────────
   const dbg = oc(["debug", "config"]);
-  const dbgHasEntry = dbg.out.includes("dsh-graph") && dbg.out.includes("***");
+  const dbgHasEntry = dbg.out.includes("goal-graph") && dbg.out.includes("***");
   record(
     "P3",
     "opencode debug config 显示 *** 掩码",
     dbgHasEntry,
     dbgHasEntry
-      ? "输出含 dsh-graph 条目且 header 显示为 *** —— 但该掩码对**任意值**一律生效，见 P3b，故无鉴别力"
+      ? "输出含 goal-graph 条目且 header 显示为 *** —— 但该掩码对**任意值**一律生效，见 P3b，故无鉴别力"
       : dbg.out.trim().split("\n").slice(-3).join(" / ").slice(0, 240),
     false,
   );
@@ -150,13 +150,13 @@ async function main() {
   // P3b：字面量 vs 变量引用 → 同样 *** ⇒ 证明该命令无鉴别力
   {
     const literalCfg = {
-      mcp: { servers: { "dsh-graph": { type: "remote", url, headers: { Authorization: "Bearer PLAINLITERAL_NOT_VAR" } } } },
+      mcp: { servers: { "goal-graph": { type: "remote", url, headers: { Authorization: "Bearer PLAINLITERAL_NOT_VAR" } } } },
     };
     writeFileSync(ocConfigPath, JSON.stringify(literalCfg, null, 2) + "\n");
     const lit = oc(["debug", "config"]);
     const litMasked = lit.out.includes("***");
     // 还原为 mcp add 写出的配置，供后续步骤使用
-    writeFileSync(ocConfigPath, JSON.stringify({ mcp: { servers: { "dsh-graph": { type: "remote", url, headers: { Authorization: "Bearer {env:DSH_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n");
+    writeFileSync(ocConfigPath, JSON.stringify({ mcp: { servers: { "goal-graph": { type: "remote", url, headers: { Authorization: "Bearer {env:GOAL_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n");
     record(
       "P3b",
       "纯字面量 header 与变量引用同样显示 ***",
@@ -218,14 +218,14 @@ async function main() {
     const url = urlOverride ?? `http://127.0.0.1:${port}/mcp`;
     writeFileSync(
       caseCfg,
-      JSON.stringify({ mcp: { servers: { "dsh-graph": { type: "remote", url, headers: { Authorization: headerValue } } } } }, null, 2) + "\n",
+      JSON.stringify({ mcp: { servers: { "goal-graph": { type: "remote", url, headers: { Authorization: headerValue } } } } }, null, 2) + "\n",
     );
     // 关键：必须让 opencode 走到「已初始化 MCP、开始连服务器」这一步。
     //   · `opencode run --model <不存在>` ⇒ 在 MCP 初始化**之前**就以 rc=1 退出（实测零请求）
     //   · `opencode run hi`（默认模型）⇒ MCP 正常连上；随后 LLM 上游失败与我们无关
     // 因此用默认模型，并把“进程退出”而不是“LLM 成功”当作采集终点。
     const base = { ...process.env, ...caseXdg, ...envExtra };
-    delete base.DSH_GRAPH_MCP_TOKEN;
+    delete base.GOAL_GRAPH_MCP_TOKEN;
     Object.assign(base, envExtra);
     // `--standalone`：用私有服务而非后台托管服务。必须加 —— 不加时多次调用会争用同一个
     // 托管服务端口（实测 `Managed service port 49374 ... already in use`），第 2 次起就不再连 MCP。
@@ -256,7 +256,7 @@ async function main() {
   }
 
   // 正向：导出 token ⇒ 实收 "Bearer <token>"
-  const withVar = await captureStable({ DSH_GRAPH_MCP_TOKEN: TOKEN }, "Bearer {env:DSH_GRAPH_MCP_TOKEN}");
+  const withVar = await captureStable({ GOAL_GRAPH_MCP_TOKEN: TOKEN }, "Bearer {env:GOAL_GRAPH_MCP_TOKEN}");
   const authWithVar = withVar.find((h) => h.startsWith("Bearer")) ?? "";
   record(
     "P4",
@@ -268,11 +268,11 @@ async function main() {
 
   // 负向对照 A：不导出变量 ⇒ 退化为 "Bearer"（长度 6，插值为空）。
   //   这才是**决定性**证据：等长字面量同样能满足正向的长度算术，但不可能在未导出时退化成 "Bearer"。
-  const withoutVar = await captureStable({}, "Bearer {env:DSH_GRAPH_MCP_TOKEN}");
+  const withoutVar = await captureStable({}, "Bearer {env:GOAL_GRAPH_MCP_TOKEN}");
   const authWithout = withoutVar.find((h) => h.startsWith("Bearer")) ?? "";
   record(
     "P5",
-    "负向对照 A：未导出 DSH_GRAPH_MCP_TOKEN 时退化为 \"Bearer\"（len=6）",
+    "负向对照 A：未导出 GOAL_GRAPH_MCP_TOKEN 时退化为 \"Bearer\"（len=6）",
     authWithout === "Bearer",
     withoutVar.length === 0
       ? "本轮未采集到请求（MCP 连接与 LLM 上游失败竞争，未在时限内建立连接）⇒ 该对照本轮**未取得结论**"
@@ -282,15 +282,15 @@ async function main() {
   );
 
   // 负向对照 B：${VAR} 形态不插值 ⇒ 实收的是字面量本身。
-  const dollarVar = await captureStable({ DSH_GRAPH_MCP_TOKEN: TOKEN }, "Bearer ${DSH_GRAPH_MCP_TOKEN}");
+  const dollarVar = await captureStable({ GOAL_GRAPH_MCP_TOKEN: TOKEN }, "Bearer ${GOAL_GRAPH_MCP_TOKEN}");
   const authDollar = dollarVar.find((h) => h.startsWith("Bearer")) ?? "";
   record(
     "P6",
     "负向对照 B：${VAR} 形态不插值（实收字面量）",
-    authDollar === "Bearer ${DSH_GRAPH_MCP_TOKEN}",
+    authDollar === "Bearer ${GOAL_GRAPH_MCP_TOKEN}",
     dollarVar.length === 0
       ? "本轮未采集到请求 ⇒ 该对照本轮**未取得结论**"
-      : `服务端实收长度=${authDollar.length}（字面量 "${"Bearer ${DSH_GRAPH_MCP_TOKEN}"}" 长度 ${"Bearer ${DSH_GRAPH_MCP_TOKEN}".length}）` +
+      : `服务端实收长度=${authDollar.length}（字面量 "${"Bearer ${GOAL_GRAPH_MCP_TOKEN}"}" 长度 ${"Bearer ${GOAL_GRAPH_MCP_TOKEN}".length}）` +
         `⇒ OpenCode 只认 {env:}，与 Claude Code 的 \${VAR} 语法可区分`,
     true,
   );
@@ -306,11 +306,11 @@ async function main() {
     //   ③ 服务状态目录由 XDG_STATE_HOME 派生，必须可写
     const boardDir = join(tmpRoot, "board");
     const wsDir = join(tmpRoot, "ws");
-    const serveTokenPath = join(xdg.XDG_STATE_HOME, "dsh-graph-service", "token");
+    const serveTokenPath = join(xdg.XDG_STATE_HOME, "goal-graph-service", "token");
     mkdirSync(boardDir, { recursive: true });
     mkdirSync(wsDir, { recursive: true });
     const initRes = spawnSync(process.execPath, [distServe, "serve", "init", "--root", boardDir, "--workspace", wsDir], {
-      env: ocEnv({ DSH_GRAPH_MCP_TOKEN: TOKEN }),
+      env: ocEnv({ GOAL_GRAPH_MCP_TOKEN: TOKEN }),
       encoding: "utf8",
       timeout: 60000,
     });
@@ -322,13 +322,13 @@ async function main() {
       /* 读不到则留空，下面断言会红 */
     }
     if (initRes.status !== 0) {
-      record("P7", "真实 dsh-graph serve 上的 MCP 往返", false, `serve init 失败 rc=${initRes.status}：${(`${initRes.stdout ?? ""}${initRes.stderr ?? ""}`).trim().slice(0, 200)}`, true);
+      record("P7", "真实 goal-graph serve 上的 MCP 往返", false, `serve init 失败 rc=${initRes.status}：${(`${initRes.stdout ?? ""}${initRes.stderr ?? ""}`).trim().slice(0, 200)}`, true);
       return finish();
     }
-    writeFileSync(ocConfigPath, JSON.stringify({ mcp: { servers: { "dsh-graph": { type: "remote", url: serveUrl, headers: { Authorization: "Bearer {env:DSH_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n");
+    writeFileSync(ocConfigPath, JSON.stringify({ mcp: { servers: { "goal-graph": { type: "remote", url: serveUrl, headers: { Authorization: "Bearer {env:GOAL_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n");
 
     const serve = spawn(process.execPath, [distServe, "serve", "--root", boardDir, "--workspace", wsDir, "--port", String(servePort)], {
-      env: { ...ocEnv({ DSH_GRAPH_MCP_TOKEN: TOKEN }) },
+      env: { ...ocEnv({ GOAL_GRAPH_MCP_TOKEN: TOKEN }) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let serveOut = "";
@@ -346,7 +346,7 @@ async function main() {
     }
 
     if (!up) {
-      record("P7", "真实 dsh-graph serve 上的 MCP 往返", false, `serve 未在 15s 内起来：${serveOut.slice(-200)}`, true);
+      record("P7", "真实 goal-graph serve 上的 MCP 往返", false, `serve 未在 15s 内起来：${serveOut.slice(-200)}`, true);
     } else {
       // 直接用 fetch 模拟客户端协议往返（不依赖 opencode 能否跑通完整会话）
       const post = async (body, auth = `Bearer ${serveToken}`) => {
@@ -372,7 +372,7 @@ async function main() {
         unauthorized.status !== 200;
       record(
         "P7",
-        "真实 dsh-graph serve 的 MCP 往返（initialize / tools/list / tools/call）",
+        "真实 goal-graph serve 的 MCP 往返（initialize / tools/list / tools/call）",
         ok,
         `initialize=${init.status} serverInfo=${init.json?.result?.serverInfo?.name ?? "?"}；` +
           `tools/list=${listNames.length} 个工具；tools/call graph_list_goals → ${call.json?.result?.isError ? "isError 结果" : "正常结果"}；` +
@@ -398,10 +398,10 @@ async function finish() {
     for (const d of ["data", "config/opencode", "state", "cache"]) mkdirSync(join(coldHome, d), { recursive: true });
     writeFileSync(
       join(coldHome, "config", "opencode", "opencode.json"),
-      JSON.stringify({ mcp: { servers: { "dsh-graph": { type: "remote", url: "http://127.0.0.1:7788/mcp", headers: { Authorization: "Bearer {env:DSH_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n",
+      JSON.stringify({ mcp: { servers: { "goal-graph": { type: "remote", url: "http://127.0.0.1:7788/mcp", headers: { Authorization: "Bearer {env:GOAL_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n",
     );
     const coldEnv = { ...process.env, XDG_DATA_HOME: join(coldHome, "data"), XDG_CONFIG_HOME: join(coldHome, "config"), XDG_STATE_HOME: join(coldHome, "state"), XDG_CACHE_HOME: join(coldHome, "cache") };
-    delete coldEnv.DSH_GRAPH_MCP_TOKEN;
+    delete coldEnv.GOAL_GRAPH_MCP_TOKEN;
     const cold = spawnSync("opencode", ["mcp", "list"], { env: coldEnv, encoding: "utf8", timeout: 60000 });
     const coldOut = `${cold.stdout ?? ""}${cold.stderr ?? ""}`.trim();
     rmSync(coldHome, { recursive: true, force: true });
@@ -411,9 +411,9 @@ async function finish() {
     for (const d of ["data", "config/opencode", "state", "cache"]) mkdirSync(join(warmHome, d), { recursive: true });
     writeFileSync(
       join(warmHome, "config", "opencode", "opencode.json"),
-      JSON.stringify({ mcp: { servers: { "dsh-graph": { type: "remote", url: "http://127.0.0.1:44093/mcp", headers: { Authorization: "Bearer {env:DSH_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n",
+      JSON.stringify({ mcp: { servers: { "goal-graph": { type: "remote", url: "http://127.0.0.1:44093/mcp", headers: { Authorization: "Bearer {env:GOAL_GRAPH_MCP_TOKEN}" } } } } }, null, 2) + "\n",
     );
-    const warmEnv = { ...process.env, XDG_DATA_HOME: join(warmHome, "data"), XDG_CONFIG_HOME: join(warmHome, "config"), XDG_STATE_HOME: join(warmHome, "state"), XDG_CACHE_HOME: join(warmHome, "cache"), DSH_GRAPH_MCP_TOKEN: TOKEN };
+    const warmEnv = { ...process.env, XDG_DATA_HOME: join(warmHome, "data"), XDG_CONFIG_HOME: join(warmHome, "config"), XDG_STATE_HOME: join(warmHome, "state"), XDG_CACHE_HOME: join(warmHome, "cache"), GOAL_GRAPH_MCP_TOKEN: TOKEN };
     spawnSync("opencode", ["run", "--standalone", "hi"], { env: warmEnv, encoding: "utf8", timeout: 60000 });
     const warm = spawnSync("opencode", ["mcp", "list"], { env: warmEnv, encoding: "utf8", timeout: 60000 });
     const warmOut = `${warm.stdout ?? ""}${warm.stderr ?? ""}`.trim();

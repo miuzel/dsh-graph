@@ -115,7 +115,7 @@ echo "暂存目录：${STAGE_ROOT_REL}（发布前 dist/ 保持不变）"
 # dist/...` 形式（既有 dist 同步断言逐条解析该清单），故把组装阶段的 cwd 切到暂存根。
 mkdir -p "$STAGE_DIST"
 ln -s "$REPO_ROOT/dsh-graph-host" "$STAGE_ROOT/dsh-graph-host"
-# g-314：dsh-graph 入口源目录同构软链（使步骤 3 能用仓库相对路径 `bin/...` 作为 cp 源，
+# g-314 / g-634：goal-graph 入口源目录同构软链（使步骤 3 能用仓库相对路径 `bin/...` 作为 cp 源，
 # 从而保持 A 族复制清单的字面形态）。
 ln -s "$REPO_ROOT/bin" "$STAGE_ROOT/bin"
 
@@ -212,15 +212,15 @@ rm -f "$_prompt_src_list" "$_prompt_dist_list"
 # 宿主只读路由 /api/dsh-graph/diagram/<name> 从 dist/diagrams/ 现读（白名单仅两张 HTML）。
 cp -r dsh-graph-host/diagrams dist/diagrams
 
-# g-314：dsh-graph 可执行入口随包发布（源 bin/dsh-graph.mjs → 包内 dist/bin/dsh-graph.mjs，
-# package.json 的 bin.dsh-graph 指向后者）。入口加载同目录上层的编译产物 dist/core/cli/main.js。
+# g-314 / g-634：goal-graph 可执行入口随包发布（源 bin/goal-graph.mjs → 包内 dist/bin/goal-graph.mjs，
+# package.json 的 bin.goal-graph 指向后者）。入口加载同目录上层的编译产物 dist/core/cli/main.js。
 # 本段在**暂存根内**执行：源 `bin/...` 由暂存根内的同构软链解析到仓库根，目标保持字面
 # `dist/bin/...`（相对暂存根）⇒ A 族守卫（g-312）仍按「仓库相对源 → dist/... 目标」逐字对账。
 # ⚠️ 绝不要先 `cd "$REPO_ROOT"` 再写 `dist/bin/...`：那会写进**旧发布树**而非暂存树，
 # 构建看似成功但产物没进新包（本次实现中已实测踩到）。
 mkdir -p dist/bin
-cp bin/dsh-graph.mjs dist/bin/dsh-graph.mjs
-chmod +x dist/bin/dsh-graph.mjs
+cp bin/goal-graph.mjs dist/bin/goal-graph.mjs
+chmod +x dist/bin/goal-graph.mjs
 
 # 从 dsh-graph-host/package.json 生成 dist/package.json：
 # 移除 scripts（构建已在仓库根完成），添加 main 和 exports（指向 dist 内产物），
@@ -231,8 +231,8 @@ node -e '
   const src = JSON.parse(require("fs").readFileSync("dsh-graph-host/package.json", "utf8"));
   delete src.scripts;
   src.main = "index.js";
-  // g-314：bin 字段**来自源** dsh-graph-host/package.json（构建不新增顶层键，见 dist-freshness 守卫）；
-  // 本脚本只负责把入口文件复制到 dist/bin/dsh-graph.mjs，使该相对路径在包内成立。
+  // g-314 / g-634：bin 字段**来自源** dsh-graph-host/package.json（构建不新增顶层键，见 dist-freshness 守卫）；
+  // 本脚本只负责把入口文件复制到 dist/bin/goal-graph.mjs，使该相对路径在包内成立。
   src.exports = {
     ".": "./index.js",
     "./client": "./lib/client.js",

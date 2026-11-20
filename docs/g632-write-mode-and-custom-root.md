@@ -16,14 +16,14 @@
 
 ```bash
 # ① 初始化时一并指定（写进服务私有运行配置 server.json）
-dsh-graph serve init --root <graphRoot 绝对路径> --workspace <exec 绝对路径> --allow-write
+goal-graph serve init --root <graphRoot 绝对路径> --workspace <exec 绝对路径> --allow-write
 
 # ② 或启动时开启 / 关闭（同时回写运行配置）
-dsh-graph serve --root … --workspace … --allow-write
-dsh-graph serve --root … --workspace … --no-allow-write
+goal-graph serve --root … --workspace … --allow-write
+goal-graph serve --root … --workspace … --no-allow-write
 
 # ③ 查看当前状态（含写模式）
-dsh-graph serve status
+goal-graph serve status
 ```
 
 - `--allow-write` 是**纯布尔开关**：`--allow-write=false` 这类带取值的写法直接**用法错误**（不解析字符串真值）。
@@ -208,7 +208,7 @@ Web API（`/api/*`）**仍然只有 GET**：写模式只影响 **MCP** 入口，
 - `serve status` 可见 `allowWrite` + `writeMode` 说明；init/开启/关闭三次动作各留一条审计；
 - 自定义名在 core / CLI / 服务三处一致生效；自定义根下只读查询读到**自定义根**（不回落默认根干扰看板）、
   附件落在自定义根；读/写两个方向的 `../` 穿越都被拒；
-- 实装：真实 `dsh-graph serve` 进程分别以「默认」「`--allow-write`」「`--no-allow-write`」启动，输出见
+- 实装：真实 `goal-graph serve` 进程分别以「默认」「`--allow-write`」「`--no-allow-write`」启动，输出见
   交付报文的实装输出小节。
 
 **未验证**（不宣称通过）：

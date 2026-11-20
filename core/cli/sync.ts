@@ -180,7 +180,7 @@ function goalParseProblems(root: string): SyncError[] {
       "goal-file-corrupt",
       `发现 ${problems.length} 个无法解析的目标文件：${head}${more}。` +
         `core 的看板投影会静默跳过这些文件（目标会从投影里无声消失），故 sync 整体失败、不写任何文件；` +
-        `请先修复上述文件（或用 dsh-graph goal list 复核）再 sync`,
+        `请先修复上述文件（或用 goal-graph goal list 复核）再 sync`,
     ),
   ];
 }
@@ -370,7 +370,7 @@ export function renderStablePrefix(standing: readonly StandingFact[]): string {
   lines.push("### A. 硬性事实（稳定前缀，勿手改）");
   lines.push("");
   lines.push(
-    "以下由 `dsh-graph sync` 从 `.dsh-graph/memory/` 的**常驻（standing）记忆**投影而来，是项目不可违背的硬性与环境约束。",
+    "以下由 `goal-graph sync` 从 `.dsh-graph/memory/` 的**常驻（standing）记忆**投影而来，是项目不可违背的硬性与环境约束。",
   );
   lines.push("本区段是**稳定前缀**：不含计数、时间与任何派生状态 —— 记忆不变则逐字节不变，便于 Prompt 缓存命中。");
   lines.push("");
@@ -458,7 +458,7 @@ export function renderDynamicSection(versions: readonly VersionFact[], opts: Dyn
   if (folded.length > 0) {
     lines.push("");
     lines.push(
-      `- （其余 ${folded.length} 个目标已折叠：单次最多列 ${max} 个，用 \`dsh-graph sync --full\` 展开；完整清单用 \`dsh-graph goal list\`）`,
+      `- （其余 ${folded.length} 个目标已折叠：单次最多列 ${max} 个，用 \`goal-graph sync --full\` 展开；完整清单用 \`goal-graph goal list\`）`,
     );
   }
   return lines.join("\n");
@@ -473,7 +473,7 @@ export function renderSyncBlock(
   return [
     SYNC_MARKERS.begin,
     "",
-    "<!-- 本区段由 `dsh-graph sync`（g-315）自动生成，禁止手改：手改会在下次 sync 时被覆盖。 -->",
+    "<!-- 本区段由 `goal-graph sync`（g-315）自动生成，禁止手改：手改会在下次 sync 时被覆盖。 -->",
     "<!-- 区段之外的内容由你维护，sync 永不触碰。投影来源：.dsh-graph 的常驻记忆与版本目标。 -->",
     "",
     renderStablePrefix(standing),

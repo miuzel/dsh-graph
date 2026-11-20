@@ -1,9 +1,9 @@
-# dsh-graph-service 安装指南
+# goal-graph-service 安装指南
 
-dsh-graph 本地**只读**服务：同一进程提供 Web App（`/`）、Web API（`/api/…`）与 localhost MCP
+goal-graph 本地**只读**服务（可选 `--allow-write`）：同一进程提供 Web App（`/`）、Web API（`/api/…`）与 localhost MCP
 endpoint（`POST /mcp`）。
 
-**自包含**：所需的 core 运行时与提示词资产都在 tarball 内，不依赖其他 dsh-graph 包。
+**自包含**：所需的 core 运行时与提示词资产都在 tarball 内，不依赖其他包。
 
 ## 1. 前置要求
 
@@ -17,13 +17,13 @@ endpoint（`POST /mcp`）。
 ## 2. 安装
 
 ```bash
-npm install -g dsh-graph-service        # 全局
-npm install --save-exact dsh-graph-service   # 项目本地
+npm install -g goal-graph-service        # 全局
+npm install --save-exact goal-graph-service   # 项目本地
 ```
 
-> 本包**不自带可执行入口**（`bin`）：驱动方式有两条——装 `dsh-graph-cli` 后用
-> `dsh-graph serve …`，或直接在 Node 里 import `dsh-graph-service` 的 `runServeCommand`。
-> 若你只想要命令行入口，请装 `dsh-graph-cli`（它已内含本服务）。
+> 本包**不自带可执行入口**（`bin`）：驱动方式有两条——装 `goal-graph-cli` 后用
+> `goal-graph serve …`，或直接在 Node 里 import `goal-graph-service` 的 `runServeCommand`。
+> 若你只想要命令行入口，请装 `goal-graph-cli`（它已内含本服务）。
 
 ## 3. 最小验证步骤
 
@@ -33,23 +33,23 @@ npm install --save-exact dsh-graph-service   # 项目本地
 # ⚠️ --root 与 --workspace 必须**互不包含**：服务会拒绝「图根位于执行工作区内」或反之的配置
 #    （安全语义：看板数据不得混在被扫描的工作树里）。所以看板目录要放在工作区**之外**，
 #    例如 ~/.dsh-graph-boards/myproject —— 不要写成 <project>/.dsh-graph 配 <project>。
-mkdir -p ~/.dsh-graph-service && chmod 700 ~/.dsh-graph-service
-dsh-graph serve init \
+mkdir -p ~/.goal-graph-service && chmod 700 ~/.goal-graph-service
+goal-graph serve init \
   --root ~/.dsh-graph-boards/myproject \
   --workspace /path/to/project \
-  --state-dir ~/.dsh-graph-service \
+  --state-dir ~/.goal-graph-service \
   --port 7801
 # 期望：{ "ok": true, "tokenCreated": true, "graphInitialized": true, ... }
 
 # ② 状态（只读）
-dsh-graph serve status --state-dir ~/.dsh-graph-service
+goal-graph serve status --state-dir ~/.goal-graph-service
 # 期望：{ "ok": true, "initialized": true, "tokenPresent": true, ... }
 
 # ③ 启动后做一次真实 MCP 往返
-dsh-graph serve --root /path/to/project/.dsh-graph --workspace /path/to/project \
-  --state-dir ~/.dsh-graph-service --port 7801 &
+goal-graph serve --root ~/.dsh-graph-boards/myproject --workspace /path/to/project \
+  --state-dir ~/.goal-graph-service --port 7801 &
 curl -s -X POST http://127.0.0.1:7801/mcp \
-  -H "Authorization: Bearer $(cat ~/.dsh-graph-service/token)" \
+  -H "Authorization: Bearer $(cat ~/.goal-graph-service/token)" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
 ```
@@ -57,9 +57,9 @@ curl -s -X POST http://127.0.0.1:7801/mcp \
 实测输出（v1.0.0）：
 
 ```
-启动横幅：dsh-graph 本地只读服务已启动：http://127.0.0.1:7801
+启动横幅：goal-graph 本地只读服务已启动：http://127.0.0.1:7801
 MCP initialize → {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18",
-  "serverInfo":{"name":"dsh-graph-local","version":"1.0-draft.1"} ...}}
+  "serverInfo":{"name":"goal-graph-local","version":"1.0-draft.1"} ...}}
 tools/list → 11 个只读工具（graph_board、graph_list_goals、graph_query_goal …）
 无 token / 错 token → HTTP 401
 ```
@@ -67,8 +67,8 @@ tools/list → 11 个只读工具（graph_board、graph_list_goals、graph_query
 ## 4. 卸载
 
 ```bash
-dsh-graph serve uninstall --state-dir ~/.dsh-graph-service   # 只删本服务自有凭据与运行配置
-npm uninstall -g dsh-graph-service
+goal-graph serve uninstall --state-dir ~/.goal-graph-service   # 只删本服务自有凭据与运行配置
+npm uninstall -g goal-graph-service
 ```
 
 `serve uninstall` **只删服务自有的运行配置与凭据**，看板数据（`.dsh-graph/`）一字不动。
@@ -78,7 +78,7 @@ npm uninstall -g dsh-graph-service
 ### 5.1 版本不匹配
 
 ```bash
-node -p "require('dsh-graph-service/package.json').engines"
+node -p "require('goal-graph-service/package.json').engines"
 ```
 
 要求 DSH `>=0.2.2-rc.3 <0.2.3-0`。超出上限（≥ 0.2.3-0）本包未经适配。
@@ -119,4 +119,4 @@ chmod 700 <state-dir>
 ### 5.5 `graphInitialized: false`
 
 指到了没有 `events.jsonl` 的目录。`--root` 要指向**已初始化的看板目录**
-（即 `.dsh-graph` 本身），`--workspace` 是另一个**独立**的执行目录，两者必须显式分离。
+（例如 `.dsh-graph` 或独立的看板目录），`--workspace` 是另一个**独立**的执行目录，两者必须显式分离。

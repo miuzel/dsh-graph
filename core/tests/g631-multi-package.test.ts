@@ -56,7 +56,7 @@ test("g-631 A：5 个包版本号一致且等于基真源", async () => {
     assert.equal(m.name, name, `${name} 的 name 字段必须与目录同名`);
   }
   // 负向对照：人为改版本，判定必须能发现
-  const broken = { ...mod.manifestFor("dsh-graph-cli"), version: "0.24.0" };
+  const broken = { ...mod.manifestFor("goal-graph-cli"), version: "0.24.0" };
   assert.notEqual(broken.version, baseVersion, "负向对照：旧版本号必须被判为不一致");
 });
 
@@ -64,7 +64,7 @@ test("g-631 B：包清单与安装指南一一对应", async () => {
   const mod = await loadPackModule();
   assert.deepEqual(
     [...mod.PACKAGE_NAMES].sort(),
-    ["dsh-graph", "dsh-graph-cli", "dsh-graph-mcp", "dsh-graph-service", "dsh-graph-skills"],
+    ["dsh-graph", "goal-graph-cli", "goal-graph-mcp", "goal-graph-service", "goal-graph-skills"],
   );
   for (const name of mod.PACKAGE_NAMES) {
     const guide = join(repoRoot, "docs", "packages", name, "INSTALL.md");
@@ -74,7 +74,7 @@ test("g-631 B：包清单与安装指南一一对应", async () => {
 
 test("g-631 C：每个包对其闭包内的相对 import 全部可在包内解析（独立可用）", async () => {
   const mod = await loadPackModule();
-  for (const name of ["dsh-graph", "dsh-graph-cli", "dsh-graph-service"]) {
+  for (const name of ["dsh-graph", "goal-graph-cli", "goal-graph-service"]) {
     const { files, missing } = mod.filesForPackage(name);
     assert.ok(files.length > 0, `${name} 文件集不得为空`);
     assert.deepEqual(missing, [], `${name} 闭包内有无法解析的模块：${missing.join(", ")}`);
@@ -97,7 +97,7 @@ test("g-631 C：每个包对其闭包内的相对 import 全部可在包内解�
 
 test("g-631 D：携带 core/ 的包必须附带 prompts 资产", async () => {
   const mod = await loadPackModule();
-  for (const name of ["dsh-graph", "dsh-graph-cli", "dsh-graph-service"]) {
+  for (const name of ["dsh-graph", "goal-graph-cli", "goal-graph-service"]) {
     const { files } = mod.filesForPackage(name);
     const hasCore = files.some((f) => f.startsWith("core/"));
     const prompts = files.filter((f) => f.startsWith("prompts/") && f.endsWith(".md"));
@@ -134,7 +134,7 @@ test("g-631 E：5 份安装指南含前置/安装/最小验证/卸载/排障且�
     const verifyIdx = text.search(/最小验证/);
     assert.ok(verifyIdx >= 0, `${name}: 无最小验证段`);
     const tail = text.slice(verifyIdx);
-    assert.ok(/(^|\n)\s*(```|\$ |node |npm |dsh-graph |npx )/m.test(tail.slice(0, 2000)), `${name}: 最小验证段应含可执行命令`);
+    assert.ok(/(^|\n)\s*(```|\$ |node |npm |goal-graph |goal-graph-mcp |goal-graph-skills |dsh-graph |npx )/m.test(tail.slice(0, 2000)), `${name}: 最小验证段应含可执行命令`);
   }
   // 负向对照：删掉排障段后判定必须报红
   const sample = readFileSync(join(repoRoot, "docs", "packages", "dsh-graph", "INSTALL.md"), "utf8");
@@ -146,7 +146,7 @@ test("g-631 E：5 份安装指南含前置/安装/最小验证/卸载/排障且�
 test("g-631 F：带 dsh 的包其 engines.dsh 与 peer dsh-settings 逐字相等", async () => {
   const mod = await loadPackModule();
   const base = readJson(join(repoRoot, "dsh-graph-host", "package.json"));
-  for (const name of ["dsh-graph", "dsh-graph-service"]) {
+  for (const name of ["dsh-graph", "goal-graph-service"]) {
     const m = mod.manifestFor(name);
     assert.equal(m.engines.dsh, base.engines.dsh, `${name} engines.dsh 必须与基真源逐字相等`);
     assert.equal(
@@ -174,10 +174,62 @@ test("g-631 G：三宿主配置指向同一 endpoint 且均不泄漏 token", asy
   // 三宿主 endpoint 逐字相同（单一真源）
   assert.equal(new Set(Object.values(rendered).map((t) => t.includes(endpoint))).size, 1);
   // 负向对照：把真实形态 token 写进配置，泄漏判定必须报红
-  const leaked = rendered["claude-code"].replace("Bearer ${DSH_GRAPH_MCP_TOKEN}", "Bearer eyJhbGciOiJIUzI1NiJ9abcdefghijklmnop");
+  const leaked = rendered["claude-code"].replace("Bearer ${GOAL_GRAPH_MCP_TOKEN}", "Bearer eyJhbGciOiJIUzI1NiJ9abcdefghijklmnop");
   assert.equal(mcpMod.leaksToken(leaked).literal, true, "负向对照：真实 token 字面量必须被判为泄漏");
+  // 负向对照：旧 env 名（DSH_GRAPH_MCP_TOKEN）不得通过占位校验
+  const staleEnv = rendered["claude-code"].replace("GOAL_GRAPH_MCP_TOKEN", "DSH_GRAPH_MCP_TOKEN");
+  assert.equal(mcpMod.leaksToken(staleEnv).ok, false, "负向对照：旧环境变量名 DSH_GRAPH_MCP_TOKEN 不得通过校验");
   // 拒绝非回环 host（服务端策略同口径）
   assert.throws(() => mcpMod.mcpEndpoint({ host: "0.0.0.0" }), mcpMod.McpConfigError);
+});
+
+test("g-631 I（g-634 负向守卫）：跨宿主打包产物与安装指南不得混入旧包名/旧 env 名", async () => {
+  const mod = await loadPackModule();
+  const mcpMod = await import(pathToFileURL(join(repoRoot, "scripts", "mcp", "index.mjs")).href);
+  assert.equal(mcpMod.SERVER_KEY, "goal-graph", "MCP SERVER_KEY 必须为 goal-graph");
+  assert.equal(mcpMod.DEFAULT_TOKEN_ENV, "GOAL_GRAPH_MCP_TOKEN", "MCP DEFAULT_TOKEN_ENV 必须为 GOAL_GRAPH_MCP_TOKEN");
+
+  const FORBIDDEN = [
+    /\bdsh-graph-cli\b/,
+    /\bdsh-graph-service\b/,
+    /\bdsh-graph-skills\b/,
+    /\bdsh-graph-mcp\b/,
+    /\bdsh-cli\b/,
+    /\bDSH_GRAPH_MCP_TOKEN\b/,
+  ];
+
+  // ① PACKAGE_NAMES 与各包 manifest（含 bin）不得含旧跨宿主名
+  const expectedBins: Record<string, Record<string, string> | undefined> = {
+    "dsh-graph": undefined,
+    "goal-graph-cli": { "goal-graph": "./bin/goal-graph.mjs" },
+    "goal-graph-service": undefined,
+    "goal-graph-skills": { "goal-graph-skills": "./bin/goal-graph-skills.mjs" },
+    "goal-graph-mcp": { "goal-graph-mcp": "./bin/goal-graph-mcp.mjs" },
+  };
+  for (const name of mod.PACKAGE_NAMES) {
+    const manifest = mod.manifestFor(name);
+    assert.deepEqual(manifest.bin, expectedBins[name], `${name} bin 声明必须与 g-634 对齐`);
+    const raw = JSON.stringify(manifest);
+    for (const re of FORBIDDEN) {
+      assert.doesNotMatch(raw, re, `${name} manifest 不得含旧名 ${re}`);
+    }
+  }
+
+  // ② docs/packages/<name>/{INSTALL,README}.md 不得含旧跨宿主包名/旧 env 名
+  for (const name of mod.PACKAGE_NAMES) {
+    for (const f of ["INSTALL.md", "README.md"]) {
+      const p = join(repoRoot, "docs", "packages", name, f);
+      if (!existsSync(p)) continue;
+      const text = readFileSync(p, "utf8");
+      for (const re of FORBIDDEN) {
+        assert.doesNotMatch(text, re, `docs/packages/${name}/${f} 不得残留旧跨宿主名 ${re}`);
+      }
+    }
+  }
+
+  // ③ 负向对照：人为注入旧名，上述规则必红
+  assert.ok(FORBIDDEN.some((re) => re.test("npm install -g dsh-graph-cli")), "负向对照：dsh-graph-cli 必被拦截");
+  assert.ok(FORBIDDEN.some((re) => re.test("export DSH_GRAPH_MCP_TOKEN=x")), "负向对照：DSH_GRAPH_MCP_TOKEN 必被拦截");
 });
 
 test("g-631 H：组装出的包内不含开发资产（源码 ts / 测试 / worktrees）", async () => {

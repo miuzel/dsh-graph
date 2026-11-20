@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "dsh-graph": {
+    "goal-graph": {
       "type": "http",
       "url": "http://127.0.0.1:7788/mcp",
-      "bearer_token_env_var": "DSH_GRAPH_MCP_TOKEN"
+      "bearer_token_env_var": "GOAL_GRAPH_MCP_TOKEN"
     }
   }
 }

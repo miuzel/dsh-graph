@@ -190,36 +190,38 @@ test("g-633 ① 三宿主各有独立插件定义目录，清单字段齐全", (
       problems.push(`${dir}: 目录缺失`);
       continue;
     }
-    for (const required of ["INSTALL.md", "README.md", "LICENSE", "skills/dsh-graph/SKILL.md"]) {
+    for (const required of ["INSTALL.md", "README.md", "LICENSE", "skills/goal-graph/SKILL.md"]) {
       if (!existsSync(join(repoRoot, dir, required))) problems.push(`${dir}: 缺少 ${required}`);
     }
   }
 
   // Claude Code：plugin.json + marketplace.json
   const ccPlugin = readJson("plugins/claude-code/.claude-plugin/plugin.json");
-  if (ccPlugin.name !== "dsh-graph") problems.push("claude-code plugin.json: name 必须是 dsh-graph");
+  if (ccPlugin.name !== "goal-graph") problems.push("claude-code plugin.json: name 必须是 goal-graph");
   for (const key of ["name", "version", "description", "author", "license"]) {
     if (!ccPlugin[key]) problems.push(`claude-code plugin.json: 缺少 ${key}`);
   }
   if (ccPlugin.mcpServers !== "./.mcp.json") problems.push("claude-code plugin.json: mcpServers 必须指向 ./.mcp.json");
   const ccMarket = readJson("plugins/claude-code/.claude-plugin/marketplace.json");
+  if (ccMarket.name !== "goal-graph") problems.push("claude-code marketplace.json: name 必须是 goal-graph");
   if (!ccMarket.owner?.name) problems.push("claude-code marketplace.json: 缺 owner.name（claude validate 会报 error）");
   if (!Array.isArray(ccMarket.plugins) || ccMarket.plugins.length !== 1) {
     problems.push("claude-code marketplace.json: 必须恰好列出 1 个插件");
-  } else if (ccMarket.plugins[0].name !== "dsh-graph") {
-    problems.push("claude-code marketplace.json: 插件名必须是 dsh-graph");
+  } else if (ccMarket.plugins[0].name !== "goal-graph") {
+    problems.push("claude-code marketplace.json: 插件名必须是 goal-graph");
   }
 
-  // Codex：同形状清单 + env_http_headers 的 .mcp.json
+  // Codex：同形状清单 + bearer_token_env_var 的 .mcp.json
   const cxPlugin = readJson("plugins/codex/.claude-plugin/plugin.json");
   const cxMarket = readJson("plugins/codex/.claude-plugin/marketplace.json");
-  if (cxPlugin.name !== "dsh-graph") problems.push("codex plugin.json: name 必须是 dsh-graph");
+  if (cxPlugin.name !== "goal-graph") problems.push("codex plugin.json: name 必须是 goal-graph");
+  if (cxMarket.name !== "goal-graph") problems.push("codex marketplace.json: name 必须是 goal-graph");
   if (!cxMarket.owner?.name) problems.push("codex marketplace.json: 缺 owner.name");
-  if (cxMarket.plugins?.[0]?.name !== "dsh-graph") problems.push("codex marketplace.json: 插件名必须是 dsh-graph");
+  if (cxMarket.plugins?.[0]?.name !== "goal-graph") problems.push("codex marketplace.json: 插件名必须是 goal-graph");
 
   // OpenCode：opencode.json（mcp.servers）
   const oc = readJson("plugins/opencode/opencode.json");
-  if (!oc.mcp?.servers?.["dsh-graph"]) problems.push("opencode.json: 缺 mcp.servers.dsh-graph");
+  if (!oc.mcp?.servers?.["goal-graph"]) problems.push("opencode.json: 缺 mcp.servers.goal-graph");
 
   assert.deepEqual(problems, []);
 });
@@ -250,13 +252,13 @@ test("g-633 ③ 插件配置内无 token 字面量，只写各宿主原生变量
 
   // Claude Code：${VAR}
   const ccMcp = readFileSync(join(repoRoot, "plugins/claude-code/.mcp.json"), "utf8");
-  if (!ccMcp.includes("Bearer ${DSH_GRAPH_MCP_TOKEN}")) problems.push("claude-code .mcp.json: 必须写 Bearer ${DSH_GRAPH_MCP_TOKEN}");
+  if (!ccMcp.includes("Bearer ${GOAL_GRAPH_MCP_TOKEN}")) problems.push("claude-code .mcp.json: 必须写 Bearer ${GOAL_GRAPH_MCP_TOKEN}");
 
   // Codex：bearer_token_env_var（运行时实测唯一真正发送 Bearer 头的写法）
   const cxMcp = JSON.parse(read("plugins/codex/.mcp.json"));
-  const cxServer = cxMcp.mcpServers?.["dsh-graph"] ?? {};
-  if (cxServer.bearer_token_env_var !== "DSH_GRAPH_MCP_TOKEN") {
-    problems.push("codex .mcp.json: 必须用 bearer_token_env_var = \"DSH_GRAPH_MCP_TOKEN\"");
+  const cxServer = cxMcp.mcpServers?.["goal-graph"] ?? {};
+  if (cxServer.bearer_token_env_var !== "GOAL_GRAPH_MCP_TOKEN") {
+    problems.push("codex .mcp.json: 必须用 bearer_token_env_var = \"GOAL_GRAPH_MCP_TOKEN\"");
   }
   if (cxServer.headers !== undefined) {
     problems.push("codex .mcp.json: 不得使用 headers（插件路径运行时不发认证头）");
@@ -264,8 +266,8 @@ test("g-633 ③ 插件配置内无 token 字面量，只写各宿主原生变量
 
   // OpenCode：{env:VAR}
   const ocMcp = JSON.parse(read("plugins/opencode/opencode.json"));
-  const ocAuth = ocMcp.mcp?.servers?.["dsh-graph"]?.headers?.Authorization ?? "";
-  if (!ocAuth.includes("{env:DSH_GRAPH_MCP_TOKEN}")) problems.push("opencode.json: 必须写 Bearer {env:DSH_GRAPH_MCP_TOKEN}");
+  const ocAuth = ocMcp.mcp?.servers?.["goal-graph"]?.headers?.Authorization ?? "";
+  if (!ocAuth.includes("{env:GOAL_GRAPH_MCP_TOKEN}")) problems.push("opencode.json: 必须写 Bearer {env:GOAL_GRAPH_MCP_TOKEN}");
 
   // 全量扫描：任何插件文件都不得含 token 字面量
   for (const host of HOSTS) {
@@ -282,7 +284,7 @@ test("g-633 ③ 插件配置内无 token 字面量，只写各宿主原生变量
 test("g-633 ④ 技能正文引用的每个工具都真实可达（只读∪写模式），不引用 Human Gate 工具", () => {
   const problems: string[] = [];
   for (const host of HOSTS) {
-    const rel = `plugins/${host}/skills/dsh-graph/SKILL.md`;
+    const rel = `plugins/${host}/skills/goal-graph/SKILL.md`;
     const text = read(rel);
     const names = skillToolNames(text);
     if (names.length === 0) problems.push(`${rel}: 未引用任何 graph_* 工具（空正文？）`);
@@ -298,7 +300,7 @@ test("g-633 ④ 技能正文引用的每个工具都真实可达（只读∪写�
 test("g-633 ④b 技能正文的只读/写模式工具清单与 core 真源逐项一致", () => {
   const problems: string[] = [];
   for (const host of HOSTS) {
-    const rel = `plugins/${host}/skills/dsh-graph/SKILL.md`;
+    const rel = `plugins/${host}/skills/goal-graph/SKILL.md`;
     const text = read(rel);
     // 「只读」小节必须点名全部 11 个只读工具
     for (const name of READ_ONLY_COMMAND_NAMES) {
@@ -350,7 +352,7 @@ test("g-633 ④c 负向对照：把 Human Gate 写成可调用形态、或引用
 // ── ⑤ 正文与能力一致性（模式口径） ────────────────────────────────────────────
 
 test("g-633 ⑤ 三份技能正文口径一致：默认只读、--allow-write 后可写、Human Gate 不可达", () => {
-  const texts = HOSTS.map((h) => read(`plugins/${h}/skills/dsh-graph/SKILL.md`));
+  const texts = HOSTS.map((h) => read(`plugins/${h}/skills/goal-graph/SKILL.md`));
   // 三份必须是同一份外部宿主版（内容逐字节一致，避免三处漂移出第二真源）
   for (let i = 1; i < texts.length; i += 1) {
     assert.equal(
@@ -395,9 +397,9 @@ test("g-633 ⑥ 每份插件定义都有安装指南：一条命令安装/前置
 // ── ⑦ 宿主运行时实测语义：Codex bearer_token_env_var / OpenCode mcp.servers ────
 
 test("g-633 ⑦ MCP endpoint 三宿主指向同一地址，且 token 传递按宿主运行时实测语义", () => {
-  const cc = readJson("plugins/claude-code/.mcp.json").mcpServers["dsh-graph"];
-  const cx = readJson("plugins/codex/.mcp.json").mcpServers["dsh-graph"];
-  const oc = readJson("plugins/opencode/opencode.json").mcp.servers["dsh-graph"];
+  const cc = readJson("plugins/claude-code/.mcp.json").mcpServers["goal-graph"];
+  const cx = readJson("plugins/codex/.mcp.json").mcpServers["goal-graph"];
+  const oc = readJson("plugins/opencode/opencode.json").mcp.servers["goal-graph"];
   const urls = [cc.url, cx.url, oc.url];
   assert.deepEqual(new Set(urls).size, 1, `三宿主 url 必须一致，实际：${urls.join(" / ")}`);
   assert.match(urls[0], /^http:\/\/127\.0\.0\.1:\d+\/mcp$/, "只允许数值回环 + /mcp 路径");
@@ -411,17 +413,17 @@ test("g-633 ⑦ MCP endpoint 三宿主指向同一地址，且 token 传递按�
 //   env_http_headers      ⇒ 服务端收到 `undefined`（根本不发 Authorization 头），authStatus=unknown
 // 下面两条正向 + 负向断言钉住的正是这个运行时事实，而不是 `codex mcp get` 的静态回显。
 test("g-633 ⑦a Codex 用 bearer_token_env_var（运行时唯一真正发送 Bearer 头的写法）", () => {
-  const cx = readJson("plugins/codex/.mcp.json").mcpServers["dsh-graph"];
+  const cx = readJson("plugins/codex/.mcp.json").mcpServers["goal-graph"];
   assert.equal(
     cx.bearer_token_env_var,
-    "DSH_GRAPH_MCP_TOKEN",
+    "GOAL_GRAPH_MCP_TOKEN",
     "Codex 必须用 bearer_token_env_var 指向 token 环境变量名（值不落盘）",
   );
 });
 
 test("g-633 ⑦b 负向：Codex 配置不得出现 env_http_headers（插件路径运行时不发认证头）", () => {
   const raw = read("plugins/codex/.mcp.json");
-  const cx = JSON.parse(raw).mcpServers["dsh-graph"];
+  const cx = JSON.parse(raw).mcpServers["goal-graph"];
   // ① 结构化断言：对象里出现该键即判红（防止回退到曾把静态回显误判为生效的写法）
   assert.equal(
     Object.hasOwn(cx, "env_http_headers"),
@@ -437,7 +439,7 @@ test("g-633 ⑦b 负向：Codex 配置不得出现 env_http_headers（插件路�
   assert.equal(Object.hasOwn(cx, "headers"), false, "codex .mcp.json 不得出现 headers（同样不发认证头）");
   // ③ 反向交叉：不能既用 bearer_token_env_var 又留一个会被丢弃的 env_http_headers
   assert.ok(
-    !("env_http_headers" in cx) === (cx.bearer_token_env_var === "DSH_GRAPH_MCP_TOKEN"),
+    !("env_http_headers" in cx) === (cx.bearer_token_env_var === "GOAL_GRAPH_MCP_TOKEN"),
     "认证写法必须唯一且为 bearer_token_env_var",
   );
 });
@@ -1863,7 +1865,7 @@ test("g-633 ⑨ 三份 INSTALL 的 serve 命令满足 service 三条约束：绝
     const lines = text.split("\n");
     // ① 不得再出现 `--root "$PWD" --workspace "$PWD"`（同值必被 service 拒绝：root_same）
     for (const line of lines) {
-      if (!/dsh-graph\s+serve/.test(line)) continue;
+      if (!/goal-graph\s+serve/.test(line)) continue;
       assert.doesNotMatch(
         line,
         /--root\s+"\$PWD"\s+--workspace\s+"\$PWD"/,
@@ -1882,7 +1884,7 @@ test("g-633 ⑨ 三份 INSTALL 的 serve 命令满足 service 三条约束：绝
       `${rel}: DSH_WS 必须以 $PWD（绝对路径）导出（相对路径会被 service 以 root_relative 拒绝）`,
     );
 
-    const serveCmds = lines.filter((l) => /^\s*dsh-graph\s+serve\s+(init\b|--)/.test(l));
+    const serveCmds = lines.filter((l) => /^\s*goal-graph\s+serve\s+(init\b|--)/.test(l));
     assert.ok(serveCmds.length >= 3, `${rel}: 至少应有 serve init / serve / serve --allow-write 三条命令`);
     for (const cmd of serveCmds) {
       const root = /--root\s+(\S+)/.exec(cmd)?.[1];
@@ -2090,4 +2092,31 @@ test("g-633 ⑧c §7 排障表与顶部声明不再自相矛盾", () => {
   // 顶部与 §7 必须使用同一机制表述
   const top = install.split("## 1.")[0];
   assert.match(top, /派生/, "顶部必须以「派生」口径说明日志路径");
+});
+
+test("g-633 ⑩（g-634 负向守卫）：三宿主插件目录不得残留旧跨宿主包名/旧插件名/旧 env 名", () => {
+  const FORBIDDEN: Array<[string, RegExp]> = [
+    ["旧 CLI 包名 dsh-graph-cli", /\bdsh-graph-cli\b/],
+    ["旧服务包名/状态目录 dsh-graph-service", /\bdsh-graph-service\b/],
+    ["旧技能包名 dsh-graph-skills", /\bdsh-graph-skills\b/],
+    ["旧 MCP 包名 dsh-graph-mcp", /\bdsh-graph-mcp\b/],
+    ["旧 CLI 名 dsh-cli", /\bdsh-cli\b/],
+    ["旧环境变量 DSH_GRAPH_MCP_TOKEN", /\bDSH_GRAPH_MCP_TOKEN\b/],
+    ["旧插件安装名 dsh-graph@dsh-graph", /\bdsh-graph@dsh-graph\b/],
+    ["旧技能目录 skills/dsh-graph", /skills\/dsh-graph\b/],
+    ["旧服务标识 dsh-graph-local", /\bdsh-graph-local\b/],
+  ];
+  const problems: string[] = [];
+  for (const host of HOSTS) {
+    for (const rel of walk(`plugins/${host}`)) {
+      const text = read(rel);
+      for (const [label, re] of FORBIDDEN) {
+        if (re.test(text)) problems.push(`${rel}: 残留 ${label}`);
+      }
+    }
+  }
+  assert.deepEqual(problems, []);
+  // 负向对照：人为注入旧 env 名或旧插件名必须被拦截
+  assert.ok(FORBIDDEN.some(([, re]) => re.test("Bearer ${DSH_GRAPH_MCP_TOKEN}")), "负向对照：旧 env 名必被拦截");
+  assert.ok(FORBIDDEN.some(([, re]) => re.test("claude plugin install dsh-graph@dsh-graph")), "负向对照：旧插件名必被拦截");
 });

@@ -37,7 +37,7 @@ import { claimGoal, ClaimError, CLAIM_LOCK_TIMEOUT_MS, renderClaimSheet } from "
 
 const repoRoot = join(import.meta.dirname, "../..");
 const tmpRoot = join(repoRoot, "tmp");
-const cliSourceEntry = join(repoRoot, "bin", "dsh-graph.mjs");
+const cliSourceEntry = join(repoRoot, "bin", "goal-graph.mjs");
 
 function makeSandbox(prefix: string): { dir: string; cleanup: () => void } {
   mkdirSync(tmpRoot, { recursive: true });
@@ -182,9 +182,9 @@ function makeMutationSandbox(sb: { dir: string }) {
     filter: (src) => !src.startsWith(join(repoRoot, "core", "tests")),
   });
   cpSync(join(repoRoot, "prompts"), join(sb.dir, "prompts"), { recursive: true });
-  cpSync(cliSourceEntry, join(binDir, "dsh-graph.mjs"));
+  cpSync(cliSourceEntry, join(binDir, "goal-graph.mjs"));
   return {
-    entry: join(binDir, "dsh-graph.mjs"),
+    entry: join(binDir, "goal-graph.mjs"),
     file(rel: string): string {
       return join(sb.dir, "core", rel);
     },
@@ -684,7 +684,7 @@ test("g-316 判据6：非工作区 ⇒ 非零退出 + 提示 --root，且目录�
   try {
     const r = await cliInProcess(["claim", "g-1"], sb.dir);
     assert.equal(r.exitCode, EXIT_FAILURE, `必须非零退出；stdout=${r.stdout}`);
-    assert.match(r.stderr, /非 dsh-graph 工作区|没有 \.dsh-graph/);
+    assert.match(r.stderr, /非 goal-graph 工作区|没有 \.dsh-graph/);
     assert.match(r.stderr, /--root/, "必须提示可用 --root");
     assert.deepEqual(readdirSync(sb.dir), [], "非工作区不得被初始化（零副作用）");
   } finally {
@@ -700,7 +700,7 @@ test("g-316 判据6：所有拒绝路径都给出非零退出码与可读 stderr
     // 用法错误 = 2
     const usage = await cliInProcess(["claim"], workspace);
     assert.equal(usage.exitCode, EXIT_USAGE);
-    assert.match(usage.stderr, /运行 dsh-graph help 查看用法/);
+    assert.match(usage.stderr, /运行 goal-graph help 查看用法/);
     // 成功 = 0
     const ok = await cliInProcess(["claim", id], workspace);
     assert.equal(ok.exitCode, EXIT_OK);
@@ -788,8 +788,8 @@ test("g-316 判据7（反向变异·真源码副本）：把 exit 1 吞成 0 后
     // 变异：`failure()` 的退出码 1 → 0（「静默成功」是最危险的退化）
     mutateSource(
       mutation.file("cli/main.ts"),
-      'return { exitCode: EXIT_FAILURE, stdout: "", stderr: `dsh-graph: ${message}\\n` };',
-      'return { exitCode: EXIT_OK, stdout: "", stderr: `dsh-graph: ${message}\\n` };',
+      'return { exitCode: EXIT_FAILURE, stdout: "", stderr: `goal-graph: ${message}\\n` };',
+      'return { exitCode: EXIT_OK, stdout: "", stderr: `goal-graph: ${message}\\n` };',
     );
     const mutated = runCliProcess(mutation.entry, ["claim", "g-999"], root);
     assert.equal(mutated.code, EXIT_OK, `变异体必须把失败吞成 0；stderr=${mutated.stderr}`);

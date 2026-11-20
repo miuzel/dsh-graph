@@ -250,7 +250,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
         error: null,
       };
     }
-    return err("missing-command", `缺少命令（可用：${TOP_LEVEL_COMMANDS.join(" / ")}；运行 dsh-graph help 查看说明）`);
+    return err("missing-command", `缺少命令（可用：${TOP_LEVEL_COMMANDS.join(" / ")}；运行 goal-graph help 查看说明）`);
   }
 
   if (!(TOP_LEVEL_COMMANDS as readonly string[]).includes(commandRaw)) {
@@ -319,16 +319,16 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     );
   }
   if (command === "goal" && subcommand === "show" && tail.length === 0) {
-    return err("missing-argument", "命令 goal show 需要一个目标 ID（用法：dsh-graph goal show <id>）");
+    return err("missing-argument", "命令 goal show 需要一个目标 ID（用法：goal-graph goal show <id>）");
   }
   // claim（g-316）：唯一写命令之一，必须显式给出目标 ID（不做任何「自动挑目标」的猜测）。
   if (command === "claim" && tail.length === 0) {
-    return err("missing-argument", "命令 claim 需要一个目标 ID（用法：dsh-graph claim <goal-id>）");
+    return err("missing-argument", "命令 claim 需要一个目标 ID（用法：goal-graph claim <goal-id>）");
   }
   // submit（g-317）：**允许省略** goal-id —— 省略时从「唯一在途目标」推断（多个/没有 ⇒ 在
   // submit.ts 里报错并列候选，不猜）。这里只拒绝「给多了」。
   if (command === "submit" && tail.length > 0 && tail[0].trim() === "") {
-    return err("missing-argument", "命令 submit 的目标 ID 不能为空串（用法：dsh-graph submit [goal-id]）");
+    return err("missing-argument", "命令 submit 的目标 ID 不能为空串（用法：goal-graph submit [goal-id]）");
   }
 
   return {

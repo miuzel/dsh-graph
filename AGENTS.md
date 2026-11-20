@@ -43,7 +43,7 @@ This runs `sync-core.sh` (core/*.ts → dist/core/*.js), `build-client.sh` (clie
 
 ### Multi-package release (g-631)
 
-v1.0.0 起发布形态是 **5 个独立包**（`dsh-graph` 插件本体 / `-cli` / `-service` / `-skills` / `-mcp`）。
+v1.0.0 起发布形态是 **5 个独立包**（DSH 插件本体 `dsh-graph` + 跨宿主 `goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`）。
 `packages/` 只是**打包层**（从 `dist/` 组装，生成物不入库）；`core/` 与 `dsh-graph-host/` 的**位置不变**
 —— 搬动它们会击穿 `TEST_GLOB` 与 `tsconfig` 精确枚举两道守卫。
 

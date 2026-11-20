@@ -1,30 +1,30 @@
-# dsh-graph 使用说明（g-314）
+# goal-graph 使用说明（g-314 / g-634）
 
-`dsh-graph` 是 dsh-graph 的**轻量命令行**（除 `sync`、`claim`、`submit` 外全部只读）：直接读写工作区里的 `.dsh-graph/` 资产，
+`goal-graph` 是目标看板的**轻量命令行**（独立包 `goal-graph-cli`，除 `sync`、`claim`、`submit` 外全部只读）：直接读写工作区里的 `.dsh-graph/` 资产，
 不起常驻服务、不联网、不引入任何第三方 CLI 框架。面向单兵 CLI 工具（Claude Code、Codex、
 OpenCode 等）里「看一眼看板」的场景：一条命令、毫秒级返回。
 
 ## 安装与运行形态
 
-两种形态共用同一入口源码 `bin/dsh-graph.mjs`：
+两种形态共用同一入口源码 `bin/goal-graph.mjs`：
 
 | 形态 | 入口 | 加载的核心 |
 | --- | --- | --- |
-| 发布形态（全局/项目本地安装） | 包内 `dist/bin/dsh-graph.mjs` | 同目录上层 `dist/core/cli/*.js`（编译产物） |
-| 源码形态（本仓库开发） | 仓库根 `bin/dsh-graph.mjs` | `core/cli/main.ts`（Node ≥ 22.6 原生 type-stripping） |
+| 发布形态（全局/项目本地安装） | 包内 `dist/bin/goal-graph.mjs` | 同目录上层 `dist/core/cli/*.js`（编译产物） |
+| 源码形态（本仓库开发） | 仓库根 `bin/goal-graph.mjs` | `core/cli/main.ts`（Node ≥ 22.6 原生 type-stripping） |
 
-`dsh-graph-host/package.json` 的 `bin` 字段注册了 `dsh-graph`，因此：
+`goal-graph-cli`（及 `dsh-graph-host/package.json`）的 `bin` 字段注册了 `goal-graph`，因此：
 
 ```bash
 # 全局
-npm i -g dsh-graph && dsh-graph info
+npm i -g goal-graph-cli && goal-graph info
 # 项目本地（package.json devDependencies）
-npm i -D dsh-graph && npx dsh-graph info      # 或 ./node_modules/.bin/dsh-graph info
+npm i -D goal-graph-cli && npx goal-graph info      # 或 ./node_modules/.bin/goal-graph info
 # 不预先安装的一次性用法（临时拉包后执行其 bin）
-npx --package dsh-graph dsh-graph info
+npx --package goal-graph-cli goal-graph info
 # 本仓库开发（先构建）
 bash scripts/build.sh
-node dist/bin/dsh-graph.mjs info
+node dist/bin/goal-graph.mjs info
 ```
 
 > **平台**：本 CLI 的实测平台是 **Linux / WSL2**；**Windows / macOS 未验证** —— 未做真机兼容性
@@ -33,15 +33,15 @@ node dist/bin/dsh-graph.mjs info
 ## 命令
 
 ```text
-dsh-graph info             环境自检：Node 版本、graph root、初始化状态、关键文件可读性
-dsh-graph status           看板状态：目标数、事件数、最近事件、规则库版本、问题列表
-dsh-graph goal list        列出目标（默认不含归档；--all 含归档）
-dsh-graph goal show <id>   显示单个目标（元信息 + 正文）
-dsh-graph sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（g-315）
-dsh-graph claim <goal-id>  认领目标：推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）（g-316）
-dsh-graph submit [goal-id] 提交：跑全量自检门禁 + Git 变更统计 → 推进到 review + review.requested（g-317）
-dsh-graph version          显示版本
-dsh-graph help             显示帮助
+goal-graph info             环境自检：Node 版本、graph root、初始化状态、关键文件可读性
+goal-graph status           看板状态：目标数、事件数、最近事件、规则库版本、问题列表
+goal-graph goal list        列出目标（默认不含归档；--all 含归档）
+goal-graph goal show <id>   显示单个目标（元信息 + 正文）
+goal-graph sync             把常驻硬性事实与目标概览投影到 .claude/CLAUDE.md 与 AGENTS.md 的受控区段（g-315）
+goal-graph claim <goal-id>  认领目标：推进到 in_progress 并输出轻量任务单（目标 + 判据 + 边界）（g-316）
+goal-graph submit [goal-id] 提交：跑全量自检门禁 + Git 变更统计 → 推进到 review + review.requested（g-317）
+goal-graph version          显示版本
+goal-graph help             显示帮助
 ```
 
 选项：`--root <path>`（显式指定 graph root）、`--json`（机器可读输出）、
@@ -69,22 +69,22 @@ dsh-graph help             显示帮助
 - 向上查找**只认 `.dsh-graph` 目录本体**，到根仍没有即报「非工作区」，
   **不会**回落到用户全局配置 —— 隔离项目不会误用 `~/.dsh` 下的东西。
 
-`--root` 接受兄弟目录写法（`cd src && dsh-graph --root ../.dsh-graph`），这是最常见的用法。
+`--root` 接受兄弟目录写法（`cd src && goal-graph --root ../.dsh-graph`），这是最常见的用法。
 最终 root 一律经 core 的 `resolveCanonicalRoot` 归一（Git linked worktree 归一、scratch 边界、
 symlink 拒收），CLI 不重写这套语义。
 
-## `dsh-graph sync`：上下文投影（g-315）
+## `goal-graph sync`：上下文投影（g-315）
 
 把 `.dsh-graph` 里的**常驻硬性事实**与**版本目标概览**投影成 `.claude/CLAUDE.md` 与 `AGENTS.md`
 里的受控区段，供 Claude Code / Codex 等单兵工具作为稳定前缀。设计目的只有一个：让前缀**尽量不变**，
 从而吃到 Prompt 缓存（缓存按前缀匹配，前缀一变整段失效）。
 
 ```bash
-dsh-graph sync                        # 写两个文档
-dsh-graph sync --target AGENTS.md     # 只写其中一个
-dsh-graph sync --full                 # 不折叠目标列表（默认单次最多列 40 个）
-dsh-graph sync --active-only          # 跳过终态目标（delivered）
-dsh-graph sync --json                 # 机器可读：written/unchanged/prefix_sha256/problems
+goal-graph sync                        # 写两个文档
+goal-graph sync --target AGENTS.md     # 只写其中一个
+goal-graph sync --full                 # 不折叠目标列表（默认单次最多列 40 个）
+goal-graph sync --active-only          # 跳过终态目标（delivered）
+goal-graph sync --json                 # 机器可读：written/unchanged/prefix_sha256/problems
 ```
 
 ### 写入位置
@@ -159,17 +159,17 @@ dsh-graph sync --json                 # 机器可读：written/unchanged/prefix_
   （`delivered` / `blocked` 也是真实状态，静默过滤会让投影看起来比看板干净）。需要只看在做的
   事项时用 `--active-only`。
 - 折叠：B 段单次最多列 40 个目标（按状态优先级 + id 排序），其余折叠成一行计数；
-  `--full` 展开。完整清单仍用 `dsh-graph goal list`。
+  `--full` 展开。完整清单仍用 `goal-graph goal list`。
 - 只读资产：sync **不写 `.dsh-graph` 的任何字节**（测试用整树快照 + mtime/inode 断言）。
 
-## `dsh-graph claim <goal-id>`：认领目标 + 判据注入（g-316）
+## `goal-graph claim <goal-id>`：认领目标 + 判据注入（g-316）
 
 单兵工具写代码快，但容易「需求走偏」或「遗漏非功能约束」。`claim` 在动手前把目标与判据摊在
 终端上，并把看板状态推进到 `in_progress`，让「先看判据再改代码」成为默认动作。
 
 ```bash
-dsh-graph claim g-42            # 人类可读任务单
-dsh-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
+goal-graph claim g-42            # 人类可读任务单
+goal-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
 ```
 
 输出（示例）：
@@ -225,7 +225,7 @@ dsh-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
 | 场景 | 退出码 | 行为 / 原因 |
 | --- | --- | --- |
 | 成功（含幂等命中） | `0` | 输出任务单 |
-| 缺目标 ID / 多参 / 未知选项 | `2` | 用法错误 + 「运行 dsh-graph help 查看用法」 |
+| 缺目标 ID / 多参 / 未知选项 | `2` | 用法错误 + 「运行 goal-graph help 查看用法」 |
 | 目标不存在 | `1` | `目标不存在：<id>` |
 | **目标文件损坏** | `1` | 点名损坏文件（`goal-file-corrupt`），**不**伪装成「不存在」 |
 | 已归档 | `1` | `goal-archived` |
@@ -233,7 +233,7 @@ dsh-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
 | 判据未确认（无 `criteria.confirmed`） | `1` | `criteria-unconfirmed` |
 | 缺 `rules_snapshot` | `1` | `rules-version-missing` |
 | 状态不允许（`review`/`delivered`/`blocked`/`draft`） | `1` | `state-not-allowed`，并列出可认领的入边 |
-| 非 dsh-graph 工作区 | `1` | 提示在项目根运行或 `--root`；**不**初始化、不回落全局配置 |
+| 非 goal-graph 工作区 | `1` | 提示在项目根运行或 `--root`；**不**初始化、不回落全局配置 |
 | 看板未初始化（缺 `events.jsonl`） | `1` | 提示先初始化 |
 | 只读看板目录 | `1` | `board-unwritable`；预检在**取锁之前** ⇒ 连锁文件都不建 |
 | 并发认领（锁被占用） | `1` | `claim-lock-busy` |
@@ -243,15 +243,15 @@ dsh-graph claim g-42 --json     # 结构化（供脚本/Agent 读取）
 **除「持久化阶段失败」（事件先行的固有余量）外，所有拒绝路径都是零副作用**：判定全部发生在
 任何写入之前；测试用「整树内容哈希 + inode + mtime」快照逐字节比对。
 
-## `dsh-graph submit [goal-id]`：机器化完成闭环（g-317）
+## `goal-graph submit [goal-id]`：机器化完成闭环（g-317）
 
 写命令链的最后一环：跑项目自检、取**可信**结论、收集 Git 变更统计，然后把目标经 core 状态机推进到
 `review` 并写入 `review.requested` —— 用机器证据完成交接，而不是自然语言扯皮。
 
 ```bash
-dsh-graph submit                # 推断唯一在途目标（状态 in_progress）
-dsh-graph submit g-317          # 显式指定目标
-dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Agent 读取）
+goal-graph submit                # 推断唯一在途目标（状态 in_progress）
+goal-graph submit g-317          # 显式指定目标
+goal-graph submit --json         # 结构化结果（字段稳定，供脚本/Agent 读取）
 ```
 
 **目标推断（判据 1）**：「在途」的唯一口径是状态 `in_progress`。省略 goal-id 时若在途目标不是恰好
@@ -342,7 +342,7 @@ dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Age
 | 已归档 | `1` | `goal-archived` |
 | 状态不允许（`draft`/`planning`/`collecting`/`ready`/`blocked`） | `1` | `state-not-allowed`，提示先 `claim` |
 | **自检未通过 / 伪绿 / 空选集 / 未运行** | `1` | `self-check-blocked`，点名原因（转述门禁失败行里 `✖ 自证失败：` 之后的原因串）；看板零改动 |
-| 非 dsh-graph 工作区 | `1` | 提示在项目根运行或 `--root`；零副作用 |
+| 非 goal-graph 工作区 | `1` | 提示在项目根运行或 `--root`；零副作用 |
 | 看板未初始化 | `1` | 提示先初始化 |
 | 只读看板目录 | `1` | `board-unwritable`；预检在**取锁之前** ⇒ 连锁文件都不建 |
 | 并发 submit（锁被占用） | `1` | `submit-lock-busy` |
@@ -373,7 +373,7 @@ dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Age
 口径：同机 `spawnSync(node, [entry, ...cmd])` **全进程**耗时（含 Node 启动、模块加载、
 命令执行与退出），每条命令重复 30 次取 **best / median**。
 机器：WSL2（Arch Linux，内核含 `microsoft-standard-WSL2`）；Node `v26.7.0`；
-基线 `node -e 0` ≈ **20ms**（纯启动开销）。入口：`dist/bin/dsh-graph.mjs`（发布形态）。
+基线 `node -e 0` ≈ **20ms**（纯启动开销）。入口：`dist/bin/goal-graph.mjs`（发布形态）。
 
 ### 典型小型看板（12 目标 / 1 事件）
 
@@ -391,7 +391,7 @@ dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Age
 ### 真实大看板（本仓主看板：g-630 实测）
 
 看板规模：**407 目标（含归档 430）/ 18727 事件 / 19MB**。同机、同 Node `v26.7.0`、同入口
-`dist/bin/dsh-graph.mjs`，`spawnSync` 全进程耗时（median / p95 / min / max，单位 ms）：
+`dist/bin/goal-graph.mjs`，`spawnSync` 全进程耗时（median / p95 / min / max，单位 ms）：
 
 | 场景 | n | median | p95 | min | max | 判据（<100ms） |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -418,8 +418,8 @@ dsh-graph submit --json         # 结构化结果（字段稳定，供脚本/Age
 > 会付一次全量成本（实测约 162–207ms，超过 100ms 判据）；之后命中（实测 median 约 80–90ms，
 > 随负载漂移，勿把单点数字当常量）。
 > **已知未消除的边界**：该首跑尖峰未做优化（预置索引、后台预热均未做），也不会因本目标消失。
-> 另：在源码形态入口 `node bin/dsh-graph.mjs`（Node 原生 type-strip 加载 `.ts`）下实测
-> 命中 median ≈158ms —— **判据 1 的口径是发布形态 `dist/bin/dsh-graph.mjs`**，源码形态不参与该判据。
+> 另：在源码形态入口 `node bin/goal-graph.mjs`（Node 原生 type-strip 加载 `.ts`）下实测
+> 命中 median ≈158ms —— **判据 1 的口径是发布形态 `dist/bin/goal-graph.mjs`**，源码形态不参与该判据。
 
 成本结构（优化后，实测分项）：Node 启动 ≈20ms（不可压缩）；`core/root.ts` + locate ≈30ms；
 `core/cli/diagnostics.ts` 加载 ≈13ms；`collectStatus` 本体 ≈13ms（其中事件流已从
@@ -457,7 +457,7 @@ node scripts/run-tests.mjs                     # 整套件自证闸门
 
 **反向变异对照（判据 7）据实分三类，共 4 条**：
 
-- **真源码副本变异（2 条）**：把 `core/` 与入口 `bin/dsh-graph.mjs` 复制进 `tmp/` 沙箱，就地改坏关键行后用
+- **真源码副本变异（2 条）**：把 `core/` 与入口 `bin/goal-graph.mjs` 复制进 `tmp/` 沙箱，就地改坏关键行后用
   真进程实测 —— ①拆掉危险路径守卫（`$DSH_HOME` 子目录）后「必须拒绝」的断言变红；②把 `failure()`
   的退出码吞成 `0` 后「运行期失败必须退出 1」的断言变红。两条都先断言**未变异副本**与仓内实现一致，
   且变异锚点**恰好命中 1 处**，避免「失败其实来自别的原因」的假阳性。
