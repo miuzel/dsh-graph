@@ -1089,7 +1089,14 @@ export function prepareAttemptWorktree(
       return { enabled: false, worktree: false, reason: opts.reason || null, created: false, reused: false,
         baseline_commit: null, baseline_source: null, baseline_ref: null, baseline_version: null, baseline_fallback_reason: "head_unavailable" };
     }
-    throw new GraphError(explicit ? `基线 commit 无效或不存在（${ref}），拒绝派发` : `基线不可解析（${ref}），拒绝派发`);
+    const branchName = versionRef ? versionRef.replace(/^refs\/heads\//, "") : "";
+    throw new GraphError(
+      explicit
+        ? `基线 commit 无效或不存在（${ref}），拒绝派发`
+        : versionRef
+          ? `基线不可解析（${ref}），拒绝派发。版本目标默认以本地集成分支 ${branchName} 为基线；请先创建该分支（如 git branch ${branchName}），或显式传入 baseline_commit，或将目标移为独立目标后再派发`
+          : `基线不可解析（${ref}），拒绝派发`,
+    );
   }
   const baselineInfo = { baseline_commit: baseline, baseline_source: source, baseline_ref: ref,
     baseline_version: version || null, baseline_fallback_reason: null };

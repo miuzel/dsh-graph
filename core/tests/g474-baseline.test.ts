@@ -143,7 +143,12 @@ for (const kind of ["missing", "remote-only", "invalid-explicit"] as const) {
     const before = String(loadGoal(findGoalFile(h.root, id)).meta.status);
     const trees = git(h.ws, "worktree", "list", "--porcelain");
     const branches = git(h.ws, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads");
-    await assert.rejects(() => h.dispatch({ goal: id, worktree: true, ...(kind === "invalid-explicit" ? { baseline_commit: "0".repeat(40) } : {}) }));
+    await assert.rejects(
+      () => h.dispatch({ goal: id, worktree: true, ...(kind === "invalid-explicit" ? { baseline_commit: "0".repeat(40) } : {}) }),
+      kind === "invalid-explicit"
+        ? /基线 commit 无效或不存在/
+        : /基线不可解析（refs\/heads\/v1\.2\.3-test），拒绝派发.*git branch v1\.2\.3-test.*baseline_commit/,
+    );
     zeroEffects(h, id, before, trees, branches);
   });
 }
