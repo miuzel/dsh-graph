@@ -31,6 +31,7 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   DISPATCH_CAPABILITY_MISSING_EVENT,
   GRAPH_MINIMAL_ALLOWED_TOOLS,
@@ -396,6 +397,12 @@ test("g-473：诊断事件名稳定（宿主据此记事件；改名即破坏看
 /** 夹具：`tools.get(name, scope)` 由 `availableSet` 决定真假，并记录每次探测的入参。 */
 function makeDispatchHarness(availableSet: Set<string>) {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g473-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: ws, stdio: "pipe" });
+  git("init", "-b", "main");
+  writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n.worktrees/\n");
+  git("add", ".gitignore");
+  git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "seed");
+  git("branch", "v-g473-test");
   const root = join(ws, ".dsh-graph");
   init(root);
   const spawned: any[] = [];
@@ -411,7 +418,7 @@ function makeDispatchHarness(availableSet: Set<string>) {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             spawned.push(opts);
             return { childId: `child-${spawned.length}`, parentSessionId: "sess-super" };
           },
@@ -571,7 +578,7 @@ test("g-473 判据 2（宿主端）：缺 dsh-tool-web ⇒ web_* 静默剔除、
 
   assert.ok(!res.child_error, `缺可选工具不得阻断派发，实际：${JSON.stringify(res.child_error ?? res).slice(0, 300)}`);
   assert.equal(h.spawned.length, 1, "必须正常派发子代理");
-  const allow = h.spawned[0].request?.toolFilter?.allow ?? [];
+  const allow = h.spawned[0].toolFilter?.allow ?? [];
   assert.ok(allow.includes("bash"), "探针判定可用的 bash 必须保留");
   assert.ok(!allow.includes("web_search") && !allow.includes("web_fetch"), "不可用的 web_* 必须静默剔除");
   assert.deepEqual(allow.filter((n: string) => !withoutWeb.has(n)), [], "过滤器不得含未知名（否则 restrict() 抛错）");
@@ -588,7 +595,8 @@ test("g-473（宿主端）：bash-only 探针下三条路径都能派发，且�
   const res: any = await dispatchTool(h).execute({ goal, mode: "minimal" }, h.exec);
   assert.ok(!res.child_error, `bash-only 组合必须能派发：${JSON.stringify(res.child_error ?? "")}`);
   assert.equal(h.spawned.length, 1);
-  const sentFilter = h.spawned[0].request?.toolFilter;
+  // g-627：spec 已扁平化（toolFilter 在顶层，不再包在 request 里）
+  const sentFilter = h.spawned[0].toolFilter;
   assert.deepEqual(sentFilter?.allow, ["bash", "edit", "read", "write", "graph_report_status", "graph_transition"]);
   assert.ok(!(sentFilter?.allow ?? []).includes(SHELL_TOOL_SLOT), "过滤器不得残留槽位");
 });

@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -43,7 +43,7 @@ let routeDefs: any[] = [];
 let webServer: any = null;
 
 function tmpRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), "dsh-graph-g150-"));
+  const dir = repoTmp("dsh-graph-g150-");
   init(dir);
   return dir;
 }
@@ -324,6 +324,16 @@ function fakeResponse() {
 }
 
 function makeHostCtx(captured: { prompt?: string }, workspace?: string, graphRoot?: string) {
+  if (workspace) {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: workspace, stdio: "pipe" });
+    git("init");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.test");
+    writeFileSync(join(workspace, ".gitignore"), ".dsh-graph/\n");
+    git("add", ".gitignore");
+    git("commit", "-m", "fixture");
+    git("branch", "v-t-test");
+  }
   const routes = new Map<string, any>();
   const registered: any[] = [];
   { const stub = createRegisterStub(); routeDefs = stub.routes; webServer = stub.webServer; }
@@ -335,8 +345,8 @@ function makeHostCtx(captured: { prompt?: string }, workspace?: string, graphRoo
       if (name === "subagents") return {
         list: () => ["spawn"],
         getProvider: () => ({ prepareContinuable: () => {} }),
-        startContinuable: async (opts: any) => {
-          captured.prompt = opts.request?.prompt?.[0]?.text ?? "";
+        startActivation: async (opts: any) => {
+          captured.prompt = opts.prompt?.[0]?.text ?? "";
           return { childId: "child-g150" };
         },
       };
@@ -374,7 +384,7 @@ function goalWithHandoff(root: string): { goal: string; att: string } {
 }
 
 test("g-150：graph_start_attempt 工具 prompt 注入 handoff 段 + 事件记 injected_handoffs", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-host-"));
+  const ws = repoTmp("dsh-graph-g150-host-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const { goal, att } = goalWithHandoff(root);
@@ -401,7 +411,7 @@ test("g-150：graph_start_attempt 工具 prompt 注入 handoff 段 + 事件记 i
 });
 
 test("g-150：graph_start_attempt 带 attempt_brief 时 prompt 注入 brief 段 + 事件记 brief", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-brief-"));
+  const ws = repoTmp("dsh-graph-g150-brief-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "brief目标", version: "v-t", actor: "test" });
@@ -426,6 +436,7 @@ test("g-228：graph_start_attempt 使用 supervisor 独立关键字段，不从 
     const captured: { prompt?: string } = {};
     const { registered } = makeHostCtx(captured, ws, root);
     const tool = registered.find((d) => d.name === "graph_start_attempt");
+    const baseline = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws, encoding: "utf8" }).trim();
     assert.deepEqual(tool.parameters.properties.task_type.enum, ["merge", "rewrite", "fix"]);
     assert.equal(tool.parameters.properties.task_type.type, "string");
     assert.equal(tool.parameters.properties.task_type.nullable, true);
@@ -436,21 +447,21 @@ test("g-228：graph_start_attempt 使用 supervisor 独立关键字段，不从 
       worktree: false, // g-283：真实建仓需有效基线；本例只验证结构化字段透传到 prompt，显式不建树
       attempt_brief: "brief 中有 rewrite、日语の修正、旧基线 1111111。",
       task_type: "merge",
-      baseline_commit: "d34db33",
+      baseline_commit: baseline,
       source_attempt: "att-002（候选）",
       acceptance_items: ["node --test"],
     }, execCtx(ws));
     assert.equal(result.child_id, "child-g150");
     assert.match(captured.prompt!, /^【本次任务定位】这是一次 合入 任务；/);
     assert.match(captured.prompt!, /任务类型（当前 attempt 数据）：merge（合入）/);
-    assert.match(captured.prompt!, /权威基线 commit（当前 attempt 数据）：d34db33/);
+    assert.ok(captured.prompt!.includes(`权威基线 commit（当前 attempt 数据）：${baseline}`));
     assert.match(captured.prompt!, /真正前序 attempt 身份（当前 attempt 数据）：att-002（候选）/);
     assert.match(captured.prompt!, /1\. node --test/);
   });
 });
 
 test("g-150：start-execution 端点 prompt 注入 handoff 段 + 事件记 injected_handoffs", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-ep-"));
+  const ws = repoTmp("dsh-graph-g150-ep-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const { goal, att } = goalWithHandoff(root);
@@ -480,7 +491,7 @@ test("g-150：start-execution 端点 prompt 注入 handoff 段 + 事件记 injec
 });
 
 test("g-150：start-execution 端点带 attempt_brief 时 prompt 注入 brief 段", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-ep-brief-"));
+  const ws = repoTmp("dsh-graph-g150-ep-brief-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "ep-brief", version: "v-t", actor: "test" });
@@ -507,17 +518,19 @@ test("g-228：start-execution 端点透传 supervisor 独立关键字段", async
     const goal = createGoal(root, { title: "ep-structured", version: "v-t", actor: "test" });
     setCriteria(root, goal, ["判据：HTTP 结构化字段透传正确"], "test");
     writeFileSync(join(root, "project.yaml"), "supervisor:\n  session: sess-super\n", "utf8");
+    const captured: { prompt?: string } = {};
+    const { routes } = makeHostCtx(captured, ws, root);
+    const acceptanceItems = ["node --test"];
+    const baseline = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws, encoding: "utf8" }).trim();
     const body = {
       goal,
       worktree: false, // g-283：真实建仓需有效基线；本例只验证结构化字段透传到 prompt，显式不建树
       attempt_brief: "brief 中包含 rewrite、基线 old1111 和日本語の修正。",
       task_type: "fix",
-      baseline_commit: "d34db33",
+      baseline_commit: baseline,
       source_attempt: "att-007（候选）",
-      acceptance_items: ["node --test"],
+      acceptance_items: acceptanceItems,
     };
-    const captured: { prompt?: string } = {};
-    const { routes } = makeHostCtx(captured, ws, root);
     const handler = handlerFor(routeDefs) /* /api/dsh-graph/start-execution */;
     const req = fakeRequest("POST", body);
     req.url = "/api/dsh-graph/start-execution?workspace=" + encodeURIComponent(ws);
@@ -529,7 +542,7 @@ test("g-228：start-execution 端点透传 supervisor 独立关键字段", async
     assert.equal(res._body.ok, true);
     assert.match(captured.prompt!, /^【本次任务定位】这是一次 修复 任务；/);
     assert.match(captured.prompt!, /任务类型（当前 attempt 数据）：fix（修复）/);
-    assert.match(captured.prompt!, /权威基线 commit（当前 attempt 数据）：d34db33/);
+    assert.ok(captured.prompt!.includes(`权威基线 commit（当前 attempt 数据）：${baseline}`));
     assert.match(captured.prompt!, /真正前序 attempt 身份（当前 attempt 数据）：att-007（候选）/);
     assert.match(captured.prompt!, /1\. node --test/);
   });
@@ -559,7 +572,7 @@ test("g-228：start-execution 端点拒绝自然语言 task_type，要求显式�
 // ---- ⑥ 无历史目标保持现有 prompt 行为 ----
 
 test("g-150：无历史目标 prompt 不含 handoff 段标题，卡片段保持", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-nohist-"));
+  const ws = repoTmp("dsh-graph-g150-nohist-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "无历史", version: "v-t", actor: "test" });
@@ -575,7 +588,7 @@ test("g-150：无历史目标 prompt 不含 handoff 段标题，卡片段保持"
 });
 
 test("g-150：无历史 start-execution 端点 prompt 不含 handoff 段", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-nohist-ep-"));
+  const ws = repoTmp("dsh-graph-g150-nohist-ep-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "无历史ep", version: "v-t", actor: "test" });
@@ -606,7 +619,7 @@ function closePriorAttempts(root: string, goal: string): void {
 }
 
 test("g-150：attempt 的 status_line、执行笔记等未复核内容不被注入", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-unreviewed-"));
+  const ws = repoTmp("dsh-graph-g150-unreviewed-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "未复核", version: "v-t", actor: "test" });
@@ -630,7 +643,7 @@ test("g-150：attempt 的 status_line、执行笔记等未复核内容不被注�
 // ---- ⑧ 覆盖语义 ----
 
 test("g-150：新登记覆盖旧内容，prompt 只含最新 handoff", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-overwrite-"));
+  const ws = repoTmp("dsh-graph-g150-overwrite-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "覆盖prompt", version: "v-t", actor: "test" });
@@ -690,7 +703,7 @@ test("g-150：多 attempt 中未确认的不被注入", () => {
 // ---- ⑨ handoff 段与 cards 段独立共存 ----
 
 test("g-150：handoff 段与 cards 段独立注入，互不干扰", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-coexist-"));
+  const ws = repoTmp("dsh-graph-g150-coexist-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "共存", version: "v-t", actor: "test" });
@@ -722,7 +735,7 @@ test("g-150：handoff 段与 cards 段独立注入，互不干扰", async () => 
 // ---- ⑩ worktree=false 与 handoff 兼容 ----
 
 test("g-150：worktree=false 声明未启用隔离但保留 handoff 注入", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-wt-"));
+  const ws = repoTmp("dsh-graph-g150-wt-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const { goal } = goalWithHandoff(root);
@@ -928,7 +941,7 @@ test("g-150 review-4：startAttempt 空数组 injectedHandoffs 明确写入事�
 });
 
 test("g-150 review-4：graph_start_attempt 工具拒绝非 string 类型的 attempt_brief", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-type-"));
+  const ws = repoTmp("dsh-graph-g150-type-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "工具类型", version: "v-t", actor: "test" });
@@ -942,7 +955,7 @@ test("g-150 review-4：graph_start_attempt 工具拒绝非 string 类型的 atte
 });
 
 test("g-150 review-4：start-execution 端点拒绝非 string 类型的 attempt_brief", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-ep-type-"));
+  const ws = repoTmp("dsh-graph-g150-ep-type-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "ep类型", version: "v-t", actor: "test" });
@@ -972,7 +985,7 @@ test("g-150 review-5：无 handoff 且无 brief 时，startAttempt 事件中不�
 });
 
 test("g-150 review-5：已有 reviewed context card 不回归（cards 注入行为不变）", async () => {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g150-compat-"));
+  const ws = repoTmp("dsh-graph-g150-compat-");
   const root = join(ws, ".dsh-graph");
   init(root);
   const goal = createGoal(root, { title: "card兼容", version: "v-t", actor: "test" });

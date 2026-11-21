@@ -132,6 +132,7 @@ interface BoardOwnerMarker {
   attempt: string;
   branch: string | null;
   created_at: string;
+  baseline_commit?: string;
 }
 /** 符号链接稳健的路径归一（比较用；解析失败回落到字面绝对路径）。 */
 function canonicalPath(p: string): string {
@@ -175,12 +176,13 @@ export function readBoardOwner(worktreePath: string): BoardOwnerMarker | null {
  * （`JSON.stringify(marker) + "\n"`）逐字不变；写失败时由 `atomicWrite` 自行清掉临时文件，
  * 本函数只回 false（零残留、不留半文件）。
  */
-function writeBoardOwner(worktreePath: string, root: string, goalId: string, attemptId: string, branch: string | null): boolean {
+function writeBoardOwner(worktreePath: string, root: string, goalId: string, attemptId: string, branch: string | null, baseline?: string | null): boolean {
   const dir = worktreeGitDir(worktreePath);
   if (!dir) return false;
   try {
     const marker: BoardOwnerMarker = {
       canonical_root: resolve(root), goal: goalId, attempt: attemptId, branch, created_at: nowIso(),
+      ...(baseline ? { baseline_commit: baseline } : {}),
     };
     atomicWrite(join(dir, BOARD_OWNER_MARKER), `${JSON.stringify(marker)}\n`);
     return true;
@@ -756,6 +758,7 @@ export function collectAttemptGitTruth(opts: {
   baseline: string | null;
   /** attempt 持久化的基线（存在且可解析时用于绑定，防止「基线取 HEAD」自我归零）。 */
   attemptBaseline?: string | null;
+  attemptBaselineSource?: string | null;
   nonProductPrefixes?: readonly string[] | null;
   runner?: RawGitRunner;
 }): AttemptGitTruthResult {
@@ -844,7 +847,8 @@ export function collectAttemptGitTruth(opts: {
     : "";
   const anchorIsPersisted = attemptBaseline !== "";
   const anchorSource = anchorIsPersisted ? "attempt.baseline_commit" : "attempt.worktree.head";
-  const engineAnchor = attemptBaseline !== "" ? attemptBaseline : recordedHead;
+  // Reused trees may have advanced since their unknown original anchor; HEAD is not evidence of that anchor.
+  const engineAnchor = attemptBaseline !== "" ? attemptBaseline : opts.attemptBaselineSource === "existing_worktree" ? "" : recordedHead;
   if (engineAnchor === "") {
     return {
       ok: false,
@@ -1034,6 +1038,11 @@ export interface PrepareWorktreeResult {
   reason?: string | null;
   created?: boolean;
   reused?: boolean;
+  baseline_commit: string | null;
+  baseline_source: "explicit" | "version_branch" | "main_head" | "existing_worktree" | null;
+  baseline_ref: string | null;
+  baseline_version: string | null;
+  baseline_fallback_reason: string | null;
 }
 
 /**
@@ -1051,45 +1060,54 @@ export function prepareAttemptWorktree(
   opts: {
     enabled: boolean;
     baselineCommit?: string | null;
+    version?: string | null;
+    /** Only for caller that separately verifies the actual execution cwd before any side effects. */
+    validateMainHead?: boolean;
     reason?: string | null;
   },
 ): PrepareWorktreeResult {
-  if (!opts.enabled) {
-    return {
-      enabled: false,
-      worktree: false,
-      // g-289：不再臆造 "user_choice" 兜底——未启用隔离的真实原因（explicit/type_default/
-      // dirty 豁免等）由调用方解析后经 reason 透传，保证 attempt 记录可观测「为何没建树」。
-      reason: opts.reason || null,
-      created: false,
-      reused: false,
-    };
-  }
-
+  const explicit = typeof opts.baselineCommit === "string" ? opts.baselineCommit.trim() : "";
+  const version = typeof opts.version === "string" ? opts.version.trim() : "";
+  const versionRef = version ? `refs/heads/${version.startsWith("v") ? version : `v${version}`}-test` : null;
+  const ref = explicit || versionRef || "HEAD";
+  const source: PrepareWorktreeResult["baseline_source"] = explicit ? "explicit" : version ? "version_branch" : "main_head";
   const mainWorktree = resolveCodeWorkspace(root);
   if (!mainWorktree) {
-    throw new GraphError("当前工作区不是 Git 仓库或 git 不可用，无法创建隔离工作树（拒绝派发）");
+    if (opts.enabled || explicit || version) throw new GraphError("当前工作区不是 Git 仓库或 git 不可用，无法解析基线（拒绝派发）");
+    return { enabled: false, worktree: false, reason: opts.reason || null, created: false, reused: false,
+      baseline_commit: null, baseline_source: null, baseline_ref: null, baseline_version: null, baseline_fallback_reason: "git_unavailable" };
   }
-
+  let baseline: string;
   try {
-    git(mainWorktree, ["rev-parse", "--git-dir"]);
-  } catch (e) {
-    throw new GraphError(`Git 不可用或仓库无效（${(e as any)?.message ?? e}），无法创建隔离工作树（拒绝派发）`);
+    const object = !explicit && versionRef
+      ? git(mainWorktree, ["show-ref", "--verify", "--hash", versionRef])
+      : ref;
+    baseline = git(mainWorktree, ["rev-parse", "--verify", "--end-of-options", `${object}^{commit}`]);
+    if (!/^[0-9a-f]{40,64}$/.test(baseline)) throw new Error("invalid commit");
+  } catch {
+    if (!opts.enabled && !explicit && !version) {
+      return { enabled: false, worktree: false, reason: opts.reason || null, created: false, reused: false,
+        baseline_commit: null, baseline_source: null, baseline_ref: null, baseline_version: null, baseline_fallback_reason: "head_unavailable" };
+    }
+    const branchName = versionRef ? versionRef.replace(/^refs\/heads\//, "") : "";
+    throw new GraphError(
+      explicit
+        ? `基线 commit 无效或不存在（${ref}），拒绝派发`
+        : versionRef
+          ? `基线不可解析（${ref}），拒绝派发。版本目标默认以本地集成分支 ${branchName} 为基线；请先创建该分支（如 git branch ${branchName}），或显式传入 baseline_commit，或将目标移为独立目标后再派发`
+          : `基线不可解析（${ref}），拒绝派发`,
+    );
   }
-
-  let baseline = "";
-  if (opts.baselineCommit && opts.baselineCommit.trim()) {
-    try {
-      baseline = git(mainWorktree, ["rev-parse", "--verify", `${opts.baselineCommit.trim()}^{commit}`]);
-    } catch {
-      throw new GraphError(`基线 commit 无效或不存在（${opts.baselineCommit}），无法创建隔离工作树（拒绝派发）`);
+  const baselineInfo = { baseline_commit: baseline, baseline_source: source, baseline_ref: ref,
+    baseline_version: version || null, baseline_fallback_reason: null };
+  if (!opts.enabled) {
+    if ((explicit || version) && opts.validateMainHead !== false) {
+      let head: string;
+      try { head = git(mainWorktree, ["rev-parse", "--verify", "HEAD^{commit}"]); }
+      catch { throw new GraphError("非隔离派发无法读取主工作树 HEAD，拒绝派发"); }
+      if (head !== baseline) throw new GraphError("非隔离派发基线与主工作树 HEAD 不一致，拒绝派发");
     }
-  } else {
-    try {
-      baseline = git(mainWorktree, ["rev-parse", "HEAD"]);
-    } catch {
-      throw new GraphError("仓库当前无有效提交（HEAD 不存在），无法创建隔离工作树（拒绝派发）");
-    }
+    return { enabled: false, worktree: false, reason: opts.reason || null, created: false, reused: false, ...baselineInfo };
   }
 
   const seqMatch = attemptId.match(/^att-(\d+)$/);
@@ -1138,20 +1156,40 @@ export function prepareAttemptWorktree(
           `（既无归属标记，本看板事件流也无对应 attempt.started 记录）；` +
           `按保守策略拒绝复用与接管（不自动改名、不删除），拒绝派发`,
         );
-      } else {
-        // 旧树兼容：本目标上线前创建、无标记，但 provenance 证明属本看板 ⇒ 补写标记后幂等复用。
-        writeBoardOwner(matchedTree.path, callerRoot, goalId, attemptId, expectedBranch);
       }
+      // 原锚点只认创建标记或 attempt 持久记录；旧树不能用当前 HEAD 冒充。
+      let recorded = owner?.baseline_commit ?? null;
+      if (!recorded) {
+        try {
+          const meta: any = loadGoal(join(dirname(findGoalFile(root, goalId)), "attempts", attemptId, "attempt.md")).meta;
+          recorded = typeof meta.baseline_commit === "string" ? meta.baseline_commit : null;
+        } catch { /* legacy without recorded anchor */ }
+      }
+      if (recorded) {
+        try { recorded = git(mainWorktree, ["rev-parse", "--verify", "--end-of-options", `${recorded}^{commit}`]); }
+        catch { throw new GraphError("复用工作树的原基线不可解析，拒绝派发"); }
+      }
+      if ((explicit || version) && (!recorded || recorded !== baseline)) {
+        throw new GraphError("复用工作树的原基线与请求基线冲突或不可核验，拒绝派发");
+      }
+      if (!owner) writeBoardOwner(matchedTree.path, callerRoot, goalId, attemptId, expectedBranch, recorded);
       let head = "";
       try {
         head = git(matchedTree.path, ["rev-parse", "HEAD"]);
       } catch {
-        head = matchedTree.head ?? baseline;
+        if (!matchedTree.head) throw new GraphError("复用工作树的 HEAD 不可读取，拒绝派发");
+        head = matchedTree.head;
       }
       return {
         enabled: true,
         created: false,
         reused: true,
+        ...baselineInfo,
+        baseline_commit: recorded,
+        baseline_source: "existing_worktree",
+        baseline_ref: recorded && (explicit || version) ? ref : null,
+        baseline_version: version || null,
+        baseline_fallback_reason: recorded ? null : "original_anchor_unavailable",
         worktree: {
           path: matchedTree.path,
           relative_path: relative(mainWorktree, matchedTree.path),
@@ -1198,6 +1236,10 @@ export function prepareAttemptWorktree(
     branchExists = false;
   }
 
+  if (branchExists) {
+    const branchHead = git(mainWorktree, ["rev-parse", "--verify", `refs/heads/${chosenName}^{commit}`]);
+    if (branchHead !== baseline) throw new GraphError(`现有分支 ${chosenName} 的 HEAD 与基线冲突，拒绝派发`);
+  }
   try {
     mkdirSync(resolve(mainWorktree, ".worktrees"), { recursive: true });
     if (branchExists) {
@@ -1219,12 +1261,13 @@ export function prepareAttemptWorktree(
   }
 
   // g-448：建树即写归属标记（该工作树自己的 Git 管理目录内）——后续任何看板的复用核验都以它为准。
-  writeBoardOwner(chosenPath, root, goalId, attemptId, chosenName);
+  writeBoardOwner(chosenPath, root, goalId, attemptId, chosenName, baseline);
 
   return {
     enabled: true,
     created: true,
     reused: false,
+    ...baselineInfo,
     worktree: {
       path: chosenPath,
       relative_path: relative(mainWorktree, chosenPath),

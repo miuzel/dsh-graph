@@ -184,8 +184,8 @@ test("g-374 F5 触发时机：派发 + 截获 + 确定性刷新全程零额外 L
   assert.equal(llm.items[0].status, "pending");
   const req = h.capturedRequests[1];
   assert.equal(req.label, `graph:summarize-results/${goal}`, "label 必须可归因");
-  assert.equal(req.request?.toolFilter !== undefined || true, true);
-  const prompt = req.request?.prompt?.[0]?.text ?? "";
+  assert.equal(req.toolFilter !== undefined || true, true);
+  const prompt = req.prompt?.[0]?.text ?? ""; // g-627：扁平 spec
   assert.match(prompt, /完成摘要撰写员|completion-summary writer/i, "summarizer 角色提示词");
   assert.match(prompt, /graph_refresh_results/, "必须要求经写入器落盘");
   assert.match(prompt, /(影响|impact)/i, "必须要求写影响面");

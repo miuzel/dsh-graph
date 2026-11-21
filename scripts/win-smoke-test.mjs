@@ -629,8 +629,71 @@ const OS_SITE_ROWS = [
   ["core/ops.ts", "processLiveness", 1, ["acquireTagsLock"],
    "标签锁陈旧回收的持有者存活探测",
    "ws:T3.tx_lock_reclaim"],
-  ["core/ops.ts", "realpathSync", 10, ["assertNoSymlinkPath", "assertContainedPath", "ensureAttachmentsRoot", "resolveAttachmentPath", "reassertContainedParent", "resolveExistingAttachmentReal", "attachmentProblems", "assertNoActiveExecutionChild"],
-   "附件 / root 的 realpath 越界与 symlink 校验；g-610 clean 按真实 canonical 路径核归属",
+  ["core/ops.ts", "realpathSync", 9, ["assertContainedPath", "ensureAttachmentsRoot", "resolveAttachmentPath", "reassertContainedParent", "resolveExistingAttachmentReal", "attachmentProblems", "assertNoActiveExecutionChild"],
+   "附件 / root 的 realpath 越界与 symlink 校验；g-610 clean 按真实 canonical 路径核归属" +
+   "（g-630：`assertNoSymlinkPath` 的实现下沉到 core/cli/goal-files.ts，见该文件台账行）",
+   "ws:T3.attachments_store_delete"],
+  // ---- g-630：`core/cli/` 纳入台账扫描面后补齐的**既有**调用点（此前因「只扫 core/*.ts 顶层」而漏账）。
+  // 这些不是新代码引入的问题，是扫描面缺口暴露出来的真实盲区；逐项如实登记，不留「未登记即判红」豁免。
+  ["core/cli/claim.ts", "lockFile", 1, ["readExistingLocks"],
+   "claim 只读列出既有锁文件（向导：认领前提示并发在途）；只读探测、不获取/不释放",
+   "ws:T3.tx_lock_reclaim"],
+  ["core/cli/submit.ts", "lockFile", 2, ["boundaryLock"],
+   "submit 的边界锁（提交期间阻止并发改看板）；与 core/transaction 同「目录形态锁 + wx」语义",
+   "ws:T3.tx_lock_reclaim"],
+  ["core/cli/health.ts", "openSync", 1, ["readOneByte"],
+   "info/status 的只读 1 字节可读性确认（权限位允许但当前用户可能非属主）",
+   "exempt:只读 1 字节确认，无写入、错误码仅用于给出「不可读」结论；Windows 权限语义差异由 info 输出如实呈现"],
+  ["core/cli/health.ts", "statSync", 1, ["probeFile"],
+   "关键文件探针（存在/目录/权限位判定，只读）",
+   "exempt:只读 stat，无平台分叉；结论直接进 info/status 的用户可见输出"],
+  ["core/cli/locate.ts", "lstatSync", 1, ["assertNotSymlinkedGraphRoot"],
+   "graph root 自身不得是 symlink（lstat 才能识别 symlink 本身）；与 Windows junction 语义相关",
+   "exempt:Windows 上 junction/symlink 的 lstat 表现与 POSIX 不同，但本检查只做「拒绝」这一 fail-closed 方向；真机覆盖待 Windows T1/T3"],
+  ["core/cli/locate.ts", "statSync", 1, ["isDir"],
+   "向上查找 .dsh-graph 时的目录判定（只读）",
+   "exempt:只读目录判定，无写入、无错误码外泄"],
+  ["core/cli/sync.ts", "atomicWrite", 1, ["applySync"],
+   "sync 投影到 .claude/CLAUDE.md 与 AGENTS.md 的原子写（复用 core 原语，不自行实现替换）",
+   "pg:P4.b,ws:T3.tags_write"],
+  ["core/cli/sync.ts", "crlf", 3, ["renderDocument", "detectEol"],
+   "受控区段拼接时保留原文件换行风格（LF/CRLF）；纯字符串处理",
+   "exempt:纯字符串归一、无 FS 语义；Windows CRLF 由 T3 读写链路间接覆盖"],
+  ["core/cli/sync.ts", "mkdirSync", 1, ["applySync"],
+   "目标文件父目录创建（幂等，sync 首次写入时）",
+   "ws:T3.init_create"],
+  ["core/cli/sync.ts", "statSync", 3, ["readTarget", "nearestExistingDir"],
+   "目标文件存在性 / 最近存在祖先目录探测（只读，用于原子写的落点判定）",
+   "exempt:只读探测，无写入语义"],
+  // ---- g-630 新增：事件流增量索引（用户缓存目录下的纯缓存；不写 .dsh-graph）
+  ["core/cli/events-index.ts", "homedirTmpdir", 1, ["cacheDir"],
+   "索引落点解析：$DSH_GRAPH_CACHE_HOME → $XDG_CACHE_HOME → ~/.cache（Windows 为 %LOCALAPPDATA% 语义由 os.homedir 决定）",
+   "exempt:纯路径解析，无 FS 写入；落点不可写时由 mkdir 失败静默降级（只慢不坏）"],
+  ["core/cli/events-index.ts", "statSync", 1, ["fileSize"],
+   "事件流大小探测（决定尾窗长度；不存在返回 -1）",
+   "exempt:只读探测，无写入、无错误码外泄"],
+  ["core/cli/events-index.ts", "openSync", 2, ["probeFile", "writeIndexFile"],
+   "事件流只读打开（r）/ 索引临时文件创建（w）",
+   "exempt:索引是用户缓存目录下的纯缓存，与看板写入无关；失败静默降级"],
+  ["core/cli/events-index.ts", "fstatSync", 1, ["probeFile"],
+   "事件流 size / dev / ino 同一性核对（一致性校验的输入）",
+   "exempt:Windows 上 st.ino 恒为 0，代码已按「无稳定 ino」降级为 size+headSha 判定（见 docs/events-index-g630.md §6）"],
+  ["core/cli/events-index.ts", "mkdirSync", 1, ["writeIndexFile"],
+   "索引缓存目录创建（幂等）",
+   "exempt:用户缓存目录，非看板目录"],
+  ["core/cli/events-index.ts", "fsyncSync", 1, ["writeIndexFile"],
+   "索引临时文件落盘 fsync（与 core 原子写同纪律）",
+   "exempt:纯缓存落盘；失败不影响正确性"],
+  ["core/cli/events-index.ts", "atomicReplace", 2, ["writeIndexFile"],
+   "索引原子就位 + 目录 fsync：复用 core/platform 的 replaceFileAtomic / syncDirectorySafely" +
+   "（POSIX rename / Windows 备份-替换-回滚），不自行实现第二套",
+   "pg:P4.b"],
+  ["core/cli/events-index.ts", "unlinkSync", 1, ["writeIndexFile"],
+   "索引写失败后的临时文件清理",
+   "exempt:纯缓存清理，失败忽略"],
+  ["core/cli/goal-files.ts", "realpathSync", 1, ["assertNoSymlinkPath"],
+   "g-630：目标文件读写前的 symlink 拒收（由 ops 转调同一实现；Windows 上 realpath 对 8.3 短名/" +
+   "大小写差异的行为与 POSIX 不同，故与 ops 同口径登记，不因下沉而失去 Windows 覆盖）",
    "ws:T3.attachments_store_delete"],
   ["core/ops.ts", "renameSync", 11, ["deleteAttachment", "renameDirInto", "moveGoal", "archiveGoal", "unarchiveGoal", "postponeGoal", "acquireTagsLock", "releaseTagsLock", "setGoalTags"],
    "目录/文件搬迁（g-427：NTFS 拒绝用目录替换已存在目录）",
@@ -758,12 +821,12 @@ const OS_SITE_ROWS = [
   ["dsh-graph-host/index.js", "mkdirSync", 1, ["apply"],
    "attempts 目录创建",
    "ws:T3.attempts_dir_present"],
-  ["dsh-graph-host/index.js", "realpathSync", 4, ["resolveSchemastery", "discoverAttemptWorktrees"],
-   "workspace canonical key / worktree 真实路径",
-   "exempt:宿主 workspace 归一由 T4/T5 间接覆盖；软链拒绝见 pg:P2"],
-  ["dsh-graph-host/index.js", "statSync", 3, ["apply"],
-   "文件 mtime 探测（REST 载荷）",
-   "exempt:只读探测；REST 读路径由 T5 覆盖"],
+  ["dsh-graph-host/index.js", "realpathSync", 6, ["resolveSchemastery", "discoverAttemptWorktrees", "apply"],
+   "workspace canonical key / worktree 真实路径；复用 child 时归一实际 cwd 与 Git common dir，校验仓库归属",
+   "exempt:宿主 workspace 归一由 T4/T5 间接覆盖；复用 child cwd 校验需宿主工作目录服务及 git，见 core/tests/g474-child-reuse.test.ts；软链拒绝见 pg:P2"],
+  ["dsh-graph-host/index.js", "statSync", 4, ["apply"],
+   "文件 mtime 探测（REST 载荷）；复用 child 时校验实际 cwd 为目录",
+   "exempt:只读探测；REST 读路径由 T5 覆盖，复用 child cwd 校验需宿主工作目录服务及 git，见 core/tests/g474-child-reuse.test.ts"],
 // 台账规模**不写死**：行数与命中数由 buildLedgerRow 汇总后运行时打印（`台账=<rows>项/<hits>处命中`），
 // 未登记即判红。历史教训：此处曾写死 253 / 257，而实际先后是 255 / 258 ⇒ 一律以运行时报数为准。
 ];
@@ -916,18 +979,30 @@ export function resolveProductSourceRoot(dir) {
   return null;
 }
 
-/** 台账扫描面：core/*.ts（不含 core/tests）+ dsh-graph-host/index.js + lib/**\/*.js（不含 lib/client）。 */
+/**
+ * 台账扫描面：`core/*.ts` + `core/cli/*.ts`（均不含 `core/tests`）+ `dsh-graph-host/index.js`
+ * + `lib/**\/*.js`（不含 `lib/client`）。
+ *
+ * g-630 扩展：此前只扫 `core/*.ts`（顶层），**漏掉 `core/cli/`**。g-630 把 `assertNoSymlinkPath`
+ * 的实现下沉到 `core/cli/goal-files.ts` 后，该 realpath 调用一度落在扫描面之外 —— 台账会静默
+ * 少一处 Windows 覆盖（T1 只报「清单项无命中」的 stale，不会报「新文件未扫」）。
+ * 把 `core/cli/` 纳入扫描后，产品源码里的 OS 调用点**没有死角**。
+ */
 export function collectProductSourceFiles(sourceRoot) {
   const files = [];
   const coreDir = join(sourceRoot, "core");
-  let names = [];
-  try { names = readdirSync(coreDir); } catch { names = []; }
-  for (const name of names.sort()) {
-    if (!name.endsWith(".ts")) continue;
-    const abs = join(coreDir, name);
-    if (!statSync(abs).isFile()) continue;
-    files.push({ path: "core/" + name, text: readFileSync(abs, "utf8") });
-  }
+  const scanFlat = (dir, prefix) => {
+    let names = [];
+    try { names = readdirSync(dir); } catch { names = []; }
+    for (const name of names.sort()) {
+      if (!name.endsWith(".ts")) continue;
+      const abs = join(dir, name);
+      try { if (!statSync(abs).isFile()) continue; } catch { continue; }
+      files.push({ path: prefix + name, text: readFileSync(abs, "utf8") });
+    }
+  };
+  scanFlat(coreDir, "core/");
+  scanFlat(join(coreDir, "cli"), "core/cli/");
   const hostIndex = join(sourceRoot, "dsh-graph-host", "index.js");
   if (existsSync(hostIndex)) files.push({ path: "dsh-graph-host/index.js", text: readFileSync(hostIndex, "utf8") });
   const libDir = join(sourceRoot, "dsh-graph-host", "lib");

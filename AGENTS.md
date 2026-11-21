@@ -41,6 +41,23 @@ This runs `sync-core.sh` (core/*.ts → dist/core/*.js), `build-client.sh` (clie
 
 **Fallback hardening (g-353)**: on the two-rename path the capability probe (`mv --exchange --help`, binary capability) is kept distinct from an actual runtime `RENAME_EXCHANGE` failure (filesystem/mount does not support it) — the latter warns and still falls back to two renames. If the second rename fails, `build.sh` first **rolls back** (`mv dist.prev.<pid> dist`), so the live path is byte-for-byte the old tree again; if the rollback also fails it goes **fail-closed**: the old tree is the only intact copy, the EXIT trap never deletes it, and the recovery command is printed. A leftover `dist.prev.<pid>` with a missing `dist/` (e.g. after SIGKILL) is auto-restored by the next build. Recovery command: `mv dist.prev.<pid> dist`. Standalone `build-client.sh` (no `DIST_DIR`) rewrites the live `dist/lib/client.js` **non-atomically** and warns on stderr — publishing always goes through `build.sh`.
 
+### Multi-package release (g-631)
+
+v1.0.0 起发布形态是 **5 个独立包**（DSH 插件本体 `dsh-graph` + 跨宿主 `goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`）。
+`packages/` 只是**打包层**（从 `dist/` 组装，生成物不入库）；`core/` 与 `dsh-graph-host/` 的**位置不变**
+—— 搬动它们会击穿 `TEST_GLOB` 与 `tsconfig` 精确枚举两道守卫。
+
+```bash
+bash scripts/build.sh                 # 必须先构建（打包层只读 dist/，从不构建）
+node scripts/pack-packages.mjs        # 组装 packages/<name>/
+node scripts/pack-packages.mjs --tarballs   # → out/*.tgz + out/SHA256SUMS.txt
+node scripts/pack-packages.mjs --check      # 只校验版本自洽，不落盘
+```
+
+每包文件集由**模块图推导**（不是手写清单）；携带 `core/` 的包会自动附带 `prompts/`
+（`core/ops.js` 运行期现读，缺则 fail-closed）。设计详见 [`docs/multi-package-design.md`](docs/multi-package-design.md)，
+各包安装指南见 `docs/packages/<name>/INSTALL.md`。守卫：`core/tests/g631-multi-package.test.ts`。
+
 ### Verification
 After modifying source and rebuilding:
 1. Run `node --check dist/lib/client.js` to verify syntax

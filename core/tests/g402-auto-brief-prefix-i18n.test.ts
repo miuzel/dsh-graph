@@ -54,10 +54,10 @@
  *   `auto_from_desc` 前缀，属另一次收敛，未擅自扩大改动面。
  */
 
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createGoal, init, setCriteria, setGoalDirective } from "../ops.ts";
@@ -118,7 +118,15 @@ test("g-402 判据 1/4：前缀表 en 零汉字、zh 逐字等于基线，且调
 // ============================================================================
 
 function makeHarness() {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g402-"));
+  const tmp = join(process.cwd(), "tmp");
+  mkdirSync(tmp, { recursive: true });
+  const ws = mkdtempSync(join(tmp, "dsh-graph-g402-"));
+  const git = (args: string[], input?: string) => execFileSync("git", args, { cwd: ws, input, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" } }).trim();
+  git(["init", "-q"]);
+  const tree = git(["mktree"], "");
+  const commit = git(["commit-tree", tree, "-m", "fixture"]);
+  git(["update-ref", "HEAD", commit]);
+  git(["update-ref", "refs/heads/v-g402-test", commit]);
   const root = join(ws, ".dsh-graph");
   init(root);
   const captured: any[] = [];
@@ -136,7 +144,7 @@ function makeHarness() {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             captured.push(opts);
             return { childId: `child-${captured.length}`, parentSessionId: "sess-super" };
           },
@@ -182,7 +190,7 @@ async function startAttempt(h: Harness, goal: string, args: Record<string, unkno
   assert.ok(tool, "graph_start_attempt 必须已注册");
   const res = await tool.execute({ goal, worktree: false, task_type: "fix", ...args }, h.exec);
   assert.ok(res?.attempt, "派发必须产生 attempt（准入通过）");
-  const request = h.captured[before]?.request;
+  const request = h.captured[before];
   assert.ok(request, "必须捕获到恰好一次子代理派发请求");
   return { res, prompt: String(request.prompt?.[0]?.text ?? ""), attempt: String(res.attempt) };
 }

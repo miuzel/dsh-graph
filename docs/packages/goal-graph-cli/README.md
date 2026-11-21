@@ -1,0 +1,13 @@
+# goal-graph-cli
+
+goal-graph 命令行：`info` / `status` / `goal` / `version` / `sync` / `claim` / `submit` / `serve`。
+
+自包含，不依赖 DSH 插件本体。默认命令全部只读；写命令只有 `sync` / `claim` / `submit`。
+
+```bash
+npm install -g goal-graph-cli
+goal-graph version
+goal-graph info
+```
+
+完整安装、验证与排障见 **INSTALL.md**。

@@ -12,8 +12,9 @@
  */
 
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { init, createGoal, setCriteria, setGoalDirective, transition, findGoalFile, loadGoal } from "../ops.ts";
@@ -94,6 +95,15 @@ test("g-236 prompt 模板：仅 directive 时 directive 出现在 prompt 中", (
 
 // ===== 插件工具路径集成测试 =====
 
+function initFixture(root: string) {
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFileSync(join(root, ".gitignore"), "*\n!.gitignore\n");
+  execFileSync("git", ["add", ".gitignore"], { cwd: root });
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=t@e", "commit", "-qm", "init"], { cwd: root });
+  execFileSync("git", ["branch", "v-t-test"], { cwd: root });
+  init(root);
+}
+
 function setupCtx(root: string) {
   let capturedPrompt = "";
   const registered: any[] = [];
@@ -101,8 +111,8 @@ function setupCtx(root: string) {
     get: (name: string) => name === "subagents" ? {
       list: () => ["spawn"],
       getProvider: () => ({ prepareContinuable: () => {} }),
-      startContinuable: async (opts: any) => {
-        capturedPrompt = opts.request?.prompt?.[0]?.text ?? "";
+      startActivation: async (opts: any) => {
+        capturedPrompt = opts.prompt?.[0]?.text ?? "";
         return { childId: "test-child", parentSessionId: "parent" };
       },
     } : undefined,
@@ -116,7 +126,7 @@ function setupCtx(root: string) {
 
 test("g-236 工具路径：无 brief 无 directive 时自动生成默认 action", async () => {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g236-"));
-  init(root);
+  initFixture(root);
   const goal = createGoal(root, { title: "测试空派发修复", version: "v-t", actor: "test" });
   setCriteria(root, goal, ["通过"], "test");
   // 不设置 directive → readGoalDirective 返回 null
@@ -136,7 +146,7 @@ test("g-236 工具路径：无 brief 无 directive 时自动生成默认 action"
 
 test("g-236 工具路径：有目标描述时从描述生成 auto_from_desc brief", async () => {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g236-desc-"));
-  init(root);
+  initFixture(root);
   const goal = createGoal(root, { title: "有描述的目标", version: "v-t", actor: "test" });
   setCriteria(root, goal, ["通过"], "test");
   // 手动写入目标描述
@@ -158,7 +168,7 @@ test("g-236 工具路径：有目标描述时从描述生成 auto_from_desc brie
 
 test("g-236 工具路径：有 attempt_brief 时使用用户提供的 brief", async () => {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g236-"));
-  init(root);
+  initFixture(root);
   const goal = createGoal(root, { title: "测试 brief 优先", version: "v-t", actor: "test" });
   setCriteria(root, goal, ["通过"], "test");
   const { byName, getPrompt } = setupCtx(root);
@@ -178,7 +188,7 @@ test("g-236 工具路径：有 attempt_brief 时使用用户提供的 brief", as
 
 test("g-236 工具路径：无 brief 但有 directive 时使用 directive", async () => {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g236-"));
-  init(root);
+  initFixture(root);
   const goal = createGoal(root, { title: "测试 directive 回退", version: "v-t", actor: "test" });
   setCriteria(root, goal, ["通过"], "test");
   setGoalDirective(root, goal, "只改 API 层，不动 GUI", "test");
@@ -194,7 +204,7 @@ test("g-236 工具路径：无 brief 但有 directive 时使用 directive", asyn
 
 test("g-236 工具路径：brief 和 directive 均有时 brief 优先", async () => {
   const root = mkdtempSync(join(tmpdir(), "dsh-graph-g236-"));
-  init(root);
+  initFixture(root);
   const goal = createGoal(root, { title: "测试 brief 优先级", version: "v-t", actor: "test" });
   setCriteria(root, goal, ["通过"], "test");
   setGoalDirective(root, goal, "这是背景指令", "test");

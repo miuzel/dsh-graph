@@ -57,6 +57,14 @@ export {
 import { join, basename, dirname, relative, resolve, isAbsolute, sep } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
+// g-630：目标文件枚举/读取与 symlink 守卫的唯一实现下沉到轻量叶子模块（status 冷启动不再付整张
+// ops 依赖图的加载成本）；本文件 re-export 转调，不保留第二套实现。
+import {
+  listGoalFiles as listGoalFilesImpl,
+  assertNoSymlinkPath as assertNoSymlinkPathImpl,
+  findGoalFile as findGoalFileImpl,
+  readRulesVersion as readRulesVersionImpl,
+} from "./cli/goal-files.ts";
 import {
   parseDoc,
   serializeDoc,
@@ -395,16 +403,15 @@ export { invalidateBoardCache, computeGraphRevision, formatETag, matchIfNoneMatc
 export function getCachedBoardPayload(root: string, opts?: { includeArchived?: boolean; lazy?: boolean }) {
   return getCachedBoardPayloadCore(root, opts, boardPayload);
 }
+/**
+ * 拒绝经由 symlink 读写目标文件（g-630：实现下沉到 `core/cli/goal-files.ts` 的唯一一份，
+ * 本处转调以免两套语义；ops 内部调用点与行为不变）。
+ */
 /** 防止用户输入内容中包含 `## ` 或 `### ` 开头的行，破坏 goal.md section 边界。
  *  将行首 `## ` / `### ` 转义为 `\## ` / `\### `（Markdown 不渲染为标题）。
  *  用于 setGoalDirective 和 appendGoalComment 的输入保护（g-150 返工阻断项 #5）。 */
 function assertNoSymlinkPath(file: string, forWrite = false): void {
-  try {
-    const resolved = resolve(file);
-    const actual = realpathSync(forWrite && !existsSync(resolved) ? dirname(resolved) : resolved);
-    const expected = forWrite && !existsSync(resolved) ? dirname(resolved) : resolved;
-    if (actual !== expected) throw new GraphError("拒绝访问 symlink 路径");
-  } catch (e) { if (e instanceof GraphError) throw e; }
+  assertNoSymlinkPathImpl(file, forWrite);
 }
 
 // ---- g-429：相对路径归一化（Windows 反斜杠 → POSIX `/`）与看板归属分类 ----
@@ -593,78 +600,13 @@ export function normalizeDescriptionHeadings(text: string): string {
   return lines.join("\n");
 }
 
-/** 扫描图根下全部目标文件：backlog/*.md、backlog/<id>/goal.md、
- *  goals/<id>/goal.md、versions/<v>/goals/<id>/goal.md。
- *  opts.includeArchived=true 时也扫描 archived 目录下的目标。 */
+/**
+ * 扫描图根下全部目标文件（g-630：**实现已下沉**到 `core/cli/goal-files.ts` 的唯一一份，
+ * 本函数只做 re-export 转调 —— 避免 `status` 冷启动为这个只读枚举付整张 ops 依赖图的加载成本，
+ * 同时保证「目标文件枚举」始终只有一套语义）。
+ */
 export function listGoalFiles(root: string, opts?: { includeArchived?: boolean }): string[] {
-  const out: string[] = [];
-  const includeArchived = opts?.includeArchived ?? false;
-  const backlog = join(root, "backlog");
-  if (existsSync(backlog)) {
-    for (const f of readdirSync(backlog)) {
-      if (f === "archived") {
-        if (includeArchived) {
-          const backlogArchived = join(backlog, "archived");
-          for (const af of readdirSync(backlogArchived)) {
-            if (af.endsWith(".md")) out.push(join(backlogArchived, af));
-            const nested = join(backlogArchived, af, "goal.md");
-            if (existsSync(nested)) out.push(nested);
-          }
-        }
-        continue;
-      }
-      // 扁平 backlog/<id>.md
-      if (f.endsWith(".md")) {
-        const fp = join(backlog, f);
-        if (!includeArchived && isArchivedFile(fp)) continue;
-        out.push(fp);
-        continue;
-      }
-      // 目录形态 backlog/<id>/goal.md（暂缓后迁移落点）
-      const nested = join(backlog, f, "goal.md");
-      if (existsSync(nested)) out.push(nested);
-    }
-  }
-  const goals = join(root, "goals");
-  if (existsSync(goals)) {
-    for (const d of readdirSync(goals)) {
-      if (d === "archived") {
-        if (includeArchived) {
-          const archivedDir = join(goals, "archived");
-          for (const ad of readdirSync(archivedDir)) {
-            const p = join(archivedDir, ad, "goal.md");
-            if (existsSync(p)) out.push(p);
-          }
-        }
-        continue;
-      }
-      const p = join(goals, d, "goal.md");
-      if (existsSync(p)) out.push(p);
-    }
-  }
-  const versions = join(root, "versions");
-  if (existsSync(versions)) {
-    for (const v of readdirSync(versions)) {
-      const gdir = join(versions, v, "goals");
-      if (existsSync(gdir)) {
-        for (const d of readdirSync(gdir)) {
-          const p = join(gdir, d, "goal.md");
-          if (existsSync(p)) out.push(p);
-        }
-      }
-      // versions/vX/archived/ 目录
-      if (includeArchived) {
-        const archivedDir = join(versions, v, "archived");
-        if (existsSync(archivedDir)) {
-          for (const d of readdirSync(archivedDir)) {
-            const p = join(archivedDir, d, "goal.md");
-            if (existsSync(p)) out.push(p);
-          }
-        }
-      }
-    }
-  }
-  return out.sort();
+  return listGoalFilesImpl(root, opts);
 }
 
 export function loadGoal(file: string): GoalDoc {
@@ -680,23 +622,8 @@ export function saveGoal(file: string, doc: GoalDoc): void {
 }
 
 export function findGoalFile(root: string, id: string): string {
-  // 先搜索非归档目录
-  for (const f of listGoalFiles(root)) {
-    try {
-      if (loadGoal(f).meta.id === id) return f;
-    } catch {
-      // 解析失败的文件由 validate 报告，这里跳过
-    }
-  }
-  // 再搜索归档目录（归档目标也需要能找到）
-  for (const f of listGoalFiles(root, { includeArchived: true })) {
-    try {
-      if (loadGoal(f).meta.id === id) return f;
-    } catch {
-      // 解析失败的文件由 validate 报告，这里跳过
-    }
-  }
-  throw new GraphError(`目标不存在：${id}`);
+  // g-630：实现下沉到 `core/cli/goal-files.ts`（唯一一份），本处转调。
+  return findGoalFileImpl(root, id);
 }
 
 /** 初始化图根目录骨架（幂等，g-112）：重复调用不重复建、不重复记 project.initialized。
@@ -723,17 +650,8 @@ export function init(root: string): void {
 
 /** 读取规则库版本；frontmatter 允许 JSON 或简单 `version: x` 行。 */
 export function readRulesVersion(root: string): string | null {
-  const file = join(root, "rules.md");
-  if (!existsSync(file)) return null;
-  const text = readFileSync(file, "utf8");
-  try {
-    const meta = parseDoc(text).meta;
-    if (typeof meta.version === "string") return meta.version;
-  } catch {
-    // 非 JSON frontmatter：退化为行扫描
-  }
-  const m = text.match(/^version:\s*(\S+)\s*$/m);
-  return m ? m[1] : null;
+  // g-630：实现下沉到 `core/cli/goal-files.ts`（唯一一份），本处转调。
+  return readRulesVersionImpl(root);
 }
 
 /** 读取 project.yaml 的 supervisor.session（看板顶部状态栏数据源，g-108）。
@@ -9230,6 +9148,10 @@ export function startAttempt(
     modeSource?: "override" | "project" | "global" | "default" | null;
     taskType?: "merge" | "rewrite" | "fix" | null;
     baselineCommit?: string | null;
+    baselineSource?: "explicit" | "version_branch" | "main_head" | "existing_worktree" | null;
+    baselineRef?: string | null;
+    baselineVersion?: string | null;
+    baselineFallbackReason?: string | null;
     sourceAttempt?: string | null;
     acceptanceItems?: string[] | null;
     templateVersion?: string | null;
@@ -9337,6 +9259,10 @@ export function startAttempt(
   if (opts.baselineCommit !== undefined) {
     meta.baseline_commit = opts.baselineCommit !== null ? opts.baselineCommit.trim() : null;
   }
+  if (opts.baselineSource !== undefined) meta.baseline_source = opts.baselineSource;
+  if (opts.baselineRef !== undefined) meta.baseline_ref = opts.baselineRef;
+  if (opts.baselineVersion !== undefined) meta.baseline_version = opts.baselineVersion;
+  if (opts.baselineFallbackReason !== undefined) meta.baseline_fallback_reason = opts.baselineFallbackReason;
   if (opts.sourceAttempt !== undefined) {
     meta.source_attempt = opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null;
   }
@@ -9391,6 +9317,10 @@ export function startAttempt(
     ...(normalizedMode && opts.modeSource ? { mode_source: opts.modeSource } : {}),
     ...(opts.taskType !== undefined ? { task_type: opts.taskType } : {}),
     ...(opts.baselineCommit !== undefined ? { baseline_commit: opts.baselineCommit !== null ? opts.baselineCommit.trim() : null } : {}),
+    ...(opts.baselineSource !== undefined ? { baseline_source: opts.baselineSource } : {}),
+    ...(opts.baselineRef !== undefined ? { baseline_ref: opts.baselineRef } : {}),
+    ...(opts.baselineVersion !== undefined ? { baseline_version: opts.baselineVersion } : {}),
+    ...(opts.baselineFallbackReason !== undefined ? { baseline_fallback_reason: opts.baselineFallbackReason } : {}),
     ...(opts.sourceAttempt !== undefined ? { source_attempt: opts.sourceAttempt !== null ? opts.sourceAttempt.trim() : null } : {}),
     ...(opts.acceptanceItems !== undefined ? { acceptance_items: opts.acceptanceItems !== null ? opts.acceptanceItems.map((it) => it.trim()) : null } : {}),
     ...(opts.templateVersion && opts.templateVersion.trim() ? { template_version: opts.templateVersion.trim() } : {}),
@@ -13087,6 +13017,10 @@ export function goalDetail(root: string, goalId: string): Record<string, any> {
             // g-241：结构化任务事实与快照审计
             task_type: m.task_type ?? null,
             baseline_commit: m.baseline_commit ?? null,
+            baseline_source: m.baseline_source ?? null,
+            baseline_ref: m.baseline_ref ?? null,
+            baseline_version: m.baseline_version ?? null,
+            baseline_fallback_reason: m.baseline_fallback_reason ?? null,
             source_attempt: m.source_attempt ?? null,
             acceptance_items: Array.isArray(m.acceptance_items) ? m.acceptance_items : (m.acceptance_items === null ? null : null),
             template_version: m.template_version ?? null,
@@ -14009,11 +13943,16 @@ export function acceptReview(
 }
 
 /** 请求主管复核接受：追加 review.requested 事件，返回 {pending:true}。
- *  details 带 targetStage=当前 status、what=描述/判据/review、snapshot 简要。 */
+ *  details 带 targetStage=当前 status、what=描述/判据/review、snapshot 简要。
+ *
+ *  g-317：可选 `opts.extra` 把**机器证据摘要**（计数/退出码等短标量）并入同一事件的 details，
+ *  供 `dsh-graph submit` 复用本入口而不是另造事件。缺省（不传）时 details 与历史**逐字段相同**；
+ *  `extra` 不得用于倾倒长文本（调用方只传计数与短字符串）。 */
 export function requestAcceptReview(
   root: string,
   id: string,
   actor: string,
+  opts?: { extra?: Record<string, unknown> },
 ): { pending: true; goal: string } {
   const file = findGoalFile(root, id);
   const doc = loadGoal(file);
@@ -14033,7 +13972,7 @@ export function requestAcceptReview(
     actor,
     event: "review.requested",
     goal: id,
-    details: { targetStage: status, what, snapshot },
+    details: { targetStage: status, what, snapshot, ...(opts?.extra ?? {}) },
   });
   return { pending: true, goal: id };
 }
@@ -14225,6 +14164,7 @@ export function resolveAccept(
       attemptWorktree: attemptMeta.worktree,
       baseline: evidence.baseline_commit,
       attemptBaseline: typeof attemptMeta.baseline_commit === "string" ? attemptMeta.baseline_commit : null,
+      attemptBaselineSource: typeof attemptMeta.baseline_source === "string" ? attemptMeta.baseline_source : null,
       // g-435/g-437：与策略解析**同一份**有效排除前缀（单一默认点），不引入第二套默认。
       nonProductPrefixes: effectiveNonProductPrefixesOf(projConf.review.non_product_prefixes),
     });

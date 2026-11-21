@@ -56,8 +56,7 @@
             setFbIdx(-1);
             // 与既有主管直发 UX（AcceptFeedback.openSupervisor）一致：打开主管会话并切到对话页便于跟进；
             // 不关弹窗 —— 区分性提示需留在原地可见（g-478 与既有 g-109 关弹窗行为的差异点）。
-            openSessionTarget(props.supervisorSession,
-              typeof rt.open === "function" ? () => rt.open(props.supervisorSession) : null);
+            openSessionTarget(props.supervisorSession);
             activateChatTab();
             showToast(dgT("criteria.feedbackSupervisorDelivered"));
           } catch (e) {
@@ -233,7 +232,7 @@
           if (delivered) {
             // 直发成功：消息已投递给主管会话，不再写剪贴板（负责人要求「直接发不需要复制一份」）；
             // 仍打开主管会话便于负责人跟进。
-            openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
+            openSessionTarget(supervisorSession);
             activateChatTab();
             setMode("supervisor");
             setFallback(false);
@@ -247,8 +246,8 @@
           // 投递不可用（无会话服务 / 未配置 supervisor.session / 会话取不到 / 无 prompt / 任意异常）
           // → 以下完整退回 g-168 原复制契约，逐字不变（含复制失败时的手动复制预览）。
           const copied = await copyText(text);
-          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
-          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
+          // 会话导航统一走 openSessionTarget（uiWorkspace.openSession）
+          openSessionTarget(supervisorSession);
           activateChatTab();
           if (copied) showToast(dgT("exec.requestCopied"));
            setMode("supervisor");
@@ -541,8 +540,8 @@
           if (!rt) { setNote(dgT("exec.supervisorUnavailable")); return; }
           // 主管会话 id 由 board 端点下发（project.yaml supervisor.session，g-108）
           if (!supervisorSession) { setNote(dgT("exec.supervisorNotConfigured")); return; }
-          // g-321：0.1.6 移除了 sessions.open，统一走 openSessionTarget（uiWorkspace.openSession 优先）
-          openSessionTarget(supervisorSession, typeof rt.open === "function" ? () => rt.open(supervisorSession) : null);
+          // 会话导航统一走 openSessionTarget（uiWorkspace.openSession）
+          openSessionTarget(supervisorSession);
           activateChatTab();
           setNote(dgT("addCard.chatSwitched"));
         } catch (e) {

@@ -1499,6 +1499,14 @@ harness 组合矩阵 | 平台=win32 | H1=PASS H2=PASS H3=SKIP(需真机/实例) 
 
 ---
 
+### 7.14 v1.0.0（2026-11-21，三平台收口回填）
+
+- **Linux / WSL2**：✅ **已实测通过**（commit `c4c62aa`）：全量自证门禁 `3332/3332 fail=0 skipped=0`；`node scripts/win-smoke-test.mjs --static-only .` 通过 8/8（台账 86 项 / 296 处命中未登记 0、忽略 0，H1/H2/H4/H5/H6 PASS）；DSH `0.2.2-rc.5` 浏览器端到端实机验证与 Claude Code 零配置 stdio MCP 实机验证通过。
+- **原生 macOS**：✅ **已实测通过**（2026-11-21，负责人原生 macOS 真机实测）：`dsh-graph-1.0.0.tgz` 实机安装通过；`node ./win-smoke-test.mjs --tarball ./dsh-graph-1.0.0.tgz`（T1–T5）与 `node ./scripts/platform-smoke-test.mjs --skip-build --tarball ./dsh-graph-1.0.0.tgz`（P1–P3 + T1–T5）均 PASS。**未覆盖边界**：本次 macOS 走 `--skip-build` 未执行依赖源码构建的 P4–P6 与 H3 派发，如实留痕。
+- **原生 Windows**：⚠️ **DSH Desktop 实机安装通过，T1–T5 脚本待补跑**（2026-11-21，负责人原生 Windows DSH Desktop 实机安装并基础体验通过，暂未发现严重 bug）；本版尚未在原生 Windows 执行 `win-smoke-test.mjs --tarball` 完整命令行脚本（本机 WSL2 调 `pwsh.exe` 撞 `UtilAcceptVsock:273 accept4 failed 110` 无法代跑；跨平台 T1 静态/台账 86 项 296 处已在 Linux 侧全绿；最近一次原生 Windows 完整 T1–T5 历史记录见 §7.13）。
+
+---
+
 ## 8. 取消项及其理由（g-362 范围收窄，必须留痕）
 
 | 项 | 原设想 | 取消理由（负责人裁决） | 处置 |

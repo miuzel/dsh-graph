@@ -32,7 +32,20 @@ dest="$DEST_DIR/core"
 rm -rf "$dest"
 mkdir -p "$dest"
 cp "$CORE_DIST"/*.js "$dest"/
-echo "已同步：$(ls "$dest"/*.js | wc -l) 个 .js"
+# 子目录必须存在：缺了会导致产物静默残缺（dist/core/cli 缺失 ⇒ dsh-graph 无法启动），
+# 故在复制前显式断言，而不是等运行时才暴露。
+# 子目录清单与 tsconfig `include` 的 `core/<sub>/*.ts` 条目一一对应（g-623 起含 service）。
+for sub in domain cli service; do
+  if [ ! -d "$CORE_DIST/$sub" ]; then
+    echo "❌ 编译产物缺少子目录 ${CORE_DIST}/${sub}（tsconfig include 是否漏了 core/${sub}/*.ts？）" >&2
+    exit 1
+  fi
+  # g-393: compatibility entries import the internal hostless domain modules.
+  # g-314: dsh-graph 核心（core/cli/*.ts → dist/core/cli/*.js），由 dist/bin/dsh-graph.mjs 加载。
+  cp -r "$CORE_DIST/$sub" "$dest"/
+done
+synced_total=$(find "$dest" -name '*.js' | wc -l)
+echo "已同步：$(ls "$dest"/*.js | wc -l) 个入口 .js（含子目录共 $synced_total 个）"
 
 echo "== 3. 一致性校验（无 .ts 泄漏） =="
 if ls "$dest"/*.ts >/dev/null 2>&1; then

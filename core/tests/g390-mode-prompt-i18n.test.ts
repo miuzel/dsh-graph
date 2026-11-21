@@ -41,10 +41,10 @@
  * - profile 全局设置服务在本进程不可用 ⇒ 覆盖一律经 workspace `project.yaml` 写入（真实链路）。
  */
 
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ROLE_PROFILES,
@@ -94,7 +94,15 @@ type Harness = ReturnType<typeof makeHarness>;
 
 /** 单进程只 apply 一次；语言经可变持有者动态读取（见文件头「已知证据边界」）。 */
 function makeHarness() {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g390-"));
+  const tmp = join(process.cwd(), "tmp");
+  mkdirSync(tmp, { recursive: true });
+  const ws = mkdtempSync(join(tmp, "dsh-graph-g390-"));
+  const git = (args: string[], input?: string) => execFileSync("git", args, { cwd: ws, input, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" } }).trim();
+  git(["init", "-q"]);
+  const tree = git(["mktree"], "");
+  const commit = git(["commit-tree", tree, "-m", "fixture"]);
+  git(["update-ref", "HEAD", commit]);
+  git(["update-ref", "refs/heads/v-g390-test", commit]);
   const root = join(ws, ".dsh-graph");
   init(root);
   const captured: any[] = [];
@@ -112,7 +120,7 @@ function makeHarness() {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             captured.push(opts);
             return { childId: `child-${captured.length}`, parentSessionId: "sess-super" };
           },
@@ -153,7 +161,7 @@ interface DispatchOpts {
   projectMode?: "standard" | "minimal";
 }
 
-/** 经**真实** `graph_start_attempt` 派发，并捕获 `subagents.startContinuable` 的最终 prompt。 */
+/** 经**真实** `graph_start_attempt` 派发，并捕获宿主 startActivation 的扁平 spec 上的最终 prompt。 */
 async function dispatch(h: Harness, opts: DispatchOpts) {
   h.lang.value = opts.lang;
   if (opts.projectMode) writeProjectConfig(h.root, { executor: { mode: opts.projectMode } }, "human:test");
@@ -180,7 +188,7 @@ async function dispatch(h: Harness, opts: DispatchOpts) {
     h.exec,
   );
   assert.ok(res?.attempt, "派发必须产生 attempt（准入通过）");
-  const request = h.captured[before]?.request;
+  const request = h.captured[before];
   assert.ok(request, "必须捕获到恰好一次子代理派发请求");
   const attemptMeta = loadGoal(join(h.root, "versions", "v-g390", "goals", goal, "attempts", res.attempt, "attempt.md")).meta as any;
   return { goal, attempt: res.attempt as string, prompt: String(request.prompt?.[0]?.text ?? ""), toolFilter: request.toolFilter, attemptMeta };

@@ -2,19 +2,20 @@
 
 dsh-graph 面向用户的变更史，版本倒序（最新在前）。每个版本不超过 5 条要点，用用户语言描述「能做什么」而非实现细节。
 
-- 逐版本的门禁结论与审计数字：见 [`docs/release-checklist-v*.md`](docs/release-checklist-v0.23.0.md)；
+- 逐版本的门禁结论与审计数字：见 [`docs/release-checklist-v*.md`](docs/release-checklist-v1.0.0.md)；
 - 平台门禁运行手册：见 [`docs/platform-gate.md`](docs/platform-gate.md)。
 
 本表承接自 README 迁移的用户可见变更（v0.17.0 / v0.16.1 / v0.16.0），以及原 README「当前功能状态」小节所记的特性 —— 后者按**真实落地版本**分节（v0.11.0 / v0.9.2 / v0.7.1 / v0.6.1），而非 README 记下它们的版本。其他版本中，v0.10.0 与 v0.15.0 有独立发布清单 `docs/release-checklist-v*.md`；v0.11.x / v0.12.0 等中间版本没有独立清单，其变更见对应的 git tag 与提交。
 
-## v0.24.1 — 2026-11-14
+## v1.0.0 — 2026-11-21
 
-尚未发布。
+首个正式大版本线：在 0.24.0 之上补齐五包分发、命令行人机接口、零配置 stdio MCP 与独立本地服务，并收窄宿主支持面。
 
-- **支持 DSH 0.2.2-rc.3**：新版宿主移除了 subagent provider 的枚举接口，旧探测会把「查不到」误判成「没注册 provider」，导致**完全无法派发**；已改为按官方具名查询探测，并同时兼容 0.2.2-rc.1。
-- **修复新版宿主上子代理启动失败**：适配激活参数结构变化（任务字段上移到外层），派发现在能真正创建子代理。
-- **恢复被新版宿主删除的三项能力**：中断、子级目录读取、子代理归属判定改走官方替代接口，避免「不报错但能力静默消失」；缺能力时明确拒绝而不是假装没有。
-- **兼容调查与验证结论**：逐项结论与证据见 `docs/g624-host-compatibility.md`（含仍未经真机演练的项，不当作通过）。
+- **命令行工具 `goal-graph` 与五包发布形态**：新增独立 CLI（`info` / `status` / `goal list|show` / `version`，并支持 `--graph-dir-name` 指向项目自定义的核心资料目录名，默认仍为 `.dsh-graph`），零常驻服务、毫秒级响应；`sync` 把常驻硬性事实与目标概览投影到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段（区段外内容不动）；`claim` 一键认领目标并把判据注入当前上下文；`submit` 跑完全量自检门禁后把成果闭环到看板（以门禁退出码为准，跳过/待办用例一律阻断）。v1.0.0 起按职责拆成 5 个独立包：DSH 专属插件保留 `dsh-graph`，跨宿主产物统一命名为 `goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`，打包层只从 `dist/` 组装，每包文件集由模块图推导并附独立安装指南，同时提供 Claude Code / Codex / OpenCode 三宿主插件定义。详见 [docs/multi-package-design.md](docs/multi-package-design.md)。
+- **零配置 stdio MCP 与独立本地服务**：新增 `goal-graph mcp` 零配置 stdio 入口，供 Claude Code / Codex / OpenCode 打开工作区即用（默认开启 38 个读写工具、`--read-only` 切回 11 只读工具），并按工作区以 `127.0.0.1:0` 自动分配空闲端口起/复用本地 Web 看板，通道关闭自动回收端口不留僵尸进程；显式 `goal-graph serve` 仍保持单进程 Web 页面、Web API 与 localhost HTTP MCP（只绑数值回环、CSPRNG 0600 凭据、默认只读、按需 `--allow-write` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管身份/执行派发在所有模式下**始终 fail-closed**，仍须人在本地看板完成。
+- **大看板 `status` 提速**：引入事件流增量索引，首次运行后 18750 事件看板的中位耗时由约 179ms 降至约 89ms；索引以文件大小、inode 与头部指纹三重校验，截断/改写/替换一律回退全量校验并给出可读告警，绝不返回错误计数。首次运行或缓存被清后仍走一次全量（已如实披露）。
+- **宿主支持面收窄到 DSH `>=0.2.2-rc.3 <0.2.3-0`**：删除仅为更早宿主保留的兼容分支（旧 `startContinuable`、provider `list()` 枚举、嵌套 activation spec、`interruptByParent`、`listChildren`、`agents.isOwnedBy`、客户端 `snap.current` / `sessions.open` 回退等）。**低于该版本的宿主将无法安装**，本版不提供版本豁免；升级步骤与影响面见 `docs/host-compat-v0.25.0.md`。仍保留 fail-closed 归属裁决、数据与配置迁移、以及当前/未来宿主所需路径。
+- **测试分层与执行成本治理**：把测试按日常回归梯度分为 `shakedown ⊊ integration ⊊ full ⊊ everything` 四层（日常层约 49s，全量约 96s），安全/鉴权/隔离/门禁自证类测试强制留在日常层；性能与反向对照测试单列标签按需执行。发布门禁仍是无参全量，快层不能替代。
 
 ## v0.24.0 — 2026-11-04
 

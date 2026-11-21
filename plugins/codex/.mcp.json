@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "goal-graph": {
+      "type": "stdio",
+      "command": "goal-graph",
+      "args": ["mcp"]
+    }
+  }
+}

@@ -12,25 +12,20 @@
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/node/v/dsh-graph?style=flat-square" alt="node engine"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://img.shields.io/badge/awesome--dsh--plugin-listed-2f6feb?style=flat-square" alt="awesome-dsh-plugin listed"></a>
   <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license MIT"></a>
-  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
+  <a href="https://github.com/miuzel/dsh-graph/blob/main/dsh-graph-host/package.json"><img src="https://img.shields.io/badge/DSH-%3E%3D0.2.2--rc.3%20%3C0.2.3--0-2f6feb?style=flat-square" alt="DSH host range"></a>
 </p>
 
-**当前版本 v0.24.1** —— npm 包名 `dsh-graph`，一个包同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）与内嵌 DSH Web 的二维泳道看板。
+**当前版本 v1.0.0** —— DSH 插件本体 npm 包名 `dsh-graph`，同时提供面向 Agent 的 53 个 `graph_*` 工具（含 `/api/dsh-graph*` REST 端点）、内嵌 DSH Web 的二维泳道看板，以及跨宿主独立的 `goal-graph` 命令行与本地服务。
 
-**最新亮点（v0.24.1）**
+**最新亮点（v1.0.0）**
 
-- **修复在 DSH 0.2.2-rc.3 上完全无法派发**：新版宿主移除了 subagent provider 枚举接口，旧探测把「查不到」误判成「没注册 provider」；现已改用具名查询，并同时兼容 `0.2.2-rc.1`。
-- **修复新版宿主上子代理启动失败**：适配激活参数结构变化，派发可正常创建子代理。
-- **恢复被新版宿主删除的中断 / 子级目录 / 归属判定**：改走官方替代接口，缺能力时明确拒绝，不再「不报错但能力静默消失」。
-- **逐项兼容结论可查**：见 `docs/g624-host-compatibility.md`（未真机演练的项如实标注，不当作通过）。
-
-**v0.24.0 亮点**
-
-- **专家子代理可承接新目标**：`graph_start_attempt` 支持把**空闲**专家子代理（如 Agent Teams 成员）带上下文接到另一个目标上，免去重建与重读；运行中的一律拒绝，同一专家不会被两个未交付目标同时占用。
-- **关照唤醒不再连续打扰**：多个子代理的关照到期时间相近时合并为一次唤醒批量投递，不再隔几十秒连续叫醒主管；先到期任务最多顺延一个合并窗口。
-- **关照纪律不再重复注入**：唤醒正文改为「首次全量、后续精简」，多目标巡检时省下的篇幅随目标数放大（10 目标约省 85%）；精简版仍保留判据定义与两条防误判纪律，可用 `supervisor.care_wake_compact: false` 一键退回旧行为。
-- **支持 DSH 0.2.2 宿主**：声明范围调整为 `>=0.1.5-rc.2 <0.2.3-0`，并在 `0.2.2-rc.1` 上完成安装、启动与看板读写验证。
-- **测试基线恢复全绿**：修复真实宿主测试夹具对新宿主的适配，全量自证由 142 例漂移失败恢复为 2920+ 全绿。
+- **命令行工具 `goal-graph` 与零配置 stdio MCP**：`info` / `status` / `goal` / `version` 只读查询，`sync` 投影常驻事实与目标概览到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段，`claim` 认领目标并注入判据，`submit` 跑全量自检后把成果闭环到看板；新增 `goal-graph mcp` 零配置 stdio 入口，供 Claude Code / Codex / OpenCode 开箱即用（默认 38 个执行类读写工具、`--read-only` 切回 11 只读工具，并按工作区以 `127.0.0.1:0` 自动起/复用本地 Web 看板、退出自动回收）。
+- **独立本地服务**：`goal-graph serve` 在同一进程提供 Web 页面、Web API 与显式 HTTP localhost MCP 端点，只绑定数值回环，令牌由系统 CSPRNG 生成（≥256 位、文件 0600）。**默认只读**：MCP 只注册只读查询，写工具根本不注册；需要显式 HTTP 写模式时由服务端 `serve --allow-write` 开启（固定 actor `mcp:local-service`，开关状态见 `serve status` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管/派发在 stdio 与 HTTP 下**永远** fail-closed，仍需人在本地看板完成。详见 [docs/g632-write-mode-and-custom-root.md](docs/g632-write-mode-and-custom-root.md)。
+- **核心资料目录名可按项目自定义**：默认仍是 `.dsh-graph`（零迁移）；插件用既有 `config.root`、CLI 用 `--graph-dir-name`、服务用 `serve init --graph-dir-name` 指向自定义名（如 `board-a`、`boards/main`）。自定义名只接受工作区内规整相对路径，`..` / 绝对路径一律拒绝；worktree 归属与跨看板隔离不受影响。
+- **五包拆分发布**：v1.0.0 起按职责拆成 5 个独立包（DSH 插件本体 `dsh-graph` + 跨宿主 `goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`），由 `scripts/pack-packages.mjs` 从 `dist/` 组装并产出 tarball；每包带独立安装指南，详见 [docs/multi-package-design.md](docs/multi-package-design.md)。
+- **大看板 `status` 提速约 2 倍**：事件流增量索引让 18750 事件看板的中位耗时从约 179ms 降到约 89ms；索引以大小 + inode + 头部指纹三重校验，截断/改写/替换一律回退全量并告警，绝不返回错误计数。
+- **宿主支持面收窄**：`engines.dsh` 与 peer 一并改为 `>=0.2.2-rc.3 <0.2.3-0`，删除仅为更早宿主保留的兼容分支。**`0.2.2-rc.1` / `rc.2` 及更早版本将无法安装**，本版不提供版本豁免；升级说明见 [docs/host-compat-v0.25.0.md](docs/host-compat-v0.25.0.md)。
+- **测试分层**：日常回归层（`shakedown`，约 49s）⊊ `integration` ⊊ `full` ⊊ `everything`（全量约 96s）；安全/鉴权/隔离/门禁自证类测试强制留在日常层。发布门禁仍是无参全量。
 
 变更史见 [CHANGELOG.md](https://github.com/miuzel/dsh-graph/blob/main/CHANGELOG.md)。
 
@@ -38,9 +33,9 @@
 
 | 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；H 系列共享探针在本版全绿） |
-| 原生 Windows | ✅ **本版已实测通过（2026-11-02，win32/x64 + Node v24.21.0，宿主 `0.2.1-rc.5`，通过 22 / 失败 0 / 告警 0）**：详见 [platform-gate §7.13 回填表](docs/platform-gate.md) —— T1 静态/台账（67 项 268 处命中未登记 0）/ 派发可用（零硬编码 shell 名）/ H 组合探针（H1–H6 除 H3 外全绿）全部通过；T3 看板文件系统生命周期 32 步盘面断言全通过；T4/T5 实例启动就绪与 REST 鉴权换票冒烟通过。 |
-| macOS | ⏳ **本版未验证**：`v0.23.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以[平台门禁](docs/platform-gate.md) §7 回填表（不随包发布）为准。历史记录见 §7.4 / §7.7，只覆盖各自版本的产品代码。 |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 3332/3332 fail 0；已在 DSH `0.2.2-rc.5` 上完成浏览器端到端与 Claude Code stdio MCP 实机验证） |
+| macOS | ✅ **已实测通过（2026-11-21，原生 macOS 真机）**：`dsh-graph-1.0.0.tgz` 实机安装通过，`win-smoke-test.mjs --tarball`（T1–T5）与 `platform-smoke-test.mjs --skip-build --tarball`（P1–P3 + T1–T5）均 PASS（未跑依赖源码构建的 P4–P6，见 [platform-gate §7.14](docs/platform-gate.md)） |
+| 原生 Windows | ⚠️ **部分实测（2026-11-21）**：原生 Windows DSH Desktop 实机安装通过、未见严重缺陷；本版尚未在原生 Windows 跑 `win-smoke-test.mjs` 完整 T1–T5 脚本（跨平台 T1 静态/台账 86 项 296 处已全绿；上一次完整 T1–T5 历史记录为 2026-11-02 `v0.23.0`，见 [platform-gate §7.13 / §7.14](docs/platform-gate.md)） |
 
 三平台共用同一安装包。已知限制：① macOS 默认文件系统 APFS 大小写不敏感——仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`，由 `process.cwd()` 推导的路径不受影响。
 
@@ -48,7 +43,7 @@
 
 Web 宿主里的 `/api/dsh-graph/**` 走**单一受保护入口**：只注册一条 `prefix` 路由，每请求先由宿主公开的 `connection.admit` 鉴权、再判定 owner，之后才分发业务。未通过 ⇒ `401`（匿名/凭证无效）、`403`（信任边界或非 owner）、**`503`**（宿主没有 `admit` 等能力不可判定情形，fail-closed）。该入口**只影响 HTTP**：`graph_*` 工具面不经过它。
 
-鉴权行为只在 DSH `0.2.1-rc.2` 实测；`engines.dsh` 声明的其它宿主版本未逐版验证。完整口径见 [dsh-graph-host/README.md](dsh-graph-host/README.md#http-鉴权web-看板的-rest-入口)。
+鉴权行为只在 DSH `0.2.1-rc.2`（历史轮次）实测；`0.1.x`、`0.2.0`、`0.2.1` 各版本已不在支持范围，当前声明范围 `>=0.2.2-rc.3` 上的鉴权未逐版验证。完整口径见 [dsh-graph-host/README.md](dsh-graph-host/README.md#http-鉴权web-看板的-rest-入口)。
 
 ## 安装
 
@@ -57,6 +52,30 @@ dsh plugin --profile <name> add dsh-graph
 ```
 
 需要 Node ≥ 22。依赖说明、宿主兼容范围（`engines.dsh` 声明与实测宿主）、侧边栏用法、数据目录等完整内容，见 **[dsh-graph-host/README.md](dsh-graph-host/README.md)**（即 npm 包内 README）。升级宿主后若 Web 看板半边不激活（`web boot: … did not activate`），见该 README 的「[升级残留自检与清理](dsh-graph-host/README.md#升级残留自检与清理)」。
+
+## 命令行（goal-graph）
+
+包内提供轻量 CLI（独立包 `goal-graph-cli`，不依赖常驻服务、网络或第三方 CLI 框架），可直接读写工作区的 `.dsh-graph/`：
+
+```sh
+npx --package goal-graph-cli goal-graph info          # 环境自检：Node 版本 / graph root / 初始化状态 / 关键文件可读性
+npx --package goal-graph-cli goal-graph status        # 目标数、事件数、最近事件、规则库版本
+npx --package goal-graph-cli goal-graph goal list     # 列出目标（--all 含归档）
+npx --package goal-graph-cli goal-graph goal show g-1 # 单个目标（元信息 + 正文）
+npx --package goal-graph-cli goal-graph claim g-1     # 认领目标：推进到 in_progress 并输出「目标 + 判据 + 边界」任务单
+npx --package goal-graph-cli goal-graph mcp           # 零配置 stdio MCP（供 Claude Code / Codex / OpenCode 自动拉起）
+```
+
+> 除 `sync`（投影上下文）与 `claim`（认领目标）外，其余命令全部只读。`claim` 是**唯一会写看板**的命令：
+> 它经 core 状态机把 `planning`/`collecting`/`ready` 推进到 `in_progress`（事件先行），
+> 然后把轻量任务单打到 stdout；已是 `in_progress` 时幂等成功（不写事件）。
+
+> `npx --package goal-graph-cli goal-graph …` 是**不预先安装**的写法（临时拉包后执行其 `bin` 条目）；
+> 已装进 `devDependencies` 时直接用 `npx goal-graph …` 或 `./node_modules/.bin/goal-graph …`。
+> 本 CLI 的实测平台为 **Linux / WSL2**；**Windows / macOS 未验证**（未做真机兼容性测试，
+> 尤其未经 Windows 上 `npx` 与路径分隔符链路验证）。
+
+用法、退出码、路径定位规则与冷启动实测口径见 **[docs/dsh-graph-guide.md](docs/dsh-graph-guide.md)**。
 
 ## 核心概念
 

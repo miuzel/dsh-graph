@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "goal-graph": {
+        "type": "local",
+        "command": ["goal-graph", "mcp"]
+      }
+    }
+  }
+}

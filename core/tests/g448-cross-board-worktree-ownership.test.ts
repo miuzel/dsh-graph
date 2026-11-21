@@ -48,6 +48,8 @@ function repo(): string {
   writeFileSync(join(dir, ".gitignore"), ".worktrees/\n.dsh-graph/\n");
   git(dir, "add", "-A");
   git(dir, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init");
+  // 真实入口的 v1.0 目标按版本分支解析基线；夹具显式提供该分支。
+  git(dir, "branch", "v1.0-test", "HEAD");
   return dir;
 }
 function boardDir(ws: string, name: string): string {
@@ -242,7 +244,7 @@ function boardHarness(ws: string, root: string) {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             spawnedAt.push({ label: opts.label, trees: registeredTrees(ws) });
             return { childId: "child-" + Math.random().toString(36).slice(2, 8), parentSessionId: "sess-super" };
           },

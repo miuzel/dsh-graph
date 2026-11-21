@@ -91,6 +91,7 @@ function createHarness(opts: { policy?: string; regions?: string[]; childQueue?:
   writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n", "utf8");
   execFileSync("git", ["add", "."], { cwd: ws });
   execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+  execFileSync("git", ["branch", "v-test-test"], { cwd: ws });
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws }).toString().trim();
 
   const root = join(ws, ".dsh-graph");
@@ -124,7 +125,7 @@ function createHarness(opts: { policy?: string; regions?: string[]; childQueue?:
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (o: any) => {
+          startActivation: async (o: any) => {
             capturedRequests.push(o);
             if (spawnFail.value) throw new Error(spawnFail.value);
             const id = childQueue.shift() ?? `child-auto-${++auto}`;
@@ -439,7 +440,7 @@ test("g-436 判据3：注入材料只含目标定义/判据/候选+基线/范围
   const h = createHarness();
   const fx = await prepareDispatched(h);
   await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: h.head, baseline_commit: h.head });
-  const prompt = String(h.capturedRequests[1].request.prompt[0].text);
+  const prompt = String(h.capturedRequests[1].prompt[0].text);
 
   // 必须注入的材料
   assert.ok(prompt.includes(h.head), "候选 SHA 必须注入");
@@ -468,8 +469,14 @@ test("g-436 判据3：注入材料只含目标定义/判据/候选+基线/范围
   assert.ok(!prompt.includes("## 通用执行纪律"), "不得复用执行 attempt 的 prompt 骨架（那是作者上下文通道）");
   assert.ok(!prompt.includes("【强制 worktree 隔离】"), "不得复用执行 prompt 的隔离段落");
   // 不是作者上下文的 fork：评审请求不带父对话续轮载荷（只有 prompt + parent + toolFilter）
-  const req = h.capturedRequests[1].request;
-  assert.deepEqual(Object.keys(req).sort(), ["parent", "prompt", "toolFilter"], "评审请求载荷面固定（无 fork/无作者会话续写）");
+  const req = h.capturedRequests[1]; // g-627：扁平 spec（prompt/toolFilter 在顶层）
+  // g-627：宿主 startActivation 的 spec 恒定带 provider/label/signal/delivery（g-624 起显式 delivery），
+  // 这些是**派发控制字段**，不属于「作者上下文」载荷面；此处核对的是任务载荷本身。
+  assert.deepEqual(
+    Object.keys(req).sort(),
+    ["delivery", "label", "parent", "prompt", "provider", "signal", "toolFilter"],
+    "评审请求载荷面固定（无 fork/无作者会话续写）",
+  );
 
   // reviewer 工具作用域：只读，且不含任何管理写工具
   const allow: string[] = req.toolFilter?.allow ?? [];
@@ -1070,7 +1077,7 @@ test("g-436 F3：评审 prompt 对 goal.md 的非审查材料显式划界（评�
   await callTool(h, "graph_add_comment", { goal: fx.goal, text: "COMMENT-SECTION-SENTINEL-77" });
   await callTool(h, "graph_set_directive", { goal: fx.goal, directive: "DIRECTIVE-SECTION-SENTINEL-88" });
   await callTool(h, "graph_start_review", { goal: fx.goal, attempt: fx.attempt, candidate_commit: h.head });
-  const prompt = String(h.capturedRequests[1].request.prompt[0].text);
+  const prompt = String(h.capturedRequests[1].prompt[0].text);
 
   // 方案②：保留路径（供按需复核定义），但必须明文划界
   assert.ok(prompt.includes(fx.goalFile.replace(`${h.ws}/`, "")), "仍给出目标定义文件路径（按需复核定义/判据）");

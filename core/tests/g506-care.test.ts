@@ -2079,22 +2079,15 @@ test("g506 B9 缺 runMaintenance：不判 capable、零 send/事件/计数、tim
   const scheduler = fakeScheduler(clock);
   const payload = boardPayload([{ id: "goal-b9", status: "in_progress", attempt_started_at: new Date(NOW - 40_000).toISOString(), attempt_binding: { attempt: "att-001", child_id: child.id, binding_version: 1, parent_session_id: sup.id } }]);
   let sendCount = 0;
-  // 真实公开宿主服务代理：session/status/send 都在，唯独暂时没有 runMaintenance。
-  const proxySup: any = {
-    session: sup.session,
-    id: sup.id,
-    send: (...args: any[]) => { sendCount += 1; return (sup.send as any)(...args); },
-  };
-  Object.defineProperty(proxySup, "status", { get: () => sup.status });
-  // rc.3 的 AgentRegistry 已无 `isOwnedBy`（g-625）：夹具同样不伪造旧 API，
-  // 归属走真实的 `subagents.rootOf` + 公开 parentSession（g-626 回退覆盖 proxy 对象身份不符）。
-  const agentsProxy: any = {
-    get: (id: string) => (id === sup.id ? proxySup : host.reg.get(id)),
-    list: (...args: any[]) => (host.reg.list as any)(...args),
-  };
+  // 保留 live Agent 的真实身份，避免以历史 parentSession 冒充授权。
+  const proxySup: any = sup;
+  const originalSend = sup.send;
+  const originalMaintenance = sup.runMaintenance;
+  proxySup.send = (...args: any[]) => { sendCount += 1; return (originalSend as any).apply(sup, args); };
+  proxySup.runMaintenance = undefined;
   let configReads = 0;
   const { runtime, events } = await makeCareRuntime(host, {
-    clock, scheduler, payload, supervisorId: sup.id, agents: agentsProxy,
+    clock, scheduler, payload, supervisorId: sup.id,
     project: { supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } },
     readProjectConfigFn: () => { configReads += 1; return { supervisor: { care: true, care_threshold_seconds: 30, care_recheck_seconds: 30 } }; },
   });
@@ -2124,7 +2117,7 @@ test("g506 B9 缺 runMaintenance：不判 capable、零 send/事件/计数、tim
     assert.equal(legacyWakeOnly, true);
     assert.notEqual(legacyWakeOnly, st.capable.available.wake_dispatch, "若去掉 runMaintenance 检查，本断言必红");
     // 动态补回公开 runMaintenance：原本已 due 的任务只应产生一次正常提醒。
-    proxySup.runMaintenance = sup.runMaintenance.bind(sup);
+    proxySup.runMaintenance = originalMaintenance;
     await scheduler.advanceTo(clock.now() + 31_000);
     assert.equal(sendCount, 1, "能力恢复后只触发一次");
     assert.equal(events.filter((e) => e.event === "care.inspection").length, 1);

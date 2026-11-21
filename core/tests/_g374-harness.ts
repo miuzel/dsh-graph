@@ -3,6 +3,7 @@
 // 为什么共用：F5（LLM 摘要通道 / 缓存 / 降级 / 归因红线）、F6（报文骨架）、F7（输入预算）三套断言
 // 必须落在**同一个**宿主行为上；各写一份桩会让「归因红线」这类跨路径断言出现口径漂移。
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,13 +22,14 @@ export function createHarness() {
  *
  * 宿主 `@deepseek-ai/dsh-subagent` 在 `0.2.1-alpha.2` 把 `startContinuable` 改名为
  * `startActivation`，故派发口径必须两版可测：
- *   · `legacy`（默认，= g-374 以来的既有桩行为）：只有 `startContinuable`；
- *   · `activation`：只有 `startActivation`（**且 receipt 刻意不带 `parentSessionId`**，
- *     与真实新宿主一致 ⇒ 顺带钉住 `?? null` 兜底）；
- *   · `both`：两版同时挂着（用于断言「新名优先」）；
+ *   · `activation`（**默认**，g-627 起 = 当前支持面）：只有 `startActivation`（扁平 spec，
+ *     receipt **刻意不带 `parentSessionId`**，与真实新宿主一致 ⇒ 顺带钉住 `?? null` 兜底）；
+ *   · `legacy`：只有 `startContinuable`——只用于「低于下限宿主」的负向夹具（插件必须 fail-closed，
+ *     绝不得回退旧名）；
+ *   · `both`：两版同时挂着（用于断言旧名**绝不被调用**）；
  *   · `none`：两版皆无（用于断言 fail-closed，不得静默回退）。
  *
- * `capturedRequests` 的既有元素形状（原始 spec，`.request.prompt` / `.label` 可直接读）**逐字不变**；
+ * `capturedRequests` 的既有元素形状（原始 spec；g-627 起是**扁平** spec，`.prompt` / `.label` 直接可读）；
  * 新增的 `capturedVia` 平行记录本次实际走的是哪个方法名。
  */
 export type HarnessDispatchApi = "legacy" | "activation" | "both" | "none";
@@ -68,10 +70,11 @@ export function createHarnessWith(opts: {
   dispatchError?: unknown;
   reuse?: ReuseHarnessOptions;
   /**
-   * g-625：归属 API 形态（缺省 `legacy` = g-613 以来逐字不变）：
-   *   · `legacy`：`agents.isOwnedBy`（rc.1）；
-   *   · `rootOf`：`agents` **没有** `isOwnedBy`，只有 `subagents.rootOf` + 公开
+   * g-625 / g-627：归属 API 形态（**缺省 `rootOf`** = 当前唯一支持面）：
+   *   · `rootOf`（默认）：`agents` **没有** `isOwnedBy`，只有 `subagents.rootOf` + 公开
    *     `session.header.parentSession`（rc.3）。`rootOf` 对 `unmanaged` child 抛 UNAUTHORIZED。
+   *   · `legacy`：`agents.isOwnedBy`（rc.1 旧 API）—— 生产侧读取已在 g-627 删除，**仅**用于
+   *     「旧分支不得回潮」的负向对照（显式传入时才搭旧桩）。
    */
   ownershipApi?: "legacy" | "rootOf";
   /**
@@ -80,8 +83,16 @@ export function createHarnessWith(opts: {
    */
   childCatalog?: () => any[] | null;
 }) {
-  const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "legacy";
+  // g-627：宿主下限提到 >=0.2.2-rc.1 ⇒ 默认桩必须是**当前唯一支持面**（只有 startActivation）。
+  // 旧的 `legacy`（只有 startContinuable）不再是默认值；显式传 `"legacy"` 仍可构造「低于下限的宿主」
+  // 负向夹具（用于断言插件会 fail-closed，而不是静默回退旧名）。
+  const dispatchApi: HarnessDispatchApi = opts.dispatchApi ?? "activation";
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g374-h-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
+  writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n.worktrees/\n");
+  execFileSync("git", ["add", ".gitignore"], { cwd: ws });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "init"], { cwd: ws });
+  execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   const root = join(ws, ".dsh-graph");
   init(root);
   const capturedRequests: any[] = [];
@@ -114,7 +125,10 @@ export function createHarnessWith(opts: {
   }
   const sentMessages: Array<{ parentId: string; targetId: string; content: any[] }> = [];
   const childRegistry = opts.reuse?.childRegistry ?? null;
-  const ownershipApi = opts.ownershipApi ?? "legacy";
+  // g-627：缺省走 **rc.3 归属形态**（`rootOf`）。旧 `legacy`（`agents.isOwnedBy`）分支的生产侧读取已在
+  // g-627 删除 —— 若仍以 legacy 为缺省，用例会以为在测「归属拒绝」，实际恒为 `unknown`（静默误测）。
+  // 仅**显式**传 `ownershipApi: "legacy"` 时才搭旧桩，用于「旧分支不得回潮」的负向对照。
+  const ownershipApi = opts.ownershipApi ?? "rootOf";
   if (childRegistry) {
     service.sendMessage = async (parent: any, targetId: string, content: any[]) => {
       sentMessages.push({ parentId: String(parent?.id ?? ""), targetId: String(targetId), content });
@@ -172,6 +186,7 @@ export function createHarnessWith(opts: {
   const ctx: any = {
     get: (name: string) => {
       if (name === "sandboxPolicy") return { workspaceRoot: ws };
+      if (name === "workingDirectory") return { get: () => ws };
       if (name === "sessionQuery" && sessionQuery) return sessionQuery;
       if (name === "agents" && childRegistry && ownershipApi === "rootOf") {
         return {
@@ -189,7 +204,7 @@ export function createHarnessWith(opts: {
         return {
           get: (id: string) => {
             const row = childRegistry[String(id)];
-            return row ? { id, status: row.status ?? "idle" } : undefined;
+            return row ? { id, session: { id }, status: row.status ?? "idle" } : undefined;
           },
           isOwnedBy: (id: string, _agent: any) => {
             const row = childRegistry[String(id)];
@@ -234,6 +249,8 @@ export function createHarnessWith(opts: {
   const labels = () => capturedRequests.map((r) => r?.label ?? "");
   return {
     ws, root, toolsByName, routes, call, emit, labels, capturedRequests, capturedVia, execContext, handlers,
+    /** g-627：宿主 ctx（`get(name)` 返回本夹具的服务桩），供直接调用收口 helper 的负向对照使用。 */
+    ctx,
     /** g-613：复用路径投递到既有子代理的消息（parent/target/正文）。 */
     sentMessages,
     /** g-625：rc.3 子级目录观察统计（observe 次数 / dispose 次数；缺省 null = 未提供该服务）。 */

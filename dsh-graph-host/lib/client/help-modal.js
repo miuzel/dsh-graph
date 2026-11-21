@@ -18,10 +18,11 @@
       { key: "faq", labelKey: "help.tab.faq" },
       { key: "design", labelKey: "help.tab.design" },
     ];
-    // Graph 页签：与 g-462 逐字一致的两张**随包发布**交互图（白名单同源，见宿主 DESIGN_DIAGRAM_FILES）。
+    // Graph 页签：随包发布的三张交互图（白名单同源，见宿主 DESIGN_DIAGRAM_FILES）。
     const DESIGN_DIAGRAM_TABS = [
       { key: "lifecycle", file: "design-philosophy.lifecycle.html", labelKey: "design.tab.lifecycle" },
       { key: "workflow", file: "design-philosophy.workflow.html", labelKey: "design.tab.workflow" },
+      { key: "architecture", file: "design-philosophy.architecture.html", labelKey: "design.tab.architecture" },
     ];
     const HELP_ASSET_URL = "/api/dsh-graph/help/asset/";
     const HELP_CATALOG_URL = "/api/dsh-graph/help/catalog";

@@ -52,6 +52,7 @@ function createHarness({ gitRepo = false } = {}) {
     writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n", "utf8");
     execFileSync("git", ["add", "."], { cwd: ws });
     execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+    execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   }
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -70,7 +71,7 @@ function createHarness({ gitRepo = false } = {}) {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             spawnedAt.push(opts.label);
             return { childId: "child-" + Math.random().toString(36).slice(2, 8), parentSessionId: "sess-super" };
           },

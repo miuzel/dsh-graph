@@ -74,7 +74,20 @@ const FALLBACK_RE = /退回两次 rename/;
  *  以 cd42089 的**实测**随包文件数 84（含上述全部项与 diagrams/lib 等）为基线 ⇒ 84 + 2 = 86）。
  *  刻意用**精确计数**而不是派生：派生需要在测试里再持有一份 build.sh 的资产清单（第二副本），
  *  与本包「单一真源」口径冲突；清单漂移由本常量的精确比较如实判红。 */
-const DIST_FILE_COUNT = 86;
+// g-393: two compiled hostless domain modules; keep the exact count fail-closed.
+// g-314: dsh-graph 入口 dist/bin/dsh-graph.mjs（+1）与编译核心 dist/core/cli/*.js（args/diagnostics/
+//   health/locate/main 共 +5）⇒ 88 + 6 = 94。
+// g-315: dsh-graph sync 投影模块 dist/core/cli/sync.js（+1）⇒ 94 + 1 = 95。
+// g-316: dsh-graph claim 认领模块 dist/core/cli/claim.js（+1）⇒ 95 + 1 = 96。
+// g-317: dsh-graph submit 提交模块 dist/core/cli/submit.js（+1）⇒ 96 + 1 = 97。
+// g-623: 独立本地服务编译产物 dist/core/service/*.js（policy/credentials/config/queries/web-app/
+//   mcp/server/serve 共 +8）⇒ 97 + 8 = 105。
+// g-630: 事件流增量索引 dist/core/cli/events-index.js（+1）与目标文件轻量叶子模块
+//   dist/core/cli/goal-files.js（+1）⇒ 105 + 2 = 107。
+// g-632: MCP 写模式白名单 dist/core/service/write-commands.js（+1）⇒ 107 + 1 = 108。
+// g-637: 零配置 stdio MCP + 按工作区自动起本地 Web 服务 dist/core/service/stdio-mcp.js（+1）⇒ 108 + 1 = 109。
+// v1.0.0 architecture diagram: dsh-graph-host/diagrams/design-philosophy.architecture.{html,json,png}（+3）⇒ 109 + 3 = 112。
+const DIST_FILE_COUNT = 112;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）
@@ -97,7 +110,13 @@ function makeSandbox(): Sandbox {
   cpSync(join(repoRoot, "dsh-graph-host"), join(repo, "dsh-graph-host"), { recursive: true });
   // g-496：公共层提示词资产在仓库根 `prompts/`（构建合并两层的源之一），沙箱须同构镜像。
   cpSync(join(repoRoot, "prompts"), join(repo, "prompts"), { recursive: true });
+  // g-314：dsh-graph 入口源码（bin/）与核心子目录（core/cli/）同为构建必需源目录，须同构镜像。
+  cpSync(join(repoRoot, "bin"), join(repo, "bin"), { recursive: true });
   mkdirSync(join(repo, "core"), { recursive: true });
+  cpSync(join(repoRoot, "core", "domain"), join(repo, "core", "domain"), { recursive: true });
+  cpSync(join(repoRoot, "core", "cli"), join(repo, "core", "cli"), { recursive: true });
+  // g-623：独立本地服务（core/service/*.ts → dist/core/service/*.js）同样是构建必需源目录。
+  cpSync(join(repoRoot, "core", "service"), join(repo, "core", "service"), { recursive: true });
   for (const name of readdirSync(join(repoRoot, "core"))) {
     if (name.endsWith(".ts")) cpSync(join(repoRoot, "core", name), join(repo, "core", name));
   }
@@ -227,6 +246,9 @@ test("g-359 判据 3：退化发布路径（无 mv --exchange 时两次 rename�
     );
     const normalManifest = treeManifest(distDir);
     const normalFiles = listFilesRel(distDir);
+    for (const name of ["model", "machine"]) {
+      assert.ok(normalFiles.includes(`core/domain/${name}.js`), `compiled domain module missing: ${name}`);
+    }
     assert.equal(
       normalFiles.length,
       DIST_FILE_COUNT,

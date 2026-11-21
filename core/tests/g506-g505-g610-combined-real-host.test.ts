@@ -29,6 +29,10 @@ import { dirname, join, sep } from "node:path";
 
 import {
   CRITERIA_VERIFIED_MARK,
+  bindAttemptChild,
+  setGoalDescription,
+  startAttempt,
+  transition,
   closeWatchers,
   createGoal,
   findGoalFile,
@@ -147,11 +151,13 @@ function makeCare(host: any, opts: {
   ws: string;
   idPrefix: string;
   projectConfig?: (root: string) => any;
+  appendEventFn?: (root: string, ev: any) => any;
+  agents?: any;
 }) {
   const runtime = createCareRuntime({
     ctx: {
       on: (name: string, h: any) => host.ctx.on(name, h),
-      get: (name: string) => (name === "agents" ? host.reg : name === "llm" ? host.llm : name === "subagents" ? host.subagents : undefined),
+      get: (name: string) => (name === "agents" ? (opts.agents ?? host.reg) : name === "llm" ? host.llm : name === "subagents" ? host.subagents : undefined),
     },
     readGlobal: () => ({ enabled: true, thresholdSeconds: null, recheckSeconds: null, malformed: false, available: true, raw: "on" }),
     resolveRoot: (ws: string) => join(ws, ".dsh-graph"),
@@ -166,7 +172,7 @@ function makeCare(host: any, opts: {
     now: opts.clock.now,
     setTimeoutFn: opts.scheduler.setTimeoutFn,
     clearTimeoutFn: opts.scheduler.clearTimeoutFn,
-    appendEventFn: (root: string, ev: any) => appendEvent(root, ev),
+    appendEventFn: opts.appendEventFn ?? ((root: string, ev: any) => appendEvent(root, ev)),
     makeInspectionId: (() => { let i = 0; return () => `${opts.idPrefix}-${++i}`; })(),
     log: () => {},
   });
@@ -193,6 +199,148 @@ function makeKeep(host: any, opts: {
     setTimeoutFn: opts.scheduler.setTimeoutFn,
     clearTimeoutFn: opts.scheduler.clearTimeoutFn,
     log: () => {},
+  });
+}
+
+for (const window of ['append-eio', 'disposed', 'sampling']) {
+  for (const outcome of ['progress', 'no-progress', 'unknown']) {
+    test(`g628 ${window} persisted inspection rejects ${outcome}`, async () => {
+      const h = await makeRealHost({ relativeRoot: true, sessionQuery: true, skipApply: true });
+      const clock = fakeClock(); const scheduler = fakeScheduler(clock); const sup = h.parent;
+      const sent = trackSends(sup); let failures = 0; let unavailable = false; let sampleFailures = 0; let sampleTaskFailures = 0; let childId = '';
+      const agents = new Proxy(h.reg, { get(target, prop) {
+        if (prop === 'get') return (id: string) => { if (unavailable && id === childId) { sampleFailures++; const error = new Error('injected registry unavailable'); if (/\bsampleTasks\b/.test(error.stack ?? '')) sampleTaskFailures++; throw error; } return target.get(id); };
+        const value = Reflect.get(target, prop, target); return typeof value === 'function' ? value.bind(target) : value;
+      } });
+      let care = makeCare(h, { clock, scheduler, root: h.root, ws: h.ws, agents, idPrefix: `${window}-${outcome}`, appendEventFn: (root, ev) => {
+        if (window === 'append-eio' && ev.event === 'care.inspection.expired') { failures++; throw Object.assign(new Error('injected EIO'), { code: 'EIO' }); }
+        return appendEvent(root, ev);
+      } });
+      let restarted: any;
+      try {
+        assert.equal(JSON.parse(readFileSync(join(h.modules.S, '..', '..', 'package.json'), 'utf8')).version, '0.2.2-rc.3');
+        const goal = makeGoalIn(h.root, `window ${window} ${outcome}`, 'v1.0');
+        setGoalDescription(h.root, goal, 'real managed child binding', 'human:gui');
+        transition(h.root, goal, 'ready', { actor: 'human:gui' });
+        transition(h.root, goal, 'in_progress', { actor: 'human:gui' });
+        const attempt = startAttempt(h.root, goal, { executor: 'spawn', actor: 'human:gui' });
+        h.fake.hold('fixture child');
+        const spawned = await h.startChild('window');
+        const d = { child_id: spawned.childId, attempt }; childId = d.child_id;
+        bindAttemptChild(h.root, goal, attempt, d.child_id, 'human:gui', sup.id);
+        await waitFor(() => h.childLive(d.child_id) === 'running', 'managed child running');
+        care.start(); care.armForRoot(h.root); await runTurn(h, sup, 'sample window child');
+        const initial: any = care.statusFor(h.root);
+        await scheduler.advanceTo(Number(initial.next_due_at) + 1000);
+        const inspection = readEvents(h.root).filter((e: any) => e.event === 'care.inspection').at(-1)?.details?.inspection;
+        assert.ok(inspection); await waitFor(() => sup.status === 'idle', 'inspection delivered');
+        const lastSnapshot = () => readEvents(h.root).filter((e: any) => e.details?.care_state).at(-1)?.details?.care_state;
+        assert.equal(lastSnapshot().root, h.root);
+        const issued = lastSnapshot().inspections.find((i: any) => i.id === inspection);
+        assert.equal(issued.status, 'queued');
+        assert.deepEqual(issued.targets.map((t: any) => [t.goal, t.attempt, t.child]), [[goal, attempt, d.child_id]]);
+        if (window === 'disposed') care.dispose();
+        if (window === 'sampling') unavailable = true;
+        h.fake.releaseAll(); await waitFor(() => h.childLive(d.child_id) === 'gone', 'child gone');
+        if (window === 'append-eio') {
+          await waitFor(() => failures > 0, 'expiry EIO injection');
+          assert.equal(care.entryOfRoot(h.root).inspections.get(inspection).status, 'expired');
+          const lastCare = readEvents(h.root).filter((e: any) => e.details?.care_state).at(-1);
+          assert.equal(lastCare.event, 'care.run');
+          assert.equal(lastCare.details.care_state.inspections.find((i: any) => i.id === inspection).status, 'claimed');
+          assert.equal(readEvents(h.root).filter((e: any) => e.event === 'care.inspection.expired').length, 0);
+          care.dispose();
+        }
+        if (window === 'sampling') {
+          assert.ok(sampleFailures > 0, 'registry lookup must fail during natural child termination');
+          care.statusFor(h.root);
+          assert.ok(sampleTaskFailures > 0, 'sampleTasks registry_error branch must actually be reached');
+          unavailable = false;
+          care.dispose();
+        }
+        assert.equal(lastSnapshot().inspections.find((i: any) => i.id === inspection).status, window === 'disposed' ? 'queued' : 'claimed');
+        await h.reg.resume({ resumeSessionId: d.child_id, agentOptions: { provider: 'fake', model: 'fake-model' } });
+        const resumed = h.reg.get(d.child_id);
+        assert.throws(() => h.subagents.rootOf(resumed), /active runtime owner|UNAUTHORIZED/);
+        h.fake.hold('WINDOW-RESUME');
+        resumed.send(h.modules.llm.createUserMessage({ content: [{ type: 'text', text: 'WINDOW-RESUME' }], source: { kind: 'user' } }), 'next-turn', true);
+        await waitFor(() => resumed.status === 'running', 'resumed running');
+        restarted = makeCare(h, { clock, scheduler, root: h.root, ws: h.ws, idPrefix: 'restart' });
+        restarted.start(); restarted.armForRoot(h.root);
+        const recovered = restarted.entryOfRoot(h.root).inspections.get(inspection);
+        assert.ok(recovered, 'reconstructed runtime must retain the actual inspection');
+        // loadCareState normalizes persisted queued to delivered on recovery.
+        assert.equal(recovered.status, window === 'disposed' ? 'delivered' : 'claimed');
+        const before = structuredClone(restarted.statusFor(h.root));
+        const entry = restarted.entryOfRoot(h.root);
+        const outcomeState = () => structuredClone({ tasks: [...entry.tasks.values()], group: entry.group, lastOutcome: entry.lastOutcome, inspection: entry.inspections.get(inspection) });
+        const beforeOutcome = outcomeState();
+        const events = readEvents(h.root).filter((e: any) => e.event === 'care.outcome'); const inbox = sent.length;
+        const result = restarted.submitOutcome({ root: h.root, supervisor: sup.id, inspection, goal, attempt: d.attempt, child: d.child_id, outcome, evidence: 'stale real inspection' });
+        assert.deepEqual(result, { ok: false, code: 'ownership_unknown' });
+        assert.deepEqual(restarted.statusFor(h.root), before);
+        assert.deepEqual(outcomeState(), beforeOutcome, 'outcome must not change counts, lock, budgets or inspection');
+        assert.deepEqual(readEvents(h.root).filter((e: any) => e.event === 'care.outcome'), events);
+        assert.equal(sent.length, inbox);
+      } finally { care.dispose(); restarted?.dispose(); h.fake.releaseAll(); await h.shutdown(); }
+    });
+  }
+}
+
+for (const outcome of ["progress", "no-progress", "unknown"]) {
+  test(`g628 issued inspection rejects independently resumed child: ${outcome}`, async () => {
+    const h = await makeRealHost({ relativeRoot: true, sessionQuery: true, projectYaml: "supervisor:\n  care: 'true'\n  care_threshold_seconds: 300\n  care_recheck_seconds: 300\n" });
+    const clock = fakeClock();
+    const scheduler = fakeScheduler(clock);
+    const sup = h.parent;
+    const sent = trackSends(sup);
+    const care = makeCare(h, { clock, scheduler, root: h.root, ws: h.ws, idPrefix: `stale-${outcome}` });
+    try {
+      const version = JSON.parse(readFileSync(join(h.modules.S, '..', '..', 'package.json'), 'utf8')).version;
+      assert.equal(version, '0.2.2-rc.3');
+      await runTool(h, 'graph_claim_supervisor', {}, sup);
+      const goal = makeGoalIn(h.root, `stale ${outcome}`, 'v1.0');
+      h.fake.hold('STALE-CHILD');
+      const dispatched: any = await runTool(h, 'graph_start_attempt', { goal, attempt_brief: 'STALE-CHILD', worktree: false }, sup);
+      await waitFor(() => h.childLive(dispatched.child_id) === 'running', 'managed child running');
+      care.start(); care.armForRoot(h.root);
+      await runTurn(h, sup, 'sample managed child');
+      const initial: any = care.statusFor(h.root);
+      assert.equal(initial.tasks[0].child, dispatched.child_id);
+      await scheduler.advanceTo(Number(initial.next_due_at) + 1000);
+      const inspection = readEvents(h.root).filter((e: any) => e.event === 'care.inspection').at(-1)?.details?.inspection;
+      assert.ok(inspection, 'inspection must actually be issued');
+      await waitFor(() => sup.status === 'idle', 'inspection delivered');
+      h.fake.releaseAll();
+      await waitFor(() => h.childLive(dispatched.child_id) === 'gone', 'managed registry entry gone');
+      await waitFor(() => readEvents(h.root).some((e: any) => e.event === 'attempt.results_written' && e.details?.attempt === dispatched.attempt), 'natural completion persisted');
+      const naturalBinding = goalDetail(h.root, goal).attempts.find((a: any) => a.id === dispatched.attempt);
+      assert.equal(naturalBinding.child_id, dispatched.child_id, 'natural completion retains disk binding');
+      assert.equal(naturalBinding.parent_session_id, sup.id);
+      await h.reg.resume({ resumeSessionId: dispatched.child_id, agentOptions: { provider: 'fake', model: 'fake-model' } });
+      const resumed = h.reg.get(dispatched.child_id);
+      assert.equal(resumed.session.header.parentSession, sup.id);
+      assert.throws(() => h.subagents.rootOf(resumed), /active runtime owner|UNAUTHORIZED/);
+      h.fake.hold('RESUMED-HOLD');
+      resumed.send(h.modules.llm.createUserMessage({ content: [{ type: 'text', text: 'RESUMED-HOLD' }], source: { kind: 'user' } }), 'next-turn', true);
+      await waitFor(() => resumed.status === 'running', 'resumed child running');
+      assert.equal(goalDetail(h.root, goal).attempts.find((a: any) => a.id === dispatched.attempt).child_id, dispatched.child_id, 'independent resume retains natural binding');
+      assert.throws(() => h.subagents.rootOf(resumed), /active runtime owner|UNAUTHORIZED/);
+      const before = structuredClone(care.statusFor(h.root));
+      const entry = care.entryOfRoot(h.root);
+      const oldInspection = structuredClone(entry.inspections.get(inspection));
+      assert.ok(oldInspection, 'issued inspection must remain in the actual runtime');
+      // This observation follows independent resume; it does not establish when expiry persisted.
+      assert.equal(oldInspection.status, 'expired');
+      const events = readEvents(h.root).filter((e: any) => e.event === 'care.outcome');
+      const inbox = sent.length;
+      const result: any = care.submitOutcome({ root: h.root, supervisor: sup.id, inspection, goal, attempt: dispatched.attempt, child: dispatched.child_id, outcome, evidence: '实证旧 inspection 回传应被拒绝' });
+      assert.deepEqual(result, { ok: false, code: 'ownership_unknown' });
+      assert.deepEqual(care.statusFor(h.root), before);
+      assert.deepEqual(entry.inspections.get(inspection), oldInspection);
+      assert.deepEqual(readEvents(h.root).filter((e: any) => e.event === 'care.outcome'), events);
+      assert.equal(sent.length, inbox);
+    } finally { care.dispose(); h.fake.releaseAll(); await h.shutdown(); }
   });
 }
 

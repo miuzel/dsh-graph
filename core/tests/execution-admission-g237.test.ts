@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,6 +56,11 @@ function createHarness({
   onSpawn?: () => void;
 } = {}) {
   const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g237-ws-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ws });
+  writeFileSync(join(ws, ".gitignore"), ".dsh-graph/\n.worktrees/\n");
+  execFileSync("git", ["add", ".gitignore"], { cwd: ws });
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=t@e", "commit", "-qm", "init"], { cwd: ws });
+  execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   const root = join(ws, ".dsh-graph");
   init(root);
 
@@ -75,15 +81,17 @@ function createHarness({
           list: () => providers,
           listChildren: async () => [],
           getProvider: () => (providerHasPrepareContinuable ? { prepareContinuable: () => {} } : {}),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             capturedRequests.push(opts);
             if (spawnError) throw new Error(spawnError);
             const childId = "child-" + Math.random().toString(36).slice(2, 8);
             onSpawn?.();
             return { childId, parentSessionId: "sess-super" };
           },
-          interruptByParent: (childId: string, parentSessionId: string, mode: string) => {
-            interruptCalls.push({ childId, parentSessionId, mode });
+          // g-627：中断收口只走 rc.3 的 `interrupt(child, {kind:"ancestor", agent})`；
+          // 旧的三参 `interruptByParent` 已下线（宿主桩不再提供，若插件回退调用即未定义 ⇒ 用例必红）。
+          interrupt: (childId: string, authority: any) => {
+            interruptCalls.push({ childId, parentSessionId: authority?.agent?.session?.id ?? null, mode: authority?.kind });
             return {};
           },
         };
@@ -299,7 +307,7 @@ test("g-237 判据 3：模板不得要求门禁拒绝后继续实现", async () 
     { goal: goalId, attempt_brief: "模板检查" },
     h.execContext,
   );
-  const prompt = res.prompt ?? h.capturedRequests[0].request.prompt[0].text;
+  const prompt = res.prompt ?? h.capturedRequests[0].prompt[0].text;
   assert.ok(!prompt.includes("保留 status 汇报并继续工作"), "不得再指示门禁拒绝后继续工作");
   assert.ok(/迁移被引擎拒绝/.test(prompt), "必须保留迁移拒绝的处理说明");
   assert.ok(/不得继续实现|停止/.test(prompt), "必须明确要求停止而非继续实现");
@@ -326,7 +334,8 @@ test("g-237 判据 3：绑定失败时中断已启动 child 并给出可追溯�
   assert.ok(res.child_error?.includes("attempt 绑定失败"), "绑定失败必须可追溯");
   assert.ok(res.child_error?.includes("child-"), "错误中必须携带已启动的 child id");
   assert.equal(h.interruptCalls.length, 1, "必须请求中断已启动的 child，避免无主运行 child");
-  assert.equal(h.interruptCalls[0].mode, "continuable");
+  // g-627：authority 必须是 ancestor（插件只用祖先身份，绝不退回 user 语义）
+  assert.equal(h.interruptCalls[0].mode, "ancestor");
   assert.ok(res.child_error?.includes("已请求中断该 child"), "错误中必须说明收敛动作");
 });
 

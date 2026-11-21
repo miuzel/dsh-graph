@@ -52,6 +52,20 @@ interface DirPair {
 }
 
 /**
+ * 把 build.sh 里的**目标路径**归一为仓库相对路径。
+ *
+ * g-314：步骤 3（组装发布产物）在**暂存根**内执行，源的绝对路径必须以 `$REPO_ROOT` 表达，
+ * 而目标写作字面 `dist/bin/...`（相对暂存根）。暂存树的最终落点就是仓库根的 `dist/`，
+ * 故把暂存根的相对形式（`$STAGE_DIST_REL` / `$STAGE_ROOT`）归一回 `dist`。
+ * 只做**等价的路径改写**，不放宽任何比对口径：归一后仍逐字节比对、仍核「产物多余」。
+ */
+function normalizeBuildPath(target: string): string {
+  return target
+    .replace(/^\$\{?STAGE_DIST_REL\}?(\/|$)/, "dist$1")
+    .replace(/^\$\{?STAGE_ROOT\}?\/dist(\/|$)/, "dist$1");
+}
+
+/**
  * 从 build.sh 逐行解析复制清单——清单是**构建脚本自己**的，测试不维护第二份副本；
  * 新增一条 `cp` 即自动纳入新鲜度检查。解析结果数量做下限校验，防止正则失效后「零 pair 全绿」。
  */
@@ -73,8 +87,8 @@ function parseBuildCopyPlan(buildScript: string): { files: FilePair[]; dirs: Dir
     const match = /^cp\s+(-r\s+)?(\S+)\s+(\S+)\s*$/.exec(trimmed);
     if (match) {
       const [, recursive, source, target] = match;
-      if (recursive) dirs.push({ source, target });
-      else files.push({ source, target });
+      if (recursive) dirs.push({ source, target: normalizeBuildPath(target) });
+      else files.push({ source, target: normalizeBuildPath(target) });
       continue;
     }
     // 提示词资产由 `_merge_prompts_layer` **合并两层**（公共层 `prompts/` +
@@ -328,6 +342,8 @@ test("g-312 判据 4：逐字复制族（build.sh 的 cp 清单）dist 与源逐
   assert.deepEqual(
     copyPlan.files.map((pair) => pair.source).sort(),
     [
+      // g-314 / g-634：goal-graph 可执行入口（源码 bin/goal-graph.mjs → dist/bin/goal-graph.mjs）。
+      "bin/goal-graph.mjs",
       "dsh-graph-host/LICENSE",
       "dsh-graph-host/README.md",
       "dsh-graph-host/cordis.patch.yml",

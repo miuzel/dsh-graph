@@ -27,7 +27,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createHarness, prepare, restCall } from "./_g374-harness.ts";
+import { createHarness as createBaseHarness, prepare, restCall } from "./_g374-harness.ts";
+import { execFileSync } from "node:child_process";
+
+function createHarness() {
+  const h = createBaseHarness();
+  // 版本目标必须从真实本地版本分支派发，而不是依赖当前工作树 HEAD。
+  execFileSync("git", ["rev-parse", "--verify", "refs/heads/v1.0-test"], { cwd: h.ws });
+  return h;
+}
 import {
   ATTEMPT_BRIEF_SOURCE_VALUES,
   createGoal,
@@ -51,11 +59,11 @@ function routeOf(h: Harness, path: string) {
   return route;
 }
 
-/** 真实派发 prompt（工具/HTTP 均落在 startContinuable 捕获的请求上）。 */
+/** 真实派发 prompt（工具/HTTP 均落在宿主 startActivation 捕获的请求上；g-627 起 spec 为扁平形态）。 */
 function promptOf(h: Harness, index = 0): string {
   const req = h.capturedRequests[index];
   assert.ok(req, `第 ${index} 次派发未捕获到子代理请求`);
-  return req.request?.prompt?.[0]?.text ?? "";
+  return req.prompt?.[0]?.text ?? "";
 }
 
 /** action 来源切片：`**attempt brief（当前数据）**` → `**directive（当前数据）**`。

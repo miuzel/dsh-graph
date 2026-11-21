@@ -83,6 +83,7 @@ function createHarness({ gitRepo = false, providers = ["spawn"], providerHasPrep
     writeFileSync(join(ws, ".gitignore"), ".worktrees/\n.dsh-graph/\n", "utf8");
     execFileSync("git", ["add", "."], { cwd: ws });
     execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: ws });
+    execFileSync("git", ["branch", "v1.0-test"], { cwd: ws });
   }
   const root = join(ws, ".dsh-graph");
   init(root);
@@ -103,7 +104,7 @@ function createHarness({ gitRepo = false, providers = ["spawn"], providerHasPrep
           list: () => providers,
           listChildren: async () => [],
           getProvider: () => (providerHasPrepareContinuable ? { prepareContinuable: () => {} } : {}),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             // 实拍：子代理被启动的这一刻，工作树是否已经注册（主树窗口的结构性取证）。
             spawnedAt.push({ label: opts.label, trees: registeredTrees(ws) });
             if (spawnError) throw new Error(spawnError);

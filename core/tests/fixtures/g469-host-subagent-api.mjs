@@ -11,7 +11,7 @@
  *   · `startContinuable` / `startActivation` 的**逐字方法体**（花括号配平）
  *   · 我方 spec 实际读取的字段集合（`spec.<field>` 记号）
  *   · receipt 对象字面量的键集合
- *   · provider 能力名（`prepareContinuable`）与 `startActivation` 内部的能力分流表达式
+ *   · provider 能力名（`prepareContinuable`）在服务门面/真正的建 child 实现里的出现面
  * 并把每个来源文件的 sha256 一并记下。
  *
  * **确定性**：输出按键排序、无时间戳、无网络、无随机；同一批 tarball 必得同一字节串。
@@ -23,6 +23,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
+// g-627：宿主下限 >=0.2.2-rc.1 起只剩 `startActivation`（`startContinuable` 已删除）。
+// 夹具保留对各版真实实现里**仍存在**的派发方法做记录，但派发结论只认 `startActivation`。
 const DISPATCH_METHODS = ["startActivation", "startContinuable"];
 const PROVIDER_CAPABILITY = "prepareContinuable";
 
@@ -93,9 +95,13 @@ function objectLiteralKeys(literal) {
     .filter(Boolean);
 }
 
-/** 取出 `[export] interface NAME {` 的逐字声明体（花括号配平）；不存在返回 null。 */
+/**
+ * 取出 `[export] interface NAME … {` 的逐字声明体（花括号配平）；不存在返回 null。
+ * g-627：rc.3+ 的 `SubagentActivationSpec extends Omit<…> {` 在名字与 `{` 之间还有 extends 子句，
+ * 因此 `interface NAME` 之后**只锚定一个 `{`**（不要求它紧跟名字），其余按配平切。
+ */
 function extractInterface(source, name) {
-  const re = new RegExp(`(?:export\\s+)?interface\\s+${name}\\s*\\{`);
+  const re = new RegExp(`(?:export\\s+)?interface\\s+${name}\\b[^{]*\\{`);
   const m = re.exec(source);
   if (!m) return null;
   let depth = 0;
@@ -123,10 +129,13 @@ function describeTarball(tgz) {
   const manager = tryReadMember(tgz, "package/lib/types/manager.js");
   const continuation = tryReadMember(tgz, "package/lib/types/continuation.js");
   // 已声明的类型契约（.d.ts）：spec 字段表与 receipt 字段表（比运行时读取更权威的「形状」真源）。
-  const typesDts = tryReadMember(tgz, "package/lib/types/types.d.ts");
+  // g-627：rc.3+ 把 `SubagentActivationSpec` 挪到 `lib/types/index.d.ts`（由 types.d.ts 再导出），
+  // 故两处都读、按类型名合并（先到者优先，避免同名重复）。
+  const typesDts = [tryReadMember(tgz, "package/lib/types/types.d.ts"), tryReadMember(tgz, "package/lib/types/index.d.ts")]
+    .filter((t) => t !== null).join("\n");
   const declaredTypes = {};
   for (const name of ["ContinuableStartSpec", "ContinuableStart", "SubagentActivationSpec", "SubagentActivation"]) {
-    const body = typesDts === null ? null : extractInterface(typesDts, name);
+    const body = typesDts === "" ? null : extractInterface(typesDts, name);
     if (body === null) continue;
     const fields = [...body.matchAll(/readonly\s+([A-Za-z_$][\w$]*)(\?)?\s*:/g)]
       .map((m) => ({ name: m[1], optional: m[2] === "?" }));
@@ -167,10 +176,6 @@ function describeTarball(tgz) {
     ...specFields(dispatchImpl),
     ...Object.values(managerBodies).flatMap((b) => specFields(b)),
   ]);
-
-  const capabilitySwitch = new RegExp(
-    `${PROVIDER_CAPABILITY}\\s*===\\s*void 0\\s*\\?\\s*manager\\.startExternal\\(spec\\)\\s*:\\s*manager\\.startLocal\\(spec\\)`,
-  ).test(entry);
 
   // 新版 `SubagentActivationSpec` 声明 `delivery` 必填，但运行时把它默认成 'parent'
   // （`delivery: inputs.delivery ?? 'parent'`）⇒ 我方沿用旧调用形态（不传 delivery）时
@@ -213,7 +218,7 @@ function describeTarball(tgz) {
       present_in_manager_impls: Object.entries(managerBodies)
         .filter(([, body]) => body)
         .map(([name, body]) => ({ method: name, has_capability: body.includes(PROVIDER_CAPABILITY) })),
-      capability_switch_expression: capabilitySwitch,
+
     },
   };
 }

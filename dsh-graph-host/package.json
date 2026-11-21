@@ -1,11 +1,14 @@
 {
   "name": "dsh-graph",
-  "version": "0.24.1",
+  "version": "1.0.0",
   "icon": "icon.svg",
   "description": "A DeepSeek Harness plugin for graph-based goal management and kanban visualization.",
   "license": "MIT",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "goal-graph": "./bin/goal-graph.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./lib/client.js",
@@ -28,12 +31,12 @@
   },
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.1.5-rc.2 <0.2.3-0"
+    "dsh": ">=0.2.2-rc.3 <0.2.3-0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/schemastery": "^3.18.2",
-    "@deepseek-ai/dsh-settings": ">=0.1.5-rc.2 <0.2.3-0"
+    "@deepseek-ai/dsh-settings": ">=0.2.2-rc.3 <0.2.3-0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {

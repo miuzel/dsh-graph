@@ -135,7 +135,8 @@ test("g-466 判据：宿主兼容真源唯一（engines.dsh == peerDependencies�
   assert.equal(enginesRange, peerRange, "宿主兼容真源必须唯一：engines.dsh 与 peerDependencies 逐字相等");
 
   const range = enginesRange as string;
-  assert.match(range, /^>=0\.1\.5-rc\.2 <\d+\.\d+\.\d+-0$/, `兼容范围形态不符合仓库口径：${range}`);
+  // g-627：真源仍唯一，但下界**不再硬编码**成 0.1.5-rc.2（宿主下限已收窄）——只钉形态与上界。
+  assert.match(range, /^>=\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)? <\d+\.\d+\.\d+-0$/, `兼容范围形态不符合仓库口径：${range}`);
   assert.notEqual(range, LEGACY_RANGE, `manifest 仍是旧上界 ${LEGACY_RANGE}`);
 
   const surfaces: Surface[] = [
@@ -151,7 +152,9 @@ test("g-466 判据：宿主兼容真源唯一（engines.dsh == peerDependencies�
 // =====================================================================================
 
 test("g-466 负向对照：旧上界/编码变体（单写连字符、小写百分号、+ 空格）/缺徽标 必红，合法改写不误红", () => {
-  const range = ">=0.1.5-rc.2 <0.2.3-0";
+  // g-627：负向对照的「当前范围」取自 manifest（真源），不硬编码下界。
+  const range = String(JSON.parse(readFileSync(HOST_PKG, "utf8")).engines?.dsh ?? "");
+  assert.ok(range.startsWith(">="), `manifest 必须声明兼容范围（实得 ${range}）`);
   const encoded = shieldsEncodeRange(range);
   const legacyEncoded = shieldsEncodeRange(LEGACY_RANGE);
   const host = readFileSync(HOST_README, "utf8");
@@ -185,7 +188,7 @@ test("g-466 负向对照：旧上界/编码变体（单写连字符、小写百�
   // ① 旧上界（正是本次真实漏检的形态；编码串现场推导，仓库内无字面量）
   expectRed(host.replace(encoded, legacyEncoded), "与 manifest 不符", "旧上界范围（推导形态）");
   // ② 单写连字符变体（解码回明文仍正确 ⇒ 只有「逐字比对」这条腿能接住）
-  const singleDash = host.replace(encoded, encoded.replace("0.2.3--0", "0.2.3-0"));
+  const singleDash = host.replace(encoded, encoded.replace(/--0$/, "-0"));
   expectRed(singleDash, "与 manifest 不符", "单写连字符变体");
   assert.deepEqual(
     badgeProblems(mutated(singleDash), range).filter((p) => p.includes("解码回明文")),

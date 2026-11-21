@@ -453,7 +453,19 @@ test("g-335 判据 4：tsconfig 仍只含 core 层、仍排除 core/tests，且�
     exclude?: string[];
   };
 
-  assert.deepEqual(tsconfig.include, ["core/*.ts"], "判据 4：不得把 core/tests 或全仓纳入 include（被否决的方案①）");
+  // g-314：`core/cli/*.ts`（dsh-graph 核心）仍是 **core 层**，不是被否决的「core/tests 或全仓」。
+  // 这里用精确枚举而非通配：任何进一步扩张（如 `core/**`、`dsh-graph-host/**`）照旧判红。
+  // g-623：`core/service/*.ts` 与 core/cli 同理属于 **core 层**（独立本地服务实现，进入 dist/core/service/）。
+  // 仍用精确枚举而非通配：任何进一步扩张（`core/**`、`dsh-graph-host/**`、`core/tests`）照旧判红。
+  assert.deepEqual(
+    tsconfig.include,
+    ["core/*.ts", "core/cli/*.ts", "core/service/*.ts"],
+    "判据 4：include 只能含 core 层（含 g-314 的 core/cli 与 g-623 的 core/service），不得把 core/tests 或全仓纳入（被否决的方案①）",
+  );
+  assert.ok(
+    !(tsconfig.include ?? []).some((p) => p.includes("core/tests") || p === "core/**" || p === "**/*"),
+    "判据 4：include 不得含 core/tests 或全仓通配",
+  );
   assert.ok((tsconfig.exclude ?? []).includes("core/tests"), "判据 4：exclude 必须仍含 core/tests");
   assert.ok(!(tsconfig.include ?? []).some((p) => p.includes("dsh-graph-host")), "判据 4：host 的 .js 不得被纳入类型检查");
 

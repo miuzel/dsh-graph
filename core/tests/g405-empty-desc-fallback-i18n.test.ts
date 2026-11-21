@@ -61,10 +61,10 @@
  *   且属 g-397 已定型的**客户端回执**路径 —— 不是派发渲染器的内置文本，未擅自扩大改动面。
  */
 
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -132,7 +132,15 @@ test("g-405 判据 1/3/4：兜底表 en 零汉字、zh 逐字等于基线，且�
 // ============================================================================
 
 function makeHarness() {
-  const ws = mkdtempSync(join(tmpdir(), "dsh-graph-g405-"));
+  const tmp = join(process.cwd(), "tmp");
+  mkdirSync(tmp, { recursive: true });
+  const ws = mkdtempSync(join(tmp, "dsh-graph-g405-"));
+  const git = (args: string[], input?: string) => execFileSync("git", args, { cwd: ws, input, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" } }).trim();
+  git(["init", "-q"]);
+  const tree = git(["mktree"], "");
+  const commit = git(["commit-tree", tree, "-m", "fixture"]);
+  git(["update-ref", "HEAD", commit]);
+  git(["update-ref", "refs/heads/v-g405-test", commit]);
   const root = join(ws, ".dsh-graph");
   init(root);
   const captured: any[] = [];
@@ -152,7 +160,7 @@ function makeHarness() {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (opts: any) => {
+          startActivation: async (opts: any) => {
             captured.push(opts);
             return { childId: `child-${captured.length}`, parentSessionId: "sess-super" };
           },
@@ -219,7 +227,7 @@ async function startViaHttp(h: Harness, goal: string) {
   const res = await restCall(routeOf(h, "/api/dsh-graph/start-execution"), { goal, workspace: h.ws });
   assert.equal(res.code, 200, `HTTP 入口必须照常派发（实际：${JSON.stringify(res.payload)}）`);
   assert.equal(res.payload.ok, true, "HTTP 派发必须成功");
-  const request = h.captured[before]?.request;
+  const request = h.captured[before];
   assert.ok(request, "必须捕获到恰好一次子代理派发请求");
   return { payload: res.payload, prompt: String(request.prompt?.[0]?.text ?? "") };
 }
@@ -267,7 +275,7 @@ test("g-405 判据 1/3：英文派发空描述兜底的最终 prompt 零内置�
   const toolRes = await tool.execute({ goal: toolGoal, worktree: false, task_type: "fix" }, h.exec);
   assert.equal(toolRes.brief_source, "fallback", "planning 空描述仍走 g-236 兜底路径");
   assert.equal(toolRes.brief, EN_FALLBACK, "en 下 planning 兜底同样取英文表");
-  const toolPrompt = String(h.captured[before]?.request?.prompt?.[0]?.text ?? "");
+  const toolPrompt = String(h.captured[before]?.prompt?.[0]?.text ?? ""); // g-627：扁平 spec
   assert.ok(toolPrompt.includes(EN_FALLBACK), "en 工具入口兜底必须落英文文案");
   assert.ok(!toolPrompt.includes(ZH_FALLBACK), "en 工具入口不得出现中文兜底文案");
 });

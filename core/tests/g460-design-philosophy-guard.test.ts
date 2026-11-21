@@ -255,10 +255,13 @@ test("g-462 补齐 g-460 判据 6③：文档内联的图产物引用（.svg/.ht
     "docs/assets/design-philosophy.lifecycle.dark.svg",
     "docs/assets/design-philosophy.workflow.light.svg",
     "docs/assets/design-philosophy.workflow.dark.svg",
+    "docs/assets/design-philosophy.architecture.light.svg",
+    "docs/assets/design-philosophy.architecture.dark.svg",
     "dsh-graph-host/diagrams/design-philosophy.lifecycle.html",
     "dsh-graph-host/diagrams/design-philosophy.workflow.html",
+    "dsh-graph-host/diagrams/design-philosophy.architecture.html",
   ];
-  assert.ok(assetCount >= 6, `解析到的文档资源过少（${assetCount}），守卫可能已退化`);
+  assert.ok(assetCount >= 9, `解析到的文档资源过少（${assetCount}），守卫可能已退化`);
   for (const rel of expected) {
     assert.ok(referencedDocAssets(zh).includes(rel), `zh 文档必须内联引用 ${rel}`);
     assert.ok(referencedDocAssets(en).includes(rel), `en 文档必须内联引用 ${rel}`);

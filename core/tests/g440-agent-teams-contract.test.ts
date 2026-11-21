@@ -800,6 +800,7 @@ function createHarness(projectYaml: string): HostHarness {
   // 若任其取当前时间，同一秒内的两次夹具才相等、跨秒即假红 —— 那是夹具抖动，不是配置差异）。
   const gitDate = { ...process.env, GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" };
   execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: ws, env: gitDate });
+  execFileSync("git", ["branch", "v-test-test"], { cwd: ws });
   const root = join(ws, ".dsh-graph");
   init(root);
   writeFileSync(join(root, "project.yaml"), projectYaml, "utf8");
@@ -820,7 +821,7 @@ function createHarness(projectYaml: string): HostHarness {
         return {
           list: () => ["spawn"],
           getProvider: () => ({ prepareContinuable: () => {} }),
-          startContinuable: async (o: any) => {
+          startActivation: async (o: any) => {
             capturedRequests.push(o);
             return { childId: `child-${capturedRequests.length}`, parentSessionId: "sess-super" };
           },
@@ -858,7 +859,7 @@ async function dispatchPrompt(projectYaml: string, opts: { subagentPrompt?: stri
   assert.ok(t1, "graph_start_attempt 必须注册");
   await t1.execute({ goal, worktree: false, attempt_brief: "g-440 双态注入夹具 brief" }, hh.execContext);
   assert.equal(hh.capturedRequests.length, 1, "恰好派发一个执行子代理");
-  const parts = hh.capturedRequests[0].request.prompt;
+  const parts = hh.capturedRequests[0].prompt;
   return Array.isArray(parts) ? parts.map((p: any) => String(p?.text ?? "")).join("") : String(parts);
 }
 

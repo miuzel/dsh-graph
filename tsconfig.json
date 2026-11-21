@@ -12,6 +12,6 @@
     "outDir": "core-dist",
     "declaration": false
   },
-  "include": ["core/*.ts"],
+  "include": ["core/*.ts", "core/cli/*.ts", "core/service/*.ts"],
   "exclude": ["core/tests", "node_modules"]
 }
