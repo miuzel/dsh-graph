@@ -48,9 +48,9 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 | 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；已在 DSH `0.2.2-rc.5` 上完成浏览器端到端实机验证） |
-| 原生 Windows | ⏳ **本版未验证**：`v1.0.0` 尚未在原生 Windows 上执行真机门禁（最近一次历史记录为 2026-11-02 `v0.23.0` / 宿主 `0.2.1-rc.5`，见 [platform-gate §7.13 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)） |
-| macOS | ⏳ **本版未验证**：`v1.0.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以 [platform-gate §7 回填表](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)（不随包发布）为准。历史记录见 [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)，只覆盖各自版本的产品代码。 |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；已在 DSH `0.2.2-rc.5` 上完成浏览器端到端与 Claude Code stdio MCP 实机验证） |
+| macOS | ✅ **已实测通过（2026-11-21，原生 macOS 真机）**：`dsh-graph-1.0.0.tgz` 实机安装通过，`win-smoke-test.mjs --tarball`（T1–T5）与 `platform-smoke-test.mjs --skip-build --tarball`（P1–P3 + T1–T5）均 PASS（未跑依赖源码构建的 P4–P6，详见 [platform-gate §7.14](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)） |
+| 原生 Windows | ⚠️ **部分实测（2026-11-21）**：原生 Windows DSH Desktop 实机安装通过、未见严重缺陷；本版尚未在原生 Windows 跑 `win-smoke-test.mjs` 完整 T1–T5 脚本（跨平台 T1 静态/台账已全绿；历史完整记录见 [platform-gate §7.13 / §7.14](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)） |
 
 三平台使用同一安装包。**已知限制**：① macOS 默认文件系统 APFS 大小写不敏感 —— 仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上若工作区路径**经显式传入且含符号链接**（如位于 `/tmp`、`/var` 之下），会被拒绝并报 `graph root symlink is not allowed`；由 `process.cwd()` 推导的路径不受影响。
 
@@ -331,9 +331,9 @@ dsh plugin --profile <profile-name> add dsh-graph
 
 | Platform | Status for this release |
 |----------|-------------------------|
-| Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures; end-to-end browser verification completed on DSH `0.2.2-rc.5`) |
-| Native Windows | ⏳ **Not verified for this release**: `v1.0.0` has not yet run the on-device Windows gate (most recent historical record: 2026-11-02 `v0.23.0` on host `0.2.1-rc.5`, see [platform-gate §7.13](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)) |
-| macOS | ⏳ **Not verified for this release**: `v1.0.0` has **not** run the on-device gate on native macOS ⇒ **must not be read as "passed"**; the verdict likewise comes from the [platform-gate §7 backfill table](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) (not shipped in the package). Earlier records are in [platform-gate §7.4 / §7.7](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md) and cover each of those versions' product code only. |
+| Linux / WSL2 | ✅ Verified on-device (this release's full test suite: 0 failures; end-to-end browser verification on DSH `0.2.2-rc.5` and Claude Code stdio MCP verified) |
+| macOS | ✅ **Verified on-device (2026-11-21, native macOS)**: `dsh-graph-1.0.0.tgz` installed cleanly; both `win-smoke-test.mjs --tarball` (T1–T5) and `platform-smoke-test.mjs --skip-build --tarball` (P1–P3 + T1–T5) passed (source-build probes P4–P6 skipped; see [platform-gate §7.14](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)) |
+| Native Windows | ⚠️ **Partially verified (2026-11-21)**: native Windows DSH Desktop installation succeeded with no critical issues; full `win-smoke-test.mjs` T1–T5 CLI run on native Windows is still pending for `v1.0.0` (cross-platform T1 static/ledger passed; prior full run: 2026-11-02 `v0.23.0`, see [platform-gate §7.13 / §7.14](https://github.com/miuzel/dsh-graph/blob/main/docs/platform-gate.md)) |
 
 All three platforms share the same package. **Known limitations**: (1) APFS, the macOS default, is case-insensitive — entries that differ only by case resolve to the **same entity**, so do not rely on case alone to distinguish goal ids or version lanes; (2) on macOS a workspace path that is **explicitly supplied and contains a symlink** (e.g. under `/tmp` or `/var`) is rejected with `graph root symlink is not allowed`; paths derived from `process.cwd()` are unaffected.
 

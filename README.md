@@ -33,9 +33,9 @@
 
 | 平台 | 本版状态 |
 |------|----------|
-| Linux / WSL2 | ✅ 已实测通过（本版全量测试 fail 0；已在 DSH `0.2.2-rc.5` 上完成浏览器端到端实机验证） |
-| 原生 Windows | ⏳ **本版未验证**：`v1.0.0` 尚未在原生 Windows 上执行真机门禁（最近一次历史记录为 2026-11-02 `v0.23.0` / 宿主 `0.2.1-rc.5`，见 [platform-gate §7.13 回填表](docs/platform-gate.md)） |
-| macOS | ⏳ **本版未验证**：`v1.0.0` **未**在原生 macOS 上执行真机门禁 ⇒ **不得读出「已通过」**；结论同样以[平台门禁](docs/platform-gate.md) §7 回填表（不随包发布）为准。历史记录见 §7.4 / §7.7，只覆盖各自版本的产品代码。 |
+| Linux / WSL2 | ✅ 已实测通过（本版全量测试 3332/3332 fail 0；已在 DSH `0.2.2-rc.5` 上完成浏览器端到端与 Claude Code stdio MCP 实机验证） |
+| macOS | ✅ **已实测通过（2026-11-21，原生 macOS 真机）**：`dsh-graph-1.0.0.tgz` 实机安装通过，`win-smoke-test.mjs --tarball`（T1–T5）与 `platform-smoke-test.mjs --skip-build --tarball`（P1–P3 + T1–T5）均 PASS（未跑依赖源码构建的 P4–P6，见 [platform-gate §7.14](docs/platform-gate.md)） |
+| 原生 Windows | ⚠️ **部分实测（2026-11-21）**：原生 Windows DSH Desktop 实机安装通过、未见严重缺陷；本版尚未在原生 Windows 跑 `win-smoke-test.mjs` 完整 T1–T5 脚本（跨平台 T1 静态/台账 86 项 296 处已全绿；上一次完整 T1–T5 历史记录为 2026-11-02 `v0.23.0`，见 [platform-gate §7.13 / §7.14](docs/platform-gate.md)） |
 
 三平台共用同一安装包。已知限制：① macOS 默认文件系统 APFS 大小写不敏感——仅大小写不同的目标编号 / 版本泳道会落到**同一实体**，请勿只用大小写区分；② macOS 上**经显式传入且含符号链接**的工作区路径（如位于 `/tmp`、`/var` 之下）会被拒绝并报 `graph root symlink is not allowed`，由 `process.cwd()` 推导的路径不受影响。
 
