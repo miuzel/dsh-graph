@@ -46,6 +46,14 @@
 （`resolveWorktreeIsolationDecision`）；结果面 `core/ops.ts`（`writeAttemptResults`）；
 评审留痕 `core/ops.ts`（`reviewsDir`）。
 
+### 1.3 仓库与多宿主架构总览
+
+![dsh-graph / goal-graph 仓库与多宿主架构（v1.0.0）](assets/design-philosophy.architecture.light.svg)
+
+[交互式版本](../dsh-graph-host/diagrams/design-philosophy.architecture.html) · [暗色版](assets/design-philosophy.architecture.dark.svg)
+
+真源：DSH 插件 `dsh-graph-host/index.js`、`dsh-graph-host/lib/client/plugin.js`；CLI 与本地服务 `bin/goal-graph.mjs`、`core/cli/main.ts`、`core/service/stdio-mcp.ts`、`core/service/server.ts`；共享核心 `core/ops.ts`、`core/domain/machine.ts`、`core/worktree.ts`；五包组装 `scripts/pack-packages.mjs`。
+
 <!-- sec: lifecycle -->
 
 ## 2. 目标生命周期与状态机

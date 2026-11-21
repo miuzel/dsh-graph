@@ -437,6 +437,7 @@ export const DESIGN_DIAGRAM_ROUTE = "/api/dsh-graph/diagram";
 export const DESIGN_DIAGRAM_FILES = Object.freeze([
   "design-philosophy.lifecycle.html",
   "design-philosophy.workflow.html",
+  "design-philosophy.architecture.html",
 ]);
 /** 合法图名：小写字母/数字起头，只含 `[a-z0-9.-]`，`.html` 结尾。 */
 const DESIGN_DIAGRAM_NAME_RE = /^[a-z0-9][a-z0-9.-]*\.html$/;

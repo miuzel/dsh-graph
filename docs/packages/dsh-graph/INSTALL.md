@@ -45,7 +45,7 @@ node -p "require('dsh-graph/package.json').version"
 # ② 插件入口可加载（期望输出 "OK 68"）
 node -e "import('dsh-graph').then(m=>console.log('OK', Object.keys(m).length))"
 
-# ③ 插件资产齐全（期望输出 prompts=56 diagrams=6）
+# ③ 插件资产齐全（期望输出 prompts=56 diagrams=9）
 node -e "const fs=require('fs'),p=require.resolve('dsh-graph/package.json'),d=p.replace(/package\.json$/,'');console.log('prompts='+fs.readdirSync(d+'prompts').length,'diagrams='+fs.readdirSync(d+'diagrams').length)"
 ```
 
@@ -54,7 +54,7 @@ node -e "const fs=require('fs'),p=require.resolve('dsh-graph/package.json'),d=p.
 ```
 1.0.0
 OK 68
-prompts=56 diagrams=6
+prompts=56 diagrams=9
 ```
 
 然后在运行中的 DSH 会话里执行任一 `graph_*` 工具（如 `graph_list_goals`）——能返回目标列表

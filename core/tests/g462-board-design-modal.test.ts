@@ -63,6 +63,7 @@ const diagramsDistDir = join(distRoot, "diagrams");
 
 const LIFECYCLE = "design-philosophy.lifecycle.html";
 const WORKFLOW = "design-philosophy.workflow.html";
+const ARCHITECTURE = "design-philosophy.architecture.html";
 const DIAGRAM_ROUTE = "/api/dsh-graph/diagram";
 const HTML_CT = "text/html; charset=utf-8";
 
@@ -112,10 +113,10 @@ const jsonError = (res: any) => { try { return JSON.parse(String(res.body)); } c
 
 // ================================================================ A. 只读路由
 
-test("g-462 A1：白名单两张图都能以 text/html; charset=utf-8 读出，且与源产物逐字节一致", async () => {
-  assert.deepEqual([...DESIGN_DIAGRAM_FILES].sort(), [LIFECYCLE, WORKFLOW].sort(), "白名单必须恰是 g-460 的两张图");
+test("g-462 A1：白名单三张图都能以 text/html; charset=utf-8 读出，且与源产物逐字节一致", async () => {
+  assert.deepEqual([...DESIGN_DIAGRAM_FILES].sort(), [LIFECYCLE, WORKFLOW, ARCHITECTURE].sort(), "白名单必须恰是三张随包发布图");
   assert.equal(DESIGN_DIAGRAM_ROUTE, DIAGRAM_ROUTE);
-  for (const name of [LIFECYCLE, WORKFLOW]) {
+  for (const name of [LIFECYCLE, WORKFLOW, ARCHITECTURE]) {
     const res = await callDiagram(`${DIAGRAM_ROUTE}/${name}`);
     assert.equal(res.code, 200, `${name} 必须 200`);
     assert.equal(res.headers["content-type"], HTML_CT, `${name} 必须是 text/html; charset=utf-8`);
@@ -397,13 +398,13 @@ function roadmapProblems(opts: { modal: string; zh: string; en: string }): strin
   if (!(noticeAt > 0 && roadmapAt > noticeAt && tabsAt > roadmapAt)) {
     problems.push("路线图小节必须位于 notice 之下、图页签之上");
   }
-  // ② 不新增页签：图页签仍恰是 lifecycle/workflow 两张。
+  // ② 图页签必须恰是 architecture/lifecycle/workflow 三张（不得把路线图塞成第四个页签）。
   const tabsStart = modal.indexOf("const DESIGN_DIAGRAM_TABS = [");
   const tabsEnd = modal.indexOf("];", tabsStart);
   const tabsBlock = tabsStart >= 0 && tabsEnd > tabsStart ? modal.slice(tabsStart, tabsEnd) : "";
   const tabKeys = [...tabsBlock.matchAll(/key: "([^"]+)"/g)].map((m) => m[1]!).sort();
-  if (tabKeys.length !== 2 || tabKeys[0] !== "lifecycle" || tabKeys[1] !== "workflow") {
-    problems.push(`图页签必须恰是 lifecycle/workflow 两张，实得 ${JSON.stringify(tabKeys)}`);
+  if (tabKeys.length !== 3 || tabKeys[0] !== "architecture" || tabKeys[1] !== "lifecycle" || tabKeys[2] !== "workflow") {
+    problems.push(`图页签必须恰是 architecture/lifecycle/workflow 三张，实得 ${JSON.stringify(tabKeys)}`);
   }
   // ③ 明确标注「尚未实现」，并列出后续三项能力。
   if (!/未实现/.test(zh)) problems.push("zh 路线图必须明确标注「未实现」");
@@ -490,7 +491,8 @@ test("g-462 E1：build.sh 显式复制 diagrams；dist/diagrams 与源逐字节�
   assert.deepEqual(srcFiles, [
     LIFECYCLE, "design-philosophy.lifecycle.json", "design-philosophy.lifecycle.png",
     WORKFLOW, "design-philosophy.workflow.json", "design-philosophy.workflow.png",
-  ].sort(), "diagrams 源目录内容必须与 g-460 定稿一致");
+    ARCHITECTURE, "design-philosophy.architecture.json", "design-philosophy.architecture.png",
+  ].sort(), "diagrams 源目录内容必须与定稿一致");
   assert.deepEqual(readdirSync(diagramsDistDir).sort(), srcFiles, "dist/diagrams 必须与源目录同名同集合");
   for (const name of srcFiles) {
     const a = readFileSync(join(diagramsSrcDir, name));
@@ -498,20 +500,17 @@ test("g-462 E1：build.sh 显式复制 diagrams；dist/diagrams 与源逐字节�
     assert.equal(sha256(b), sha256(a), `${name} 必须逐字节一致`);
     assert.ok(statSync(join(diagramsDistDir, name)).size > 0, `${name} 不得为空`);
   }
-  // g-460 att-003：此处原先硬钉 g-460 第一版定稿 HTML 的两个 sha256 字面量（lifecycle
-  // `bc71f30263f4` / workflow `18ac73e42853`，「字节必须未变」）。g-460 按负责人要求重出两张图
-  // （去掉 1.0 路线图内容、并做「去代码化」）⇒ 字面量必然过期；而它本就不表达「产物未被中途篡改/
-  // 静默替换」这一价值——任何合法重出都会红，反而逼迫后来者删断言。改为**自洽性断言**：
-  // 包内 HTML 必须逐条体现**当前源 JSON** 的文案（泳道 / 节点 / 卡片），源与产物一旦对不上即必红。
   for (const [specName, htmlName] of [
     ["design-philosophy.lifecycle.json", LIFECYCLE],
     ["design-philosophy.workflow.json", WORKFLOW],
+    ["design-philosophy.architecture.json", ARCHITECTURE],
   ] as const) {
     const spec = JSON.parse(readFileSync(join(diagramsSrcDir, specName), "utf8"));
     const html = readFileSync(join(diagramsSrcDir, htmlName), "utf8");
     const strings = new Set<string>();
     for (const lane of spec.lanes ?? []) strings.add(lane.label);
-    for (const node of [...(spec.states ?? []), ...(spec.nodes ?? [])]) {
+    for (const b of spec.boundaries ?? []) strings.add(b.label);
+    for (const node of [...(spec.states ?? []), ...(spec.nodes ?? []), ...(spec.components ?? [])]) {
       for (const key of ["label", "sublabel", "tag"]) if (node?.[key]) strings.add(node[key]);
     }
     for (const card of spec.cards ?? []) {
@@ -519,7 +518,8 @@ test("g-462 E1：build.sh 显式复制 diagrams；dist/diagrams 与源逐字节�
       for (const item of card.items ?? []) strings.add(item);
     }
     assert.ok(strings.size >= 10, `${specName} 解析出的文案过少（${strings.size}），自洽性断言可能已退化`);
-    const missing = [...strings].filter((s) => s && !html.includes(s));
+    const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const missing = [...strings].filter((s) => s && !html.includes(s) && !html.includes(escHtml(s)));
     assert.deepEqual(missing, [], `${htmlName} 必须逐条体现 ${specName} 的文案（缺失即产物与源不符/被静默替换）`);
   }
 });
@@ -538,7 +538,7 @@ test("g-462 E2：npm pack --dry-run 的文件清单确实包含两张图 HTML（
     const entry: any = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
     const files: string[] = (entry?.files ?? []).map((f: any) => String(f.path));
     assert.ok(files.length >= 30, `pack 文件数异常（${files.length}）—— 解析可能失效`);
-    for (const name of [LIFECYCLE, WORKFLOW]) {
+    for (const name of [LIFECYCLE, WORKFLOW, ARCHITECTURE]) {
       assert.ok(files.includes(`diagrams/${name}`), `pack 必须包含 diagrams/${name}，实际清单：${files.filter((f) => f.startsWith("diagrams/")).join(",") || "（无 diagrams/*）"}`);
     }
   } finally {
@@ -549,7 +549,7 @@ test("g-462 E2：npm pack --dry-run 的文件清单确实包含两张图 HTML（
 // ================================================================ F. 离线自包含
 
 test("g-462 F1：图 HTML 无任何外部网络子资源（断网可用，字体已 base64 内嵌）", () => {
-  for (const name of [LIFECYCLE, WORKFLOW]) {
+  for (const name of [LIFECYCLE, WORKFLOW, ARCHITECTURE]) {
     const html = readFileSync(join(diagramsDistDir, name), "utf8");
     assert.doesNotMatch(html, /<link\b/i, `${name} 不得有 <link>（外链样式/字体）`);
     assert.doesNotMatch(html, /<img\b/i, `${name} 不得有 <img>`);
@@ -580,7 +580,7 @@ const themeVar = (svg: string, name: string) => {
 };
 
 test("g-462 G1：docs/assets 的规范导出 SVG 为 chrome-free、双主题、自包含矢量", () => {
-  for (const name of ["lifecycle", "workflow"]) {
+  for (const name of ["lifecycle", "workflow", "architecture"]) {
     const light = readFileSync(docSvg(name, "light"), "utf8");
     const dark = readFileSync(docSvg(name, "dark"), "utf8");
     for (const [theme, svg] of [["light", light], ["dark", dark]] as const) {

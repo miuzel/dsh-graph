@@ -51,6 +51,14 @@ Sources: admission `core/ops.ts` (`assertExecutionAdmission`); isolation `core/w
 (`resolveWorktreeIsolationDecision`); results surface `core/ops.ts` (`writeAttemptResults`);
 review trace `core/ops.ts` (`reviewsDir`).
 
+### 1.3 Repository and multi-host architecture
+
+![dsh-graph / goal-graph repository and multi-host architecture (v1.0.0)](assets/design-philosophy.architecture.light.svg)
+
+[Interactive version](../dsh-graph-host/diagrams/design-philosophy.architecture.html) · [Dark theme](assets/design-philosophy.architecture.dark.svg)
+
+Sources: DSH plugin `dsh-graph-host/index.js`, `dsh-graph-host/lib/client/plugin.js`; CLI and local service `bin/goal-graph.mjs`, `core/cli/main.ts`, `core/service/stdio-mcp.ts`, `core/service/server.ts`; shared core `core/ops.ts`, `core/domain/machine.ts`, `core/worktree.ts`; five-package assembly `scripts/pack-packages.mjs`.
+
 <!-- sec: lifecycle -->
 
 ## 2. Goal lifecycle and state machine

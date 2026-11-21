@@ -86,7 +86,8 @@ const FALLBACK_RE = /退回两次 rename/;
 //   dist/core/cli/goal-files.js（+1）⇒ 105 + 2 = 107。
 // g-632: MCP 写模式白名单 dist/core/service/write-commands.js（+1）⇒ 107 + 1 = 108。
 // g-637: 零配置 stdio MCP + 按工作区自动起本地 Web 服务 dist/core/service/stdio-mcp.js（+1）⇒ 108 + 1 = 109。
-const DIST_FILE_COUNT = 109;
+// v1.0.0 architecture diagram: dsh-graph-host/diagrams/design-philosophy.architecture.{html,json,png}（+3）⇒ 109 + 3 = 112。
+const DIST_FILE_COUNT = 112;
 
 // ============================================================================
 // 沙箱（与 g-348 测试同构：真实仓库布局，但只在 os.tmpdir() 内读写）

@@ -560,7 +560,7 @@ function helpClientProblems(opts: { kanban: string; modal: string; bundle: strin
   }
   if (!/h\(GoalMarkdown, \{ text:/.test(modal)) problems.push("提示词模板页签必须用既有 markdown 渲染器渲染资产正文");
   if (!/catalog\.tools/.test(modal)) problems.push("工具清单页签必须渲染目录里的工具（不得另抄清单）");
-  for (const f of ["design-philosophy.lifecycle.html", "design-philosophy.workflow.html"]) {
+  for (const f of ["design-philosophy.lifecycle.html", "design-philosophy.workflow.html", "design-philosophy.architecture.html"]) {
     if (!modal.includes(f)) problems.push(`Graph 设计页签缺图产物引用 ${f}`);
   }
   if (!/const src = "\/api\/dsh-graph\/diagram\/" \+ active\.file;/.test(modal)) problems.push("图必须走宿主只读路由（相对同源路径）");
@@ -642,7 +642,7 @@ test("g-481 C3：Graph 设计页签的两张图随包且真能经宿主只读路
   const modal = readFileSync(helpModalPath, "utf8");
   const block = (modal.match(/const DESIGN_DIAGRAM_TABS = \[([\s\S]*?)\];/) ?? [])[1] ?? "";
   const files = [...block.matchAll(/file: "([^"]+)"/g)].map((m) => m[1]!);
-  assert.equal(files.length, 2, "Graph 设计页签必须恰有两张图（lifecycle / workflow）");
+  assert.equal(files.length, 3, "Graph 设计页签必须恰有三张图（lifecycle / workflow / architecture）");
   const diagramRoute = captured.route;
   assert.equal(diagramRoute.path, NAMESPACE, `唯一入口覆盖命名空间（图路由 ${DESIGN_DIAGRAM_ROUTE} 在其内）`);
   for (const file of files) {

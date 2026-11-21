@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "dsh-graph / goal-graph 仓库与多宿主架构（v1.0.0）",
+    "locale": "zh-CN",
+    "output": "dsh-graph-host/diagrams/design-philosophy.architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:miuzel/dsh-graph.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "0b4ecb7a4be3a8a52b378606b6bd9dbdaafc7fe8"
+    }
+  },
+  "components": [
+    {
+      "id": "dsh_web",
+      "type": "external",
+      "label": "DSH Web 控制台",
+      "sublabel": "DSH >=0.2.2-rc.3",
+      "pos": [40, 40],
+      "size": [180, 62],
+      "sources": [
+        { "path": "dsh-graph-host/package.json", "line": 32, "end_line": 40, "label": "engines.dsh 兼容声明" }
+      ]
+    },
+    {
+      "id": "client_kanban",
+      "type": "frontend",
+      "label": "二维泳道看板 UI",
+      "sublabel": "conversation.view 客户端",
+      "pos": [340, 40],
+      "size": [200, 62],
+      "sources": [
+        { "path": "dsh-graph-host/lib/client/plugin.js", "line": 328, "end_line": 345, "label": "slot 挂载入口" },
+        { "path": "dsh-graph-host/lib/client/kanban.js", "line": 1, "end_line": 40, "label": "看板主视图" }
+      ]
+    },
+    {
+      "id": "dsh_host",
+      "type": "backend",
+      "label": "DSH Host 插件",
+      "sublabel": "53 graph_* + REST 路由",
+      "tag": "owner 鉴权",
+      "pos": [680, 40],
+      "size": [210, 64],
+      "sources": [
+        { "path": "dsh-graph-host/index.js", "line": 6669, "end_line": 6700, "label": "apply 插件注册" },
+        { "path": "dsh-graph-host/index.js", "line": 436, "end_line": 445, "label": "图资产路由白名单" }
+      ]
+    },
+    {
+      "id": "worktree_mgr",
+      "type": "backend",
+      "label": "Worktree 与索引",
+      "sublabel": "隔离工作树 · 增量索引",
+      "pos": [1020, 40],
+      "size": [190, 62],
+      "sources": [
+        { "path": "core/worktree.ts", "line": 1056, "end_line": 1104, "label": "派发建树与基线校验" },
+        { "path": "core/cli/events-index.ts", "line": 1, "end_line": 25, "label": "O(1) 事件流增量索引" }
+      ]
+    },
+    {
+      "id": "term_user",
+      "type": "external",
+      "label": "终端与浏览器用户",
+      "sublabel": "CLI / Chrome 127.0.0.1",
+      "pos": [40, 205],
+      "size": [180, 62],
+      "sources": [
+        { "path": "bin/goal-graph.mjs", "line": 1, "end_line": 40, "label": "可执行入口" }
+      ]
+    },
+    {
+      "id": "cli_entry",
+      "type": "backend",
+      "label": "goal-graph CLI",
+      "sublabel": "status / sync / claim / submit",
+      "pos": [340, 205],
+      "size": [200, 62],
+      "sources": [
+        { "path": "core/cli/main.ts", "line": 49, "end_line": 79, "label": "命令帮助与分派" },
+        { "path": "core/cli/main.ts", "line": 169, "end_line": 200, "label": "runCli 主入口" }
+      ]
+    },
+    {
+      "id": "core_engine",
+      "type": "backend",
+      "label": "核心引擎 core/",
+      "sublabel": "8 态状态机 · ops · 判据",
+      "tag": "单一真源",
+      "pos": [680, 205],
+      "size": [210, 64],
+      "sources": [
+        { "path": "core/domain/machine.ts", "line": 10, "end_line": 33, "label": "8 态闭集与合法迁移" },
+        { "path": "core/ops.ts", "line": 3572, "end_line": 3600, "label": "createGoal 事件先行" },
+        { "path": "core/ops.ts", "line": 4025, "end_line": 4050, "label": "transition 状态门禁" }
+      ]
+    },
+    {
+      "id": "graph_store",
+      "type": "database",
+      "label": "看板本地仓库",
+      "sublabel": ".dsh-graph/ 事件流与投影",
+      "pos": [1020, 205],
+      "size": [190, 62],
+      "sources": [
+        { "path": "core/root.ts", "line": 1, "end_line": 35, "label": "看板根目录与隔离约束" }
+      ]
+    },
+    {
+      "id": "ext_hosts",
+      "type": "external",
+      "label": "外部 AI 宿主",
+      "sublabel": "Claude / Codex / OpenCode",
+      "pos": [40, 370],
+      "size": [180, 62],
+      "sources": [
+        { "path": "plugins/claude-code/.mcp.json", "line": 1, "end_line": 9, "label": "Claude Code stdio 插件" },
+        { "path": "plugins/opencode/opencode.json", "line": 1, "end_line": 11, "label": "OpenCode local 插件" }
+      ]
+    },
+    {
+      "id": "stdio_mcp",
+      "type": "backend",
+      "label": "零配置 stdio MCP",
+      "sublabel": "goal-graph mcp · 38 工具",
+      "tag": "Human Gate 禁写",
+      "pos": [340, 370],
+      "size": [200, 64],
+      "sources": [
+        { "path": "core/service/stdio-mcp.ts", "line": 278, "end_line": 345, "label": "按工作区复用或自启 Web" },
+        { "path": "core/service/mcp.ts", "line": 406, "end_line": 440, "label": "HTTP/stdio 统一分发" }
+      ]
+    },
+    {
+      "id": "local_server",
+      "type": "security",
+      "label": "独立本地服务",
+      "sublabel": "127.0.0.1 Web / API / MCP",
+      "tag": "0600 CSPRNG",
+      "pos": [680, 370],
+      "size": [210, 64],
+      "sources": [
+        { "path": "core/service/server.ts", "line": 180, "end_line": 245, "label": "回环校验与认证先行" },
+        { "path": "core/service/serve.ts", "line": 265, "end_line": 315, "label": "serve 启动与写模式开关" }
+      ]
+    },
+    {
+      "id": "state_store",
+      "type": "database",
+      "label": "私有服务凭据",
+      "sublabel": "goal-graph-service/ 0600",
+      "pos": [1020, 370],
+      "size": [190, 62],
+      "sources": [
+        { "path": "core/service/credentials.ts", "line": 1, "end_line": 25, "label": "CSPRNG 令牌与 0600 落盘" },
+        { "path": "core/service/stdio-mcp.ts", "line": 36, "end_line": 50, "label": "每工作区 runtime.json" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "DSH 插件运行时（dsh-graph 包）",
+      "wraps": ["client_kanban", "dsh_host"]
+    },
+    {
+      "kind": "security-group",
+      "label": "跨宿主本地 MCP 与 Web 服务边界（127.0.0.1 回环）",
+      "wraps": ["stdio_mcp", "local_server"]
+    }
+  ],
+  "connections": [
+    { "id": "dsh-to-kanban", "from": "dsh_web", "to": "client_kanban", "label": "嵌入看板", "variant": "emphasis" },
+    { "id": "kanban-to-host", "from": "client_kanban", "to": "dsh_host", "label": "/api/dsh-graph*", "variant": "emphasis" },
+    { "id": "host-to-wt", "from": "dsh_host", "to": "worktree_mgr", "label": "派发建树" },
+    { "id": "host-to-core", "from": "dsh_host", "to": "core_engine", "label": "53 工具调用", "variant": "emphasis" },
+    { "id": "wt-to-store", "from": "worktree_mgr", "to": "graph_store", "label": "归属与索引", "variant": "dashed" },
+    { "id": "user-to-cli", "from": "term_user", "to": "cli_entry", "label": "CLI / 浏览器", "variant": "emphasis" },
+    { "id": "cli-to-core", "from": "cli_entry", "to": "core_engine", "label": "直调 core" },
+    { "id": "cli-to-stdio", "from": "cli_entry", "to": "stdio_mcp", "label": "mcp 子命令", "variant": "dashed" },
+    { "id": "core-to-store", "from": "core_engine", "to": "graph_store", "label": "事件先行写盘", "variant": "emphasis" },
+    { "id": "ext-to-stdio", "from": "ext_hosts", "to": "stdio_mcp", "label": "stdio JSON-RPC", "variant": "emphasis" },
+    { "id": "stdio-to-server", "from": "stdio_mcp", "to": "local_server", "label": "复用 / 自启 Web", "variant": "dashed" },
+    { "id": "server-to-core", "from": "local_server", "to": "core_engine", "label": "投影与受控写", "variant": "emphasis" },
+    { "id": "server-to-state", "from": "local_server", "to": "state_store", "label": "0600 凭据/运行态", "variant": "security" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "单仓五包分发（v1.0.0）",
+      "items": [
+        "DSH 插件保留 dsh-graph；跨宿主拆为 goal-graph-{cli,service,skills,mcp}",
+        "scripts/pack-packages.mjs 按模块图自动推导 5 包文件闭包，零手工清单漂移"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "核心单一真源与事件先行",
+      "items": [
+        "DSH 插件、goal-graph CLI、stdio MCP 与本地服务共享同一套 core/ 状态机与 ops",
+        "状态变更先追加 .dsh-graph/events.jsonl 再投影 goal.md，支持 --graph-dir-name 自定义目录名"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "安全与 Human Gate 边界",
+      "items": [
+        "本地服务仅绑 127.0.0.1，0600 CSPRNG 令牌，Web 会话走 HttpOnly Cookie",
+        "外部宿主 stdio 默认 38 工具（固定 actor mcp:local-service），accept / delivered / 派发始终 fail-closed"
+      ]
+    }
+  ]
+}

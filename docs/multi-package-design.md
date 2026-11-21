@@ -16,6 +16,10 @@ v1.0.0 把原先的单包拆成 **5 个可独立安装的 npm 包**（DSH 专属
 `cordis.patch.yml` 与全部 `graph_*` 工具（68 个导出、`graph_*` 工具集不变）；
 CLI 包保留全部子命令与语义；看板数据格式、事件格式一字未动。
 
+![dsh-graph / goal-graph 仓库与多宿主架构（v1.0.0）](assets/design-philosophy.architecture.light.svg)
+
+[交互式架构图](../dsh-graph-host/diagrams/design-philosophy.architecture.html) · [暗色版](assets/design-philosophy.architecture.dark.svg)
+
 ## 2. 关键约束与取舍
 
 ### 2.1 为什么是「打包层」而不是真 monorepo
