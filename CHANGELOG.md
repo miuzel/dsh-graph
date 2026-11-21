@@ -2,14 +2,14 @@
 
 dsh-graph 面向用户的变更史，版本倒序（最新在前）。每个版本不超过 5 条要点，用用户语言描述「能做什么」而非实现细节。
 
-- 逐版本的门禁结论与审计数字：见 [`docs/release-checklist-v*.md`](docs/release-checklist-v0.23.0.md)；
+- 逐版本的门禁结论与审计数字：见 [`docs/release-checklist-v*.md`](docs/release-checklist-v1.0.0.md)；
 - 平台门禁运行手册：见 [`docs/platform-gate.md`](docs/platform-gate.md)。
 
 本表承接自 README 迁移的用户可见变更（v0.17.0 / v0.16.1 / v0.16.0），以及原 README「当前功能状态」小节所记的特性 —— 后者按**真实落地版本**分节（v0.11.0 / v0.9.2 / v0.7.1 / v0.6.1），而非 README 记下它们的版本。其他版本中，v0.10.0 与 v0.15.0 有独立发布清单 `docs/release-checklist-v*.md`；v0.11.x / v0.12.0 等中间版本没有独立清单，其变更见对应的 git tag 与提交。
 
-## v1.0.0 — 2026-11-16
+## v1.0.0 — 2026-11-21
 
-尚未发布。首个正式大版本线：在 0.24.0 之上补齐命令行人机接口、独立本地服务，并收窄宿主支持面。
+首个正式大版本线：在 0.24.0 之上补齐五包分发、命令行人机接口、零配置 stdio MCP 与独立本地服务，并收窄宿主支持面。
 
 - **命令行工具 `goal-graph` 与五包发布形态**：新增独立 CLI（`info` / `status` / `goal list|show` / `version`，并支持 `--graph-dir-name` 指向项目自定义的核心资料目录名，默认仍为 `.dsh-graph`），零常驻服务、毫秒级响应；`sync` 把常驻硬性事实与目标概览投影到 `.claude/CLAUDE.md` 与 `AGENTS.md` 的受控区段（区段外内容不动）；`claim` 一键认领目标并把判据注入当前上下文；`submit` 跑完全量自检门禁后把成果闭环到看板（以门禁退出码为准，跳过/待办用例一律阻断）。v1.0.0 起按职责拆成 5 个独立包：DSH 专属插件保留 `dsh-graph`，跨宿主产物统一命名为 `goal-graph-cli` / `goal-graph-service` / `goal-graph-skills` / `goal-graph-mcp`，打包层只从 `dist/` 组装，每包文件集由模块图推导并附独立安装指南，同时提供 Claude Code / Codex / OpenCode 三宿主插件定义。详见 [docs/multi-package-design.md](docs/multi-package-design.md)。
 - **零配置 stdio MCP 与独立本地服务**：新增 `goal-graph mcp` 零配置 stdio 入口，供 Claude Code / Codex / OpenCode 打开工作区即用（默认开启 38 个读写工具、`--read-only` 切回 11 只读工具），并按工作区以 `127.0.0.1:0` 自动分配空闲端口起/复用本地 Web 看板，通道关闭自动回收端口不留僵尸进程；显式 `goal-graph serve` 仍保持单进程 Web 页面、Web API 与 localhost HTTP MCP（只绑数值回环、CSPRNG 0600 凭据、默认只读、按需 `--allow-write` 并留审计）。人工裁决（接受/异议、迁移到 delivered）与主管身份/执行派发在所有模式下**始终 fail-closed**，仍须人在本地看板完成。
